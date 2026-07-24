@@ -47,6 +47,7 @@ cc_library(
         "pixel_read_formats.h",
         "readback_worker_gl.h",
         "render_thread_info_gl.h",
+        "stale_ptr_registry.h",
         "texture_draw.h",
         "texture_resize.h",
         "yuv_converter.h",

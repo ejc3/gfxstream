@@ -17,7 +17,7 @@
 #include <memory>
 
 #include "gfxstream/host/external_object_manager.h"
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 #include "render-utils/stream.h"
 #include "snapshot/LazySnapshotObj.h"
 

@@ -31,7 +31,7 @@
 
 #include "debug_utils_helper.h"
 #include "device_op_tracker.h"
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 #include "vk_emulated_physical_device_memory.h"
 #include "vk_emulated_physical_device_queue.h"
 #include "render-utils/stream.h"

@@ -83,7 +83,6 @@ set(stream-server-core-sources
     channel_stream.cpp
     color_buffer.cpp
     frame_buffer.cpp
-    hwc2.cpp
     post_worker.cpp
     post_worker_gl.cpp
     read_buffer.cpp

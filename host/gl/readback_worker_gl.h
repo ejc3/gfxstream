@@ -15,17 +15,17 @@
 */
 #pragma once
 
-#include <map>
-#include <stdint.h>
-#include <vector>
-
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#include <stdint.h>
 
-#include "gfxstream/Compiler.h"
-#include "gfxstream/synchronization/Lock.h"
+#include <map>
+#include <vector>
+
 #include "display_surface_gl.h"
-#include "readback_worker.h"
+#include "gfxstream/Compiler.h"
+#include "gfxstream/host/readback_worker.h"
+#include "gfxstream/synchronization/Lock.h"
 
 namespace gfxstream {
 namespace host {

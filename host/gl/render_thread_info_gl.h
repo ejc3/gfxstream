@@ -17,7 +17,7 @@
 #include <optional>
 #include <string>
 
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 #include "stale_ptr_registry.h"
 #include "render-utils/stream.h"
 #include "gl/emulated_egl_context.h"

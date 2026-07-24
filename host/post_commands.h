@@ -23,7 +23,7 @@
 
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/host/gfxstream_format.h"
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 #include "render-utils/Renderer.h"
 
 namespace gfxstream {

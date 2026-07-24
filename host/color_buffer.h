@@ -22,12 +22,12 @@
 #include <memory>
 #include <optional>
 
-#include "framework_formats.h"
 #include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/external_object_manager.h"
+#include "gfxstream/host/framework_formats.h"
 #include "gfxstream/host/gfxstream_format.h"
-#include "handle.h"
-#include "hwc2.h"
+#include "gfxstream/host/hwc2.h"
+#include "gfxstream/host/handle.h"
 #include "render-utils/Renderer.h"
 #include "render-utils/stream.h"
 #include "snapshot/LazySnapshotObj.h"

@@ -21,12 +21,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include "compositor.h"
 #include "gfxstream/Compiler.h"
 #include "gfxstream/host/color_buffer_interface.h"
+#include "gfxstream/host/compositor.h"
 #include "gfxstream/host/gfxstream_format.h"
 #include "gfxstream/host/global_state.h"
-#include "hwc2.h"
+#include "gfxstream/host/hwc2.h"
 #include "post_commands.h"
 
 namespace gfxstream {

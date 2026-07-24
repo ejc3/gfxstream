@@ -23,7 +23,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 
 namespace gfxstream {
 namespace host {
