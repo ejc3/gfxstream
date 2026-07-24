@@ -20,20 +20,22 @@ subdir('snapshot')
 subdir('decoder_common')
 subdir('address_space')
 subdir('common')
+subdir('native_window')
 
 inc_gfxstream_backend = [
-  inc_host_decoder_common,
   inc_common_base,
+  inc_common_logging,
   inc_common_utils,
   inc_drm_headers,
   inc_glm,
   inc_host_address_space,
   inc_host_common,
+  inc_host_decoder_common,
   inc_host_features,
   inc_host_include,
   inc_host_iostream,
   inc_host_library,
-  inc_common_logging,
+  inc_host_native_window,
   inc_host_renderdoc,
   inc_host_snapshot,
   inc_host_tracing,
@@ -43,15 +45,16 @@ inc_gfxstream_backend = [
 ]
 
 link_gfxstream_backend = [
-  lib_host_decoder_common,
   lib_common_base,
+  lib_common_logging,
   lib_common_utils,
   lib_host_address_space,
   lib_host_common,
+  lib_host_decoder_common,
   lib_host_features,
   lib_host_iostream,
   lib_host_library,
-  lib_common_logging,
+  lib_host_native_window,
   lib_host_snapshot,
   lib_host_tracing,
 ]
@@ -122,21 +125,6 @@ endif
 if use_composer
   subdir('renderControl_dec')
   link_gfxstream_backend += lib_composer
-endif
-
-if not use_gles
-  files_lib_gfxstream_backend += files('native_sub_window_stub.cpp')
-elif host_machine.system() == 'darwin'
-  files_lib_gfxstream_backend += files('native_sub_window_cocoa.mm')
-elif host_machine.system() == 'windows'
-  files_lib_gfxstream_backend += files('native_sub_window_win32.cpp')
-elif host_machine.system() == 'linux' and use_gles
-  files_lib_gfxstream_backend += files('native_sub_window_x11.cpp')
-elif host_machine.system() == 'qnx'
-  files_lib_gfxstream_backend += files(
-    'platform_helper_qnx.cpp',
-    'native_sub_window_qnx.cpp',
-  )
 endif
 
 gfxstream_backend_cpp_args = [

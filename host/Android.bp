@@ -45,16 +45,17 @@ cc_library_host_static {
 
 gfxstream_backend_static_deps = [
     "libgfxstream_common_base",
+    "libgfxstream_common_logging",
     "libgfxstream_common_utils",
     "libgfxstream_etc",
     "libgfxstream_glestranslator_egl",
     "libgfxstream_glestranslator_glescm",
     "libgfxstream_glestranslator_glesv2",
     "libgfxstream_host_address_space",
-    "libgfxstream_host_compressedtextures",
-    "libgfxstream_host_decoder_common",
     "libgfxstream_host_common",
     "libgfxstream_host_compressedtextures",
+    "libgfxstream_host_compressedtextures",
+    "libgfxstream_host_decoder_common",
     "libgfxstream_host_features",
     "libgfxstream_host_gl_server",
     "libgfxstream_host_gles1_dec",
@@ -63,7 +64,7 @@ gfxstream_backend_static_deps = [
     "libgfxstream_host_glsnapshot",
     "libgfxstream_host_iostream",
     "libgfxstream_host_library",
-    "libgfxstream_common_logging",
+    "libgfxstream_host_native_window",
     "libgfxstream_host_openglesdispatch",
     "libgfxstream_host_rendercontrol_dec",
     "libgfxstream_host_renderdoc",
@@ -121,6 +122,7 @@ cc_defaults {
         "libgfxstream_host_glsnapshot",
         "libgfxstream_host_address_space",
         "libgfxstream_host_vulkan_cereal",
+        "libgfxstream_host_native_window",
     ],
     shared_libs: [
         "liblog", // gfxstream_base uses this via perfetto-libperfettobase
@@ -161,12 +163,10 @@ cc_defaults {
     ],
     target: {
         host: {
-            srcs: ["native_sub_window_x11.cpp"],
             static_libs: gfxstream_backend_snapshot_static_deps,
             whole_static_libs: gfxstream_backend_snapshot_static_deps,
         },
         android: {
-            srcs: ["native_sub_window_android.cpp"],
             shared_libs: [
                 "libnativewindow",
             ],

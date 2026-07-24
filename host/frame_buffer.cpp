@@ -40,12 +40,12 @@
 #include "gl/glestranslator/egl/egl_global_info.h"
 #endif
 
-#include "color_buffer.h"
 #include "gfxstream/Tracing.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/containers/Lookup.h"
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/host/guest_operations.h"
+#include "gfxstream/host/native_sub_window.h"
 #include "gfxstream/host/renderer_operations.h"
 #include "gfxstream/host/stream_utils.h"
 #include "gfxstream/host/tracing.h"
@@ -56,7 +56,6 @@
 #include "gfxstream/system/System.h"
 #include "host/gl/context_helper.h"
 #include "hwc2.h"
-#include "native_sub_window.h"
 #include "render-utils/MediaNative.h"
 #include "render_thread_info.h"
 #include "sync_thread.h"

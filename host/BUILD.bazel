@@ -1,6 +1,6 @@
 load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test", "objc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
 
 package(
@@ -70,10 +70,8 @@ cc_library(
         "compositor.h",
         "frame_buffer.h",
         "framework_formats.h",
-        "gles_compat.h",
         "handle.h",
         "hwc2.h",
-        "native_sub_window.h",
         "post_commands.h",
         "post_worker.h",
         "readback_worker.h",
@@ -95,32 +93,6 @@ cc_library(
         "//third_party/opengl:gfxstream_gles3_headers",
         "//third_party/vulkan:gfxstream_vulkan_headers",
         "//third_party/xcb",
-    ],
-)
-
-objc_library(
-    name = "gfxstream_backend_static-darwin",
-    srcs = [
-        "gles_compat.h",
-        "native_sub_window.h",
-        "native_sub_window_cocoa.mm",
-    ],
-    copts = GFXSTREAM_HOST_COPTS + [
-        "-Wno-deprecated-declarations",
-        "-std=c++20",
-    ],
-    defines = GFXSTREAM_HOST_DEFINES,
-    sdk_frameworks = [
-        "AppKit",
-        "QuartzCore",
-        "IOSurface",
-    ],
-    target_compatible_with = [
-        "@platforms//os:macos",
-    ],
-    deps = [
-        ":gfxstream_backend_headers",
-        "//third_party/opengl:gfxstream_egl_headers",
     ],
 )
 
@@ -151,16 +123,7 @@ cc_library(
         "virtio_gpu_ring_blob.cpp",
         "virtio_gpu_timelines.cpp",
         "vsync_thread.cpp",
-    ] + select({
-        "@platforms//os:macos": [],
-        "@platforms//os:windows": [
-            "native_sub_window_win32.cpp",
-        ],
-        "@platforms//os:linux": [
-            "native_sub_window_x11.cpp",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
     hdrs = [
         "buffer.h",
         "channel_stream.h",
@@ -168,10 +131,8 @@ cc_library(
         "compositor.h",
         "frame_buffer.h",
         "framework_formats.h",
-        "gles_compat.h",
         "handle.h",
         "hwc2.h",
-        "native_sub_window.h",
         "post_commands.h",
         "post_worker.h",
         "post_worker_gl.h",
@@ -231,6 +192,7 @@ cc_library(
         "//host/gl/glestranslator/gles_cm:gles_cm_translator_static",
         "//host/iostream:gfxstream_host_iostream",
         "//host/library:gfxstream_host_library",
+        "//host/native_window:gfxstream_host_native_window",
         "//host/renderControl_dec",
         "//host/renderdoc:gfxstream_host_renderdoc",
         "//host/snapshot:gfxstream_host_snapshot",
@@ -244,12 +206,7 @@ cc_library(
         "//third_party/xcb",
         "@protobuf",
         "@protobuf//src/google/protobuf/io",
-    ] + select({
-        "@platforms//os:macos": [
-            ":gfxstream_backend_static-darwin",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 cc_library(
@@ -317,6 +274,7 @@ cc_test(
         "//common/testenv:graphics_test_environment_support",
         "//host/common:gfxstream_host_common",
         "//host/features:gfxstream_host_features",
+        "//host/gl:gfxstream_opengl_server",
         "//host/testlibs/oswindow:gfxstream_oswindow_test_support",
         "//host/testlibs/support:gfxstream_host_testing_support",
         "@com_google_googletest//:gtest",
