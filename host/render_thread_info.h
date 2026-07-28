@@ -50,7 +50,7 @@ struct RenderThreadInfo {
     static void forAllRenderThreadInfos(std::function<void(RenderThreadInfo*)>);
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-    void initGl(gfxstream::host::GlobalState* globalState);
+    void initGl(gl::EmulationGl* emulationGl);
 #endif
 
     // The unique id of owner guest process of this render thread

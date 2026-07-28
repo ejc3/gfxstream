@@ -29,12 +29,13 @@ namespace gfxstream {
 namespace host {
 class GlobalState;
 namespace gl {
+class EmulationGl;
 
 struct RenderThreadInfoGl {
     // Create new instance. Only call this once per thread.
     // Future calls to get() will return this instance until
     // it is destroyed.
-    RenderThreadInfoGl(gfxstream::host::GlobalState* globalState);
+    RenderThreadInfoGl(EmulationGl* emulationGl);
 
     // Destructor.
     ~RenderThreadInfoGl();
@@ -75,7 +76,7 @@ struct RenderThreadInfoGl {
     GLESv1Decoder                   m_glDec;
     GLESv2Decoder                   m_gl2Dec;
 
-    gfxstream::host::GlobalState* m_globalState = nullptr;
+    EmulationGl* m_emulationGl = nullptr;
 };
 
 }  // namespace gl

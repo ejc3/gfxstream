@@ -265,7 +265,7 @@ SampleApplication::SampleApplication(int windowWidth, int windowHeight, int refr
     }
 
     mRenderThreadInfo.reset(new RenderThreadInfo());
-    mRenderThreadInfo->initGl(mFb->getGlobalState());
+    mRenderThreadInfo->initGl(mFb->getEmulationGl());
 
     mColorBuffer = mFb->createColorBuffer(mWidth, mHeight, GfxstreamFormat::R8G8B8A8_UNORM);
     mContext = mFb->createEmulatedEglContext(0, 0, glVersion);

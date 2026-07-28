@@ -55,6 +55,8 @@ class ReadbackWorker {
     virtual DoNextReadbackResult doNextReadback(uint32_t displayId, IColorBuffer* cb, void* fbImage,
                                                 bool repaint, bool readbackBgra) = 0;
 
+    virtual void doNextReadbackSync(IColorBuffer* cb, void* fbImage, bool readbackBgra) = 0;
+
     // Retrieves the latest framebuffer that has been posted and read with
     // doNextReadback.  This is meant for apps like video encoding to use as
     // input; they will need to do synchronized communication with the thread

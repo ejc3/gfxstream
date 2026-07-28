@@ -63,9 +63,7 @@ void RenderThreadInfo::forAllRenderThreadInfos(std::function<void(RenderThreadIn
 }
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-void RenderThreadInfo::initGl(gfxstream::host::GlobalState* globalState) {
-    m_glInfo.emplace(globalState);
-}
+void RenderThreadInfo::initGl(gl::EmulationGl* emulationGl) { m_glInfo.emplace(emulationGl); }
 #endif
 
 void RenderThreadInfo::onSave(Stream* stream) {
@@ -101,7 +99,7 @@ bool RenderThreadInfo::onLoad(Stream* stream) {
     const bool loadGlInfo = stream->getBe32() == 1;
     if (loadGlInfo) {
         if (!m_glInfo) {
-            m_glInfo.emplace(FrameBuffer::getFB()->getGlobalState());
+            m_glInfo.emplace(FrameBuffer::getFB()->getEmulationGl());
         }
         if (!m_glInfo->onLoad(stream)) {
             return false;

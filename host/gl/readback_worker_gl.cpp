@@ -178,6 +178,23 @@ ReadbackWorkerGl::DoNextReadbackResult ReadbackWorkerGl::doNextReadback(uint32_t
     return ret;
 }
 
+void ReadbackWorkerGl::doNextReadbackSync(IColorBuffer* colorBuffer, void* fbImage,
+                                          bool readbackBgra) {
+    if (!colorBuffer) {
+        return;
+    }
+
+    ColorBufferGl* colorBufferGl = colorBuffer->getColorBufferGl();
+    if (!colorBufferGl) {
+        GFXSTREAM_ERROR("Failed to get ColorBufferGl");
+        return;
+    }
+
+    colorBuffer->touch();
+
+    colorBufferGl->readback(static_cast<unsigned char*>(fbImage), readbackBgra);
+}
+
 ReadbackWorkerGl::FlushResult ReadbackWorkerGl::flushPipeline(uint32_t displayId) {
     gfxstream::base::AutoLock lock(mLock);
 

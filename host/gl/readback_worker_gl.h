@@ -64,6 +64,8 @@ class ReadbackWorkerGl : public ReadbackWorker {
     DoNextReadbackResult doNextReadback(uint32_t displayId, IColorBuffer* cb, void* fbImage,
                                         bool repaint, bool readbackBgra) override;
 
+    void doNextReadbackSync(IColorBuffer* cb, void* fbImage, bool readbackBgra) override;
+
     // getPixels(): Run this on a separate GL thread. This retrieves the
     // latest framebuffer that has been posted and read with doNextReadback.
     // This is meant for apps like video encoding to use as input; they will

@@ -17,8 +17,6 @@
 
 #include "frame_buffer.h"
 
-#include <chrono>
-#include <future>
 #include <memory>
 #include <thread>
 
@@ -104,7 +102,7 @@ class FrameBufferTest : public ::testing::Test {
         EXPECT_EQ(EGL_SUCCESS, egl->eglGetError());
 
         mRenderThreadInfo = new RenderThreadInfo();
-        mRenderThreadInfo->initGl(mFb->getGlobalState());
+        mRenderThreadInfo->initGl(mFb->getEmulationGl());
     }
 
     virtual void TearDown() override {

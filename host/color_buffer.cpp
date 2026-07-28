@@ -76,6 +76,7 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
     bool invalidateForGl();
     bool invalidateForVk();
     bool invalidateForBackend(Backend backend);
+    bool flushFromBackend(Backend backend);
     bool importHandle(void* handle, bool preserveContent);
 
     std::optional<BlobDescriptorInfo> exportBlob();
@@ -89,25 +90,6 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
     }
 
     vk::ColorBufferVk* getColorBufferVk() const { return mColorBufferVk.get(); }
-
-#if GFXSTREAM_ENABLE_HOST_GLES
-    bool canUseGlOps();
-    bool glOpBlitFromCurrentReadBuffer();
-    bool glOpBindToTexture();
-    bool glOpBindToTexture2();
-    bool glOpBindToRenderbuffer();
-    bool glOpReadback(unsigned char* img, bool readbackBgra);
-    bool glOpReadbackAsync(GLuint buffer, bool readbackBgra);
-    bool glOpImportEglNativePixmap(void* pixmap, bool preserveContent);
-    bool glOpSwapYuvTexturesAndUpdate(GLenum format, GLenum type, GfxstreamFormat texturesFormat,
-                                      GLuint* textures);
-    bool glOpIsFastBlitSupported() const;
-    bool glOpPostLayer(const ComposeLayer& l, int frameWidth, int frameHeight,
-                       const std::optional<std::array<float, 16>>& colorTransform);
-    bool glOpPostViewportScaledWithOverlay(
-        float rotation, float dx, float dy, float scaleX, float scaleY,
-        const std::optional<std::array<float, 16>>& colorTransform);
-#endif
 
    private:
     Impl(HandleType, uint32_t width, uint32_t height, GfxstreamFormat format);
@@ -345,6 +327,10 @@ bool ColorBuffer::Impl::invalidateForBackend(Backend backend) {
     return backend == Backend::VK ? invalidateForVk() : invalidateForGl();
 }
 
+bool ColorBuffer::Impl::flushFromBackend(Backend backend) {
+    return backend == Backend::VK ? flushFromVk() : flushFromGl();
+}
+
 bool ColorBuffer::Impl::importHandle(void* handle, bool preserveContent) {
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (mColorBufferGl) {
@@ -469,133 +455,6 @@ std::optional<BlobDescriptorInfo> ColorBuffer::Impl::exportBlob() {
     return mColorBufferVk->exportBlob();
 }
 
-#if GFXSTREAM_ENABLE_HOST_GLES
-bool ColorBuffer::Impl::canUseGlOps() { return (mColorBufferGl != nullptr); }
-
-bool ColorBuffer::Impl::glOpBlitFromCurrentReadBuffer() {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    touch();
-
-    return mColorBufferGl->blitFromCurrentReadBuffer();
-}
-
-bool ColorBuffer::Impl::glOpBindToTexture() {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    touch();
-
-    return mColorBufferGl->bindToTexture();
-}
-
-bool ColorBuffer::Impl::glOpBindToTexture2() {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    return mColorBufferGl->bindToTexture2();
-}
-
-bool ColorBuffer::Impl::glOpBindToRenderbuffer() {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    touch();
-
-    return mColorBufferGl->bindToRenderbuffer();
-}
-
-bool ColorBuffer::Impl::glOpReadback(unsigned char* img, bool readbackBgra) {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    touch();
-
-    return mColorBufferGl->readback(img, readbackBgra);
-}
-
-bool ColorBuffer::Impl::glOpReadbackAsync(GLuint buffer, bool readbackBgra) {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    touch();
-
-    return mColorBufferGl->readbackAsync(buffer, readbackBgra);
-}
-
-bool ColorBuffer::Impl::glOpImportEglNativePixmap(void* pixmap, bool preserveContent) {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    return mColorBufferGl->importEglNativePixmap(pixmap, preserveContent);
-}
-
-bool ColorBuffer::Impl::glOpSwapYuvTexturesAndUpdate(GLenum format, GLenum type,
-                                                     GfxstreamFormat texturesFormat,
-                                                     GLuint* textures) {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    mColorBufferGl->swapYUVTextures(texturesFormat, textures);
-
-    // This makes ColorBufferGl regenerate the RGBA texture using
-    // YUVConverter::drawConvert() with the updated YUV textures.
-    mColorBufferGl->subUpdate(0, 0, mWidth, mHeight, texturesFormat, /*pixels=*/nullptr);
-
-    flushFromGl();
-    return true;
-}
-
-bool ColorBuffer::Impl::glOpIsFastBlitSupported() const {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    return mColorBufferGl->isFastBlitSupported();
-}
-
-bool ColorBuffer::Impl::glOpPostLayer(const ComposeLayer& l, int frameWidth, int frameHeight,
-                                      const std::optional<std::array<float, 16>>& colorTransform) {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    mColorBufferGl->postLayer(l, frameWidth, frameHeight, colorTransform);
-    return true;
-}
-
-bool ColorBuffer::Impl::glOpPostViewportScaledWithOverlay(
-    float rotation, float dx, float dy, float scaleX, float scaleY,
-    const std::optional<std::array<float, 16>>& colorTransform) {
-    if (!mColorBufferGl) {
-        GFXSTREAM_ERROR("%s: ColorBufferGl not available", __func__);
-        return false;
-    }
-
-    mColorBufferGl->postViewportScaledWithOverlay(rotation, dx, dy, scaleX, scaleY, colorTransform);
-    return true;
-}
-#endif
-
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*static*/
@@ -677,6 +536,10 @@ bool ColorBuffer::invalidateForBackend(Backend backend) {
     return mImpl->invalidateForBackend(backend);
 }
 
+bool ColorBuffer::flushFromBackend(Backend backend) {
+    return mImpl->flushFromBackend(backend);
+}
+
 bool ColorBuffer::importHandle(void* handle, bool preserveContent) {
     return mImpl->importHandle(handle, preserveContent);
 }
@@ -690,50 +553,6 @@ bool ColorBuffer::flushFromVkBytes(const void* bytes, size_t bytesSize) {
 }
 
 std::optional<BlobDescriptorInfo> ColorBuffer::exportBlob() { return mImpl->exportBlob(); }
-
-#if GFXSTREAM_ENABLE_HOST_GLES
-bool ColorBuffer::canUseGlOps() { return mImpl->canUseGlOps(); }
-
-bool ColorBuffer::glOpBlitFromCurrentReadBuffer() { return mImpl->glOpBlitFromCurrentReadBuffer(); }
-
-bool ColorBuffer::glOpBindToTexture() { return mImpl->glOpBindToTexture(); }
-
-bool ColorBuffer::glOpBindToTexture2() { return mImpl->glOpBindToTexture2(); }
-
-bool ColorBuffer::glOpBindToRenderbuffer() { return mImpl->glOpBindToRenderbuffer(); }
-
-bool ColorBuffer::glOpReadback(unsigned char* img, bool readbackBgra) {
-    return mImpl->glOpReadback(img, readbackBgra);
-}
-
-bool ColorBuffer::glOpReadbackAsync(GLuint buffer, bool readbackBgra) {
-    return mImpl->glOpReadbackAsync(buffer, readbackBgra);
-}
-
-bool ColorBuffer::glOpImportEglNativePixmap(void* pixmap, bool preserveContent) {
-    return mImpl->glOpImportEglNativePixmap(pixmap, preserveContent);
-}
-
-bool ColorBuffer::glOpSwapYuvTexturesAndUpdate(GLenum format, GLenum type,
-                                               GfxstreamFormat texturesFormat, GLuint* textures) {
-    return mImpl->glOpSwapYuvTexturesAndUpdate(format, type, texturesFormat, textures);
-}
-
-bool ColorBuffer::glOpIsFastBlitSupported() const { return mImpl->glOpIsFastBlitSupported(); }
-
-bool ColorBuffer::glOpPostLayer(const ComposeLayer& l, int frameWidth, int frameHeight,
-                                const std::optional<std::array<float, 16>>& colorTransform) {
-    return mImpl->glOpPostLayer(l, frameWidth, frameHeight, colorTransform);
-}
-
-bool ColorBuffer::glOpPostViewportScaledWithOverlay(
-    float rotation, float dx, float dy, float scaleX, float scaleY,
-    const std::optional<std::array<float, 16>>& colorTransform) {
-    return mImpl->glOpPostViewportScaledWithOverlay(rotation, dx, dy, scaleX, scaleY,
-                                                    colorTransform);
-}
-
-#endif
 
 }  // namespace host
 }  // namespace gfxstream

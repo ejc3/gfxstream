@@ -53,6 +53,7 @@ class IColorBuffer {
     virtual vk::ColorBufferVk* getColorBufferVk() = 0;
 
     virtual bool invalidateForBackend(Backend backend) = 0;
+    virtual bool flushFromBackend(Backend backend) = 0;
     virtual bool importHandle(void* handle, bool preserveContent) = 0;
 
     virtual void readToBytes(int x, int y, int width, int height, GfxstreamFormat pixelsFormat,

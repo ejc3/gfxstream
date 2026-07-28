@@ -30,7 +30,6 @@
 #include <vulkan/vulkan.h>
 
 #include "buffer.h"
-#include "color_buffer.h"
 #include "gfxstream/AsyncResult.h"
 #include "gfxstream/EventNotificationSupport.h"
 #include "gfxstream/host/color_buffer_interface.h"
@@ -58,6 +57,7 @@
 #define FB_MAX_SWAP_INTERVAL 7
 
 namespace gfxstream {
+struct RenderOpt;
 namespace host {
 
 class GlobalState;
@@ -366,7 +366,7 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
 
     // Saves a screenshot from a color buffer, applies post processing like color transform,
     // display layout and background blending.
-    int getColorBufferScreenshot(ColorBuffer* cb, int screenwidth, int screenheight,
+    int getColorBufferScreenshot(IColorBuffer* cb, int screenwidth, int screenheight,
                                  int skinRotation, GfxstreamFormat pixelsFormat, void* outPixels,
                                  const Rect& rect,
                                  const std::optional<std::array<float, 16>>& colorTransform);
@@ -441,6 +441,7 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size = 0);
 
 #if GFXSTREAM_ENABLE_HOST_GLES
+    gl::EmulationGl* getEmulationGl();
     // Retrieves the color buffer handle associated with |p_surface|.
     // Returns 0 if there is no such handle.
     HandleType getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface);
@@ -513,13 +514,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     // host buffers when a guest application crashes, for example.
     void drainGlRenderThreadSurfaces();
 
-    void postLoadRenderThreadContextSurfacePtrs();
-
     // Return the host EGLDisplay used by this instance.
-    EGLDisplay getDisplay() const;
-    EGLSurface getWindowSurface() const;
-    EGLContext getContext() const;
-    EGLConfig getConfig() const;
+    bool getRenderOpt(RenderOpt* opt) const;
 
     EGLContext getGlobalEGLContext() const;
 

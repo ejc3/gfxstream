@@ -22,7 +22,6 @@
 
 #include <iomanip>
 
-#include "gfxstream/host/global_state.h"
 
 #if defined(__linux__)
 #include <sys/resource.h>
@@ -40,10 +39,12 @@
 #include "gl/glestranslator/egl/egl_global_info.h"
 #endif
 
+#include "color_buffer.h"
 #include "gfxstream/Tracing.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/containers/Lookup.h"
 #include "gfxstream/host/display_operations.h"
+#include "gfxstream/host/global_state.h"
 #include "gfxstream/host/guest_operations.h"
 #include "gfxstream/host/hwc2.h"
 #include "gfxstream/host/native_sub_window.h"
@@ -77,25 +78,15 @@ using gfxstream::host::gl::GLESApi_CM;
 #if GFXSTREAM_ENABLE_HOST_GLES
 using gfxstream::host::gl::ContextHelper;
 using gfxstream::host::gl::DisplaySurfaceGl;
-using gfxstream::host::gl::EmulatedEglConfig;
-using gfxstream::host::gl::EmulatedEglConfigList;
 using gfxstream::host::gl::EmulatedEglContext;
-using gfxstream::host::gl::EmulatedEglContextMap;
-using gfxstream::host::gl::EmulatedEglContextPtr;
 using gfxstream::host::gl::EmulatedEglFenceSync;
 using gfxstream::host::gl::EmulatedEglWindowSurface;
-using gfxstream::host::gl::EmulatedEglWindowSurfaceMap;
-using gfxstream::host::gl::EmulatedEglWindowSurfacePtr;
 using gfxstream::host::gl::EmulationGl;
 using gfxstream::host::gl::GLES_DISPATCH_MAX_VERSION_2;
 using gfxstream::host::gl::GLESDispatchMaxVersion;
 using gfxstream::host::gl::PostWorkerGl;
 using gfxstream::host::gl::RecursiveScopedContextBind;
-using gfxstream::host::gl::RenderThreadInfoGl;
-using gfxstream::host::gl::s_egl;
-using gfxstream::host::gl::s_gles2;
 using gfxstream::host::gl::TextureDraw;
-using gfxstream::host::gl::YUVConverter;
 #endif
 using gfxstream::host::vk::AstcEmulationMode;
 using gfxstream::host::vk::VkEmulation;
@@ -283,28 +274,6 @@ std::optional<GfxstreamFormat> GetGfxstreamFormat(
     }
 }
 
-std::optional<GfxstreamFormat> GetGfxstreamFormat(
-        const gfxstream::host::FeatureSet& features,
-        FrameworkFormat format) {
-    switch (format) {
-        case FRAMEWORK_FORMAT_NV12:
-            return GfxstreamFormat::NV12;
-        case FRAMEWORK_FORMAT_YV12:
-            return GfxstreamFormat::YV12;
-        case FRAMEWORK_FORMAT_P010:
-            return GfxstreamFormat::P010;
-        case FRAMEWORK_FORMAT_YUV_420_888: {
-            if (features.Yuv420888ToNv21.enabled()) {
-                return GfxstreamFormat::NV21;
-            } else {
-                return GfxstreamFormat::YV21;
-            }
-        }
-        default:
-            return std::nullopt;
-    }
-}
-
 static std::optional<std::array<float, 16>> GetColorTransform(uint32_t displayId = 0) {
     float displayColorTransformData[16];
     if (get_gfxstream_multi_display_operations().get_color_transform_matrix(
@@ -333,6 +302,27 @@ static std::optional<std::array<float, 16>> GetColorTransform(uint32_t displayId
 }
 
 }  // namespace
+
+std::optional<GfxstreamFormat> GetGfxstreamFormat(const gfxstream::host::FeatureSet& features,
+                                                  FrameworkFormat format) {
+    switch (format) {
+        case FRAMEWORK_FORMAT_NV12:
+            return GfxstreamFormat::NV12;
+        case FRAMEWORK_FORMAT_YV12:
+            return GfxstreamFormat::YV12;
+        case FRAMEWORK_FORMAT_P010:
+            return GfxstreamFormat::P010;
+        case FRAMEWORK_FORMAT_YUV_420_888: {
+            if (features.Yuv420888ToNv21.enabled()) {
+                return GfxstreamFormat::NV21;
+            } else {
+                return GfxstreamFormat::YV21;
+            }
+        }
+        default:
+            return std::nullopt;
+    }
+}
 
 static HandleType sNextHandle = 0;
 
@@ -482,15 +472,24 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
         }
     }
 
-    void lockContextStructureRead() { m_contextStructureLock.lockRead(); }
-    void unlockContextStructureRead() { m_contextStructureLock.unlockRead(); }
+    void lockContextStructureRead() {
+        if (m_emulationGl) {
+            m_emulationGl->lockContextStructureRead();
+        }
+    }
+    void unlockContextStructureRead() {
+        if (m_emulationGl) {
+            m_emulationGl->unlockContextStructureRead();
+        }
+    }
 
     // For use with sync threads and otherwise, any time we need a GL context
     // not specifically for drawing, but to obtain certain things about
     // GL state.
     // It can be unsafe / leaky to change the structure of contexts
     // outside the facilities the FrameBuffer class provides.
-    void createTrivialContext(HandleType shared, HandleType* contextOut, HandleType* surfOut);
+    void createTrivialContext(HandleType shared, HandleType* contextOut,
+                              HandleType* surfOut) NO_THREAD_SAFETY_ANALYSIS;
 
     void setShuttingDown() { m_shuttingDown = true; }
     bool isShuttingDown() const { return m_shuttingDown; }
@@ -556,15 +555,20 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
         const std::optional<std::array<float, 16>>& colorTransform) override;
 
     void onLastColorBufferRef(uint32_t handle);
+
     IColorBufferRef findColorBuffer(HandleType p_colorbuffer) override;
+    void openColorBufferByWindow(uint32_t colorBufferHandle) override;
+    bool closeColorBufferByWindow(uint32_t colorBufferHandle) override;
+    uint32_t genHandleLocked() override;
     BufferPtr findBuffer(HandleType p_buffer);
 
     void registerProcessCleanupCallback(void* key, uint64_t contextId,
                                         std::function<void()> callback) override;
     void unregisterProcessCleanupCallback(void* key) override;
 
-    void lockGlobalState() override;
-    void unlockGlobalState() override;
+    gfxstream::base::Lock& getGlobalLock() override LOCK_RETURNED(m_lock);
+    void lockGlobalState() override ACQUIRE(getGlobalLock());
+    void unlockGlobalState() override RELEASE(getGlobalLock());
 
     void invalidateColorBuffer(uint32_t colorBufferHandle) override;
     void flushColorBuffer(uint32_t colorBufferHandle) override;
@@ -619,8 +623,9 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
 
     // createTrivialContext(), but with a m_pbufContext
     // as shared, and not adding itself to the context map at all.
-    void createSharedTrivialContext(EGLContext* contextOut, EGLSurface* surfOut);
-    void destroySharedTrivialContext(EGLContext context, EGLSurface surf);
+    void createSharedTrivialContext(EGLContext* contextOut,
+                                    EGLSurface* surfOut) NO_THREAD_SAFETY_ANALYSIS;
+    void destroySharedTrivialContext(EGLContext context, EGLSurface surf) NO_THREAD_SAFETY_ANALYSIS;
 
     // Attach a ColorBuffer to a EmulatedEglWindowSurface instance.
     // See the documentation for EmulatedEglWindowSurface::setColorBuffer().
@@ -683,9 +688,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     // host buffers when a guest application crashes, for example.
     void drainGlRenderThreadSurfaces();
 
-    void postLoadRenderThreadContextSurfacePtrs() override;
-
     gl::EmulationGl& getEmulationGl();
+    gl::EmulationGl* getEmulationGlPtr();
     bool hasEmulationGl() const { return m_emulationGl != nullptr; }
 
     vk::VkEmulation& getEmulationVk();
@@ -694,19 +698,9 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     bool setColorBufferVulkanMode(HandleType colorBufferHandle, uint32_t mode);
     int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size);
 
-    // Return the host EGLDisplay used by this instance.
-    EGLDisplay getDisplay() const;
-    EGLSurface getWindowSurface() const;
-    EGLContext getContext() const;
-    EGLConfig getConfig() const;
+    bool getRenderOpt(RenderOpt* opt) const;
 
     EGLContext getGlobalEGLContext() const;
-
-    // Return a render context pointer from its handle
-    gl::EmulatedEglContextPtr getContext_locked(HandleType p_context);
-
-    // Return a color buffer pointer from its handle
-    gl::EmulatedEglWindowSurfacePtr getWindowSurface_locked(HandleType p_windowsurface);
 
     // Return a TextureDraw instance that can be used with this surfaces
     // and windows created by this instance.
@@ -734,8 +728,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     // Fill GLES usage protobuf
     void fillGLESUsages(android_studio::EmulatorGLESUsages*);
 
-    void* platformCreateSharedEglContext(void);
-    bool platformDestroySharedEglContext(void* context);
+    void* platformCreateSharedEglContext(void) NO_THREAD_SAFETY_ANALYSIS;
+    bool platformDestroySharedEglContext(void* context) NO_THREAD_SAFETY_ANALYSIS;
 
     bool flushColorBufferFromGl(HandleType colorBufferHandle);
 
@@ -815,10 +809,6 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     Impl(FrameBuffer* framebuffer, int p_width, int p_height, const FeatureSet& features,
          bool useSubWindow);
 
-    // Requires the caller to hold the m_colorBufferMapLock until the new handle is inserted into of
-    // the object handle maps.
-    HandleType genHandle_locked();
-
     bool removeSubWindow_locked();
     // Returns the set of ColorBuffers destroyed (for further cleanup)
     std::vector<HandleType> cleanupProcGLObjects_locked(uint64_t puid, bool forced = false);
@@ -875,8 +865,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     long long m_statsStartTime = 0;
 
     gfxstream::base::Lock m_lock;
-    gfxstream::base::ReadWriteLock m_contextStructureLock;
-    gfxstream::base::Lock m_colorBufferMapLock;
+    gfxstream::base::Lock m_colorBufferMapLock ACQUIRED_AFTER(m_lock);
     uint64_t mFrameNumber = 0;
     FBNativeWindowType m_nativeWindow = 0;
 
@@ -999,6 +988,10 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     Display* m_display = nullptr;
     std::unique_ptr<DisplaySurface> m_displaySurface;
 
+#if GFXSTREAM_ENABLE_HOST_GLES
+    gl::DisplayGl* m_displayGl = nullptr;
+#endif
+
     // CompositorGl.
     // TODO: update RenderDoc to be a DisplaySurfaceUser.
     std::vector<DisplaySurfaceUser*> m_displaySurfaceUsers;
@@ -1092,26 +1085,6 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
             return result;
         }
     } mScreenBackgroundImage;
-
-#if GFXSTREAM_ENABLE_HOST_GLES
-    gl::EmulatedEglContextMap m_contexts;
-    gl::EmulatedEglImageMap m_images;
-    gl::EmulatedEglWindowSurfaceMap m_windows;
-
-    std::unordered_map<HandleType, HandleType> m_EmulatedEglWindowSurfaceToColorBuffer;
-
-    ProcOwnedEmulatedEGLImages m_procOwnedEmulatedEglImages;
-    ProcOwnedEmulatedEglContexts m_procOwnedEmulatedEglContexts;
-    ProcOwnedEmulatedEglWindowSurfaces m_procOwnedEmulatedEglWindowSurfaces;
-    gl::DisplayGl* m_displayGl = nullptr;
-
-    struct PlatformEglContextInfo {
-        EGLContext context;
-        EGLSurface surface;
-    };
-
-    std::unordered_map<void*, PlatformEglContextInfo> m_platformEglContexts;
-#endif
 };
 
 void MaybeIncreaseFileDescriptorSoftLimit() {
@@ -1314,7 +1287,7 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
         // Do not initialize GL emulation if the guest is using ANGLE.
         if (needEmulationGl) {
             impl->m_emulationGl =
-                EmulationGl::create(width, height, impl->m_features, useSubWindow);
+                EmulationGl::create(width, height, impl->m_features, useSubWindow, impl.get());
             if (!impl->m_emulationGl) {
                 GFXSTREAM_ERROR("Failed to initialize GL emulation.");
                 return nullptr;
@@ -1600,15 +1573,6 @@ FrameBuffer::Impl::~Impl() {
         m_colorbuffers.clear();
     }
     m_colorBufferDelayedCloseList.clear();
-
-#if GFXSTREAM_ENABLE_HOST_GLES
-    m_windows.clear();
-    m_contexts.clear();
-
-    for (auto it : m_platformEglContexts) {
-        destroySharedTrivialContext(it.second.context, it.second.surface);
-    }
-#endif
 
     if (m_emulationGl) {
         m_emulationGl.reset();
@@ -2035,13 +1999,13 @@ bool FrameBuffer::Impl::removeSubWindow_locked() {
     return removed;
 }
 
-HandleType FrameBuffer::Impl::genHandle_locked() {
+uint32_t FrameBuffer::Impl::genHandleLocked() NO_THREAD_SAFETY_ANALYSIS {
     HandleType id;
     do {
         id = ++sNextHandle;
     } while (id == 0 ||
 #if GFXSTREAM_ENABLE_HOST_GLES
-             m_contexts.find(id) != m_contexts.end() || m_windows.find(id) != m_windows.end() ||
+             (m_emulationGl && m_emulationGl->isHandleInUse(id)) ||
 #endif
              m_colorbuffers.find(id) != m_colorbuffers.end() ||
              m_buffers.find(id) != m_buffers.end());
@@ -2065,7 +2029,7 @@ HandleType FrameBuffer::Impl::createColorBuffer(int p_width, int p_height, Gfxst
     sweepColorBuffersLocked();
     AutoLock colorBufferMapLock(m_colorBufferMapLock);
 
-    HandleType handle = genHandle_locked();
+    HandleType handle = genHandleLocked();
     if (!createColorBufferWithResourceHandleLocked(p_width, p_height, format, handle)) {
         GFXSTREAM_ERROR("Failed to create color buffer with resource handle");
         return 0;
@@ -2167,7 +2131,7 @@ bool FrameBuffer::Impl::createColorBufferWithResourceHandleLocked(int p_width, i
 HandleType FrameBuffer::Impl::createBuffer(uint64_t p_size, uint32_t memoryProperty) {
     AutoLock mutex(m_lock);
     AutoLock colorBufferMapLock(m_colorBufferMapLock);
-    HandleType handle = genHandle_locked();
+    HandleType handle = genHandleLocked();
     if (!createBufferWithResourceHandleLocked(p_size, handle, memoryProperty)) {
         GFXSTREAM_ERROR("Failed to create buffer");
         return 0;
@@ -2438,7 +2402,8 @@ void FrameBuffer::Impl::cleanupProcGLObjects(uint64_t puid) {
     }
 }
 
-std::vector<HandleType> FrameBuffer::Impl::cleanupProcGLObjects_locked(uint64_t puid, bool forced) {
+std::vector<HandleType> FrameBuffer::Impl::cleanupProcGLObjects_locked(uint64_t puid, bool forced)
+    NO_THREAD_SAFETY_ANALYSIS {
     std::vector<HandleType> colorBuffersToCleanup;
     {
         std::unique_ptr<RecursiveScopedContextBind> bind = nullptr;
@@ -2446,30 +2411,21 @@ std::vector<HandleType> FrameBuffer::Impl::cleanupProcGLObjects_locked(uint64_t 
         if (m_emulationGl) {
             bind = std::make_unique<RecursiveScopedContextBind>(getPbufferSurfaceContextHelper());
         }
-        // Clean up window surfaces
+        // Clean up GLES window surfaces and contexts
         if (m_emulationGl) {
-            auto procIte = m_procOwnedEmulatedEglWindowSurfaces.find(puid);
-            if (procIte != m_procOwnedEmulatedEglWindowSurfaces.end()) {
-                for (auto whndl : procIte->second) {
-                    auto w = m_windows.find(whndl);
-                    // TODO(b/265186226): figure out if we are leaking?
-                    if (w == m_windows.end()) {
-                        continue;
-                    }
-                    if (!m_guestManagedColorBufferLifetime) {
-                        if (m_refCountPipeEnabled) {
-                            if (decColorBufferRefCountLocked(w->second.second)) {
-                                colorBuffersToCleanup.push_back(w->second.second);
-                            }
-                        } else {
-                            if (closeColorBufferLocked(w->second.second, forced)) {
-                                colorBuffersToCleanup.push_back(w->second.second);
-                            }
+            auto colorBuffers = m_emulationGl->cleanupProcGLObjects(puid);
+            for (auto cb : colorBuffers) {
+                if (!m_guestManagedColorBufferLifetime) {
+                    if (m_refCountPipeEnabled) {
+                        if (decColorBufferRefCountLocked(cb)) {
+                            colorBuffersToCleanup.push_back(cb);
+                        }
+                    } else {
+                        if (closeColorBufferLocked(cb, forced)) {
+                            colorBuffersToCleanup.push_back(cb);
                         }
                     }
-                    m_windows.erase(w);
                 }
-                m_procOwnedEmulatedEglWindowSurfaces.erase(procIte);
             }
         }
 #endif
@@ -2491,34 +2447,7 @@ std::vector<HandleType> FrameBuffer::Impl::cleanupProcGLObjects_locked(uint64_t 
                 }
             }
         }
-
-#if GFXSTREAM_ENABLE_HOST_GLES
-        // Clean up EGLImage handles
-        if (m_emulationGl) {
-            auto procImagesIt = m_procOwnedEmulatedEglImages.find(puid);
-            if (procImagesIt != m_procOwnedEmulatedEglImages.end()) {
-                for (auto image : procImagesIt->second) {
-                    m_images.erase(image);
-                }
-                m_procOwnedEmulatedEglImages.erase(procImagesIt);
-            }
-        }
-#endif
     }
-
-#if GFXSTREAM_ENABLE_HOST_GLES
-    // Unbind before cleaning up contexts
-    // Cleanup render contexts
-    if (m_emulationGl) {
-        auto procIte = m_procOwnedEmulatedEglContexts.find(puid);
-        if (procIte != m_procOwnedEmulatedEglContexts.end()) {
-            for (auto ctx : procIte->second) {
-                m_contexts.erase(ctx);
-            }
-            m_procOwnedEmulatedEglContexts.erase(procIte);
-        }
-    }
-#endif
 
     return colorBuffersToCleanup;
 }
@@ -2781,9 +2710,11 @@ AsyncResult FrameBuffer::Impl::postImpl(HandleType p_colorbuffer, Post::Completi
                     doPostCallback(iter.second.img, iter.first);
                 }
             } else {
-    #if GFXSTREAM_ENABLE_HOST_GLES
-                cb->glOpReadback(iter.second.img, iter.second.readBgra);
-    #endif
+                ensureReadbackWorker();
+                if (m_readbackWorker) {
+                    m_readbackWorker->doNextReadbackSync(cb.get(), iter.second.img,
+                                                         iter.second.readBgra);
+                }
                 doPostCallback(iter.second.img, iter.first);
             }
         }
@@ -3219,7 +3150,8 @@ AsyncResult FrameBuffer::Impl::composeWithCallback(uint32_t bufferSize, void* bu
     }
 }
 
-bool FrameBuffer::Impl::onSave(Stream* stream, const ITextureSaverPtr& textureSaver) {
+bool FrameBuffer::Impl::onSave(Stream* stream,
+                               const ITextureSaverPtr& textureSaver) NO_THREAD_SAFETY_ANALYSIS {
     // Things we do not need to snapshot:
     //     m_eglSurface
     //     m_eglContext
@@ -3243,12 +3175,7 @@ bool FrameBuffer::Impl::onSave(Stream* stream, const ITextureSaverPtr& textureSa
         // (textures created by the host are not saved!)
         // eglSaveAllImages labels all EGLImages (both host and guest) to be saved
         // and save all labeled textures and EGLImages.
-        if (s_egl.eglPreSaveContext && s_egl.eglSaveAllImages) {
-            for (const auto& ctx : m_contexts) {
-                s_egl.eglPreSaveContext(getDisplay(), ctx.second->getEGLContext(), stream);
-            }
-            s_egl.eglSaveAllImages(getDisplay(), stream, &textureSaver);
-        }
+        m_emulationGl->preSave(stream, textureSaver);
     }
 #endif
 
@@ -3296,9 +3223,9 @@ bool FrameBuffer::Impl::onSave(Stream* stream, const ITextureSaverPtr& textureSa
     // objects).
     // TODO: skip reading from GPU even for texture objects.
 #if GFXSTREAM_ENABLE_HOST_GLES
-    saveCollection(
-        stream, m_contexts,
-        [](Stream* s, const EmulatedEglContextMap::value_type& pair) { pair.second->onSave(s); });
+    if (m_emulationGl) {
+        m_emulationGl->saveContexts(stream);
+    }
 #endif
 
     // We don't need to save |m_colorBufferCloseTsMap| here - there's enough
@@ -3319,20 +3246,22 @@ bool FrameBuffer::Impl::onSave(Stream* stream, const ITextureSaverPtr& textureSa
     }
     stream->putBe32(m_lastPostedColorBuffer);
 #if GFXSTREAM_ENABLE_HOST_GLES
-    saveCollection(stream, m_windows,
-                   [](Stream* s, const EmulatedEglWindowSurfaceMap::value_type& pair) {
-                       pair.second.first->onSave(s);
-                       s->putBe32(pair.second.second);  // Color buffer handle.
-                   });
+    if (m_emulationGl) {
+        m_emulationGl->saveWindowSurfaces(stream);
+    }
 #endif
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-    saveProcOwnedCollection(stream, m_procOwnedEmulatedEglWindowSurfaces);
+    if (m_emulationGl) {
+        m_emulationGl->saveProcOwnedWindowSurfaces(stream);
+    }
 #endif
     saveProcOwnedCollection(stream, m_procOwnedColorBuffers);
 #if GFXSTREAM_ENABLE_HOST_GLES
-    saveProcOwnedCollection(stream, m_procOwnedEmulatedEglImages);
-    saveProcOwnedCollection(stream, m_procOwnedEmulatedEglContexts);
+    if (m_emulationGl) {
+        m_emulationGl->saveProcOwnedImages(stream);
+        m_emulationGl->saveProcOwnedContexts(stream);
+    }
 #endif
 
     // TODO(b/309858017): remove if when ready to bump snapshot version
@@ -3355,24 +3284,15 @@ bool FrameBuffer::Impl::onSave(Stream* stream, const ITextureSaverPtr& textureSa
 
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (m_emulationGl) {
-        if (s_egl.eglPostSaveContext) {
-            for (const auto& ctx : m_contexts) {
-                s_egl.eglPostSaveContext(getDisplay(), ctx.second->getEGLContext(), stream);
-            }
-            // We need to run the post save step for m_eglContext
-            // to mark their texture handles dirty
-            if (getContext() != EGL_NO_CONTEXT) {
-                s_egl.eglPostSaveContext(getDisplay(), getContext(), stream);
-            }
-        }
-
+        m_emulationGl->postSave(stream);
         EmulatedEglFenceSync::onSave(stream);
     }
 #endif
     return true;
 }
 
-bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureLoader) {
+bool FrameBuffer::Impl::onLoad(Stream* stream,
+                               const ITextureLoaderPtr& textureLoader) NO_THREAD_SAFETY_ANALYSIS {
     AutoLock lock(m_lock);
     // cleanups
     {
@@ -3394,19 +3314,19 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
             AutoLock colorBufferMapLock(m_colorBufferMapLock);
             if (m_procOwnedCleanupCallbacks.empty() && m_procOwnedColorBuffers.empty() &&
 #if GFXSTREAM_ENABLE_HOST_GLES
-                m_procOwnedEmulatedEglContexts.empty() && m_procOwnedEmulatedEglImages.empty() &&
-                m_procOwnedEmulatedEglWindowSurfaces.empty() &&
+                (!m_emulationGl || !m_emulationGl->hasProcOwnedResources()) &&
 #endif
                 (
 #if GFXSTREAM_ENABLE_HOST_GLES
-                    !m_contexts.empty() || !m_windows.empty() ||
+                    (m_emulationGl && m_emulationGl->hasContextsOrWindowSurfaces()) ||
 #endif
                     m_colorbuffers.size() > m_colorBufferDelayedCloseList.size())) {
                 // we are likely on a legacy system image, which does not have
                 // process owned objects. We need to force cleanup everything
 #if GFXSTREAM_ENABLE_HOST_GLES
-                m_contexts.clear();
-                m_windows.clear();
+                if (m_emulationGl) {
+                    m_emulationGl->clearContextsAndWindowSurfaces();
+                }
 #endif
                 m_colorbuffers.clear();
                 cleanupComplete = true;
@@ -3416,11 +3336,13 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
             std::vector<HandleType> colorBuffersToCleanup;
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-            while (m_procOwnedEmulatedEglWindowSurfaces.size()) {
-                auto cleanupHandles = cleanupProcGLObjects_locked(
-                    m_procOwnedEmulatedEglWindowSurfaces.begin()->first, true);
-                colorBuffersToCleanup.insert(colorBuffersToCleanup.end(), cleanupHandles.begin(),
-                                             cleanupHandles.end());
+            if (m_emulationGl) {
+                auto glPuids = m_emulationGl->getGLPUIDs();
+                for (uint64_t puid : glPuids) {
+                    auto cleanupHandles = cleanupProcGLObjects_locked(puid, true);
+                    colorBuffersToCleanup.insert(colorBuffersToCleanup.end(),
+                                                 cleanupHandles.begin(), cleanupHandles.end());
+                }
             }
 #endif
             while (m_procOwnedColorBuffers.size()) {
@@ -3429,20 +3351,6 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
                 colorBuffersToCleanup.insert(colorBuffersToCleanup.end(), cleanupHandles.begin(),
                                              cleanupHandles.end());
             }
-#if GFXSTREAM_ENABLE_HOST_GLES
-            while (m_procOwnedEmulatedEglImages.size()) {
-                auto cleanupHandles =
-                    cleanupProcGLObjects_locked(m_procOwnedEmulatedEglImages.begin()->first, true);
-                colorBuffersToCleanup.insert(colorBuffersToCleanup.end(), cleanupHandles.begin(),
-                                             cleanupHandles.end());
-            }
-            while (m_procOwnedEmulatedEglContexts.size()) {
-                auto cleanupHandles = cleanupProcGLObjects_locked(
-                    m_procOwnedEmulatedEglContexts.begin()->first, true);
-                colorBuffersToCleanup.insert(colorBuffersToCleanup.end(), cleanupHandles.begin(),
-                                             cleanupHandles.end());
-            }
-#endif
 
             std::vector<std::function<void()>> cleanupCallbacks;
 
@@ -3474,8 +3382,9 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
         }
         m_colorBufferDelayedCloseList.clear();
 #if GFXSTREAM_ENABLE_HOST_GLES
-        assert(m_contexts.empty());
-        assert(m_windows.empty());
+        if (m_emulationGl) {
+            assert(!m_emulationGl->hasContextsOrWindowSurfaces());
+        }
 #endif
         {
             AutoLock colorBufferMapLock(m_colorBufferMapLock);
@@ -3487,9 +3396,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
         }
 #if GFXSTREAM_ENABLE_HOST_GLES
         if (m_emulationGl) {
-            if (s_egl.eglLoadAllImages) {
-                s_egl.eglLoadAllImages(getDisplay(), stream, &textureLoader);
-            }
+            m_emulationGl->loadAllImages(stream, textureLoader);
         }
 #endif
     }
@@ -3524,15 +3431,12 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
     m_statsStartTime = stream->getBe64();
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-    loadCollection(
-        stream, &m_contexts, [this](Stream* stream) -> EmulatedEglContextMap::value_type {
-            ENSURE_GL_EMULATION_FATAL();
-
-            auto context = m_emulationGl->loadEmulatedEglContext(stream);
-            auto contextHandle = context ? context->getHndl() : 0;
-            return {contextHandle, std::move(context)};
-        });
-    assert(!gfxstream::base::find(m_contexts, 0));
+    if (m_emulationGl) {
+        if (!m_emulationGl->loadContexts(stream)) {
+            GFXSTREAM_ERROR("Failed to load GL contexts.");
+            return false;
+        }
+    }
 #endif
 
     auto now = gfxstream::base::getUnixTimeUs();
@@ -3564,32 +3468,32 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
     {
         AutoLock colorBufferMapLock(m_colorBufferMapLock);
 #if GFXSTREAM_ENABLE_HOST_GLES
-        loadCollection(
-            stream, &m_windows, [this](Stream* stream) -> EmulatedEglWindowSurfaceMap::value_type {
-                ENSURE_GL_EMULATION_FATAL();
-                auto window = m_emulationGl->loadEmulatedEglWindowSurface(
-                    stream,
-                    [this](uint32_t handle) -> IColorBufferRef {
-                        auto it = m_colorbuffers.find(handle);
-                        if (it == m_colorbuffers.end()) return nullptr;
-                        return it->second.cb;
-                    },
-                    m_contexts);
-
-                HandleType handle = window->getHndl();
-                HandleType colorBufferHandle = stream->getBe32();
-                return {handle, {std::move(window), colorBufferHandle}};
-            });
+        if (m_emulationGl) {
+            if (!m_emulationGl->loadWindowSurfaces(stream,
+                                                   [this](uint32_t handle) -> IColorBufferRef {
+                                                       auto it = m_colorbuffers.find(handle);
+                                                       if (it == m_colorbuffers.end())
+                                                           return nullptr;
+                                                       return it->second.cb;
+                                                   })) {
+                GFXSTREAM_ERROR("Failed to load GL window surfaces.");
+                return false;
+            }
+        }
 #endif
     }
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-    loadProcOwnedCollection(stream, &m_procOwnedEmulatedEglWindowSurfaces);
+    if (m_emulationGl) {
+        m_emulationGl->loadProcOwnedWindowSurfaces(stream);
+    }
 #endif
     loadProcOwnedCollection(stream, &m_procOwnedColorBuffers);
 #if GFXSTREAM_ENABLE_HOST_GLES
-    loadProcOwnedCollection(stream, &m_procOwnedEmulatedEglImages);
-    loadProcOwnedCollection(stream, &m_procOwnedEmulatedEglContexts);
+    if (m_emulationGl) {
+        m_emulationGl->loadProcOwnedImages(stream);
+        m_emulationGl->loadProcOwnedContexts(stream);
+    }
 #endif
     // TODO(b/309858017): remove if when ready to bump snapshot version
     if (m_features.VulkanSnapshots.enabled()) {
@@ -3608,9 +3512,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
 
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (m_emulationGl) {
-        if (s_egl.eglPostLoadAllImages) {
-            s_egl.eglPostLoadAllImages(getDisplay(), stream);
-        }
+        m_emulationGl->postLoad(stream);
     }
 
     registerTriggerWait();
@@ -3660,9 +3562,11 @@ void FrameBuffer::Impl::lock() { m_lock.lock(); }
 
 void FrameBuffer::Impl::unlock() { m_lock.unlock(); }
 
-void FrameBuffer::Impl::lockGlobalState() NO_THREAD_SAFETY_ANALYSIS { lock(); }
+gfxstream::base::Lock& FrameBuffer::Impl::getGlobalLock() { return m_lock; }
 
-void FrameBuffer::Impl::unlockGlobalState() NO_THREAD_SAFETY_ANALYSIS { unlock(); }
+void FrameBuffer::Impl::lockGlobalState() { lock(); }
+
+void FrameBuffer::Impl::unlockGlobalState() { unlock(); }
 
 IColorBufferRef FrameBuffer::Impl::findColorBuffer(HandleType p_colorbuffer) {
     AutoLock colorBufferMapLock(m_colorBufferMapLock);
@@ -3671,6 +3575,28 @@ IColorBufferRef FrameBuffer::Impl::findColorBuffer(HandleType p_colorbuffer) {
         return nullptr;
     }
     return std::dynamic_pointer_cast<ColorBuffer>(it->second.cb);
+}
+
+void FrameBuffer::Impl::openColorBufferByWindow(uint32_t colorBufferHandle) {
+    AutoLock colorBufferMapLock(m_colorBufferMapLock);
+    auto c = m_colorbuffers.find(colorBufferHandle);
+    if (c != m_colorbuffers.end()) {
+        markOpened(&c->second);
+        if (!m_guestManagedColorBufferLifetime) {
+            c->second.refcount++;
+        }
+    }
+}
+
+bool FrameBuffer::Impl::closeColorBufferByWindow(uint32_t colorBufferHandle) {
+    if (!m_guestManagedColorBufferLifetime) {
+        if (m_refCountPipeEnabled) {
+            return decColorBufferRefCountLocked(colorBufferHandle);
+        } else {
+            return closeColorBufferLocked(colorBufferHandle);
+        }
+    }
+    return false;
 }
 
 BufferPtr FrameBuffer::Impl::findBuffer(HandleType p_buffer) {
@@ -3993,15 +3919,11 @@ int32_t FrameBuffer::Impl::mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t 
 }
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-HandleType FrameBuffer::Impl::getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface) {
+HandleType FrameBuffer::Impl::getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface)
+    NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VALUE(0);
     AutoLock mutex(m_lock);
-
-    auto it = m_EmulatedEglWindowSurfaceToColorBuffer.find(p_surface);
-    if (it == m_EmulatedEglWindowSurfaceToColorBuffer.end()) {
-        return 0;
-    }
-
-    return it->second;
+    return m_emulationGl->getWindowSurfaceColorBufferHandle(p_surface);
 }
 
 void FrameBuffer::Impl::setScreenMask(int width, int height, const uint8_t* rgbaData) {
@@ -4079,88 +4001,34 @@ void FrameBuffer::Impl::unregisterVulkanInstance(uint64_t id) const {}
 #endif
 
 void FrameBuffer::Impl::createTrivialContext(HandleType shared, HandleType* contextOut,
-                                             HandleType* surfOut) {
-    assert(contextOut);
-    assert(surfOut);
-
-    *contextOut = createEmulatedEglContext(0, shared, GLESApi_2);
-    // Zero size is formally allowed here, but SwiftShader doesn't like it and
-    // fails.
-    *surfOut = createEmulatedEglWindowSurface(0, 1, 1);
-}
-
-void FrameBuffer::Impl::createSharedTrivialContext(EGLContext* contextOut, EGLSurface* surfOut) {
-    assert(contextOut);
-    assert(surfOut);
-
-    ENSURE_GL_EMULATION_VOID();
-
-    if (m_emulationGl->mEglConfig == EGL_NO_CONFIG) {
-        GFXSTREAM_FATAL("GL/EGL emulation has not chosen a config.");
-    }
-
-    int maj, min;
-    get_gfxstream_gles_version(&maj, &min);
-
-    const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION_KHR, maj,
-                                     EGL_CONTEXT_MINOR_VERSION_KHR, min, EGL_NONE};
-
-    *contextOut = s_egl.eglCreateContext(getDisplay(), m_emulationGl->mEglConfig,
-                                         getGlobalEGLContext(), contextAttribs);
-
-    const EGLint pbufAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
-
-    *surfOut = s_egl.eglCreatePbufferSurface(getDisplay(), m_emulationGl->mEglConfig, pbufAttribs);
-}
-
-void FrameBuffer::Impl::destroySharedTrivialContext(EGLContext context, EGLSurface surface) {
-    if (getDisplay() != EGL_NO_DISPLAY) {
-        s_egl.eglDestroyContext(getDisplay(), context);
-        s_egl.eglDestroySurface(getDisplay(), surface);
-    }
-}
-
-bool FrameBuffer::Impl::setEmulatedEglWindowSurfaceColorBuffer(HandleType p_surface,
-                                                               HandleType p_colorbuffer) {
+                                             HandleType* surfOut) NO_THREAD_SAFETY_ANALYSIS {
     AutoLock mutex(m_lock);
-
-    EmulatedEglWindowSurfaceMap::iterator w(m_windows.find(p_surface));
-    if (w == m_windows.end()) {
-        // bad surface handle
-        GFXSTREAM_ERROR("bad window surface handle %#x", p_surface);
-        return false;
+    if (m_emulationGl) {
+        m_emulationGl->createTrivialContext(shared, contextOut, surfOut);
     }
+}
 
-    {
-        AutoLock colorBufferMapLock(m_colorBufferMapLock);
-        auto c = m_colorbuffers.find(p_colorbuffer);
-        if (c == m_colorbuffers.end()) {
-            GFXSTREAM_ERROR("bad color buffer handle %d", p_colorbuffer);
-            // bad colorbuffer handle
-            return false;
-        }
-
-        (*w).second.first->setColorBuffer((*c).second.cb);
-        markOpened(&c->second);
-        if (!m_guestManagedColorBufferLifetime) {
-            c->second.refcount++;
-        }
+void FrameBuffer::Impl::createSharedTrivialContext(EGLContext* contextOut,
+                                                   EGLSurface* surfOut) NO_THREAD_SAFETY_ANALYSIS {
+    AutoLock mutex(m_lock);
+    if (m_emulationGl) {
+        m_emulationGl->createSharedTrivialContext(contextOut, surfOut);
     }
-    if (w->second.second) {
-        if (!m_guestManagedColorBufferLifetime) {
-            if (m_refCountPipeEnabled) {
-                decColorBufferRefCountLocked(w->second.second);
-            } else {
-                closeColorBufferLocked(w->second.second);
-            }
-        }
+}
+
+void FrameBuffer::Impl::destroySharedTrivialContext(EGLContext context,
+                                                    EGLSurface surface) NO_THREAD_SAFETY_ANALYSIS {
+    AutoLock mutex(m_lock);
+    if (m_emulationGl) {
+        m_emulationGl->destroySharedTrivialContext(context, surface);
     }
+}
 
-    (*w).second.second = p_colorbuffer;
-
-    m_EmulatedEglWindowSurfaceToColorBuffer[p_surface] = p_colorbuffer;
-
-    return true;
+bool FrameBuffer::Impl::setEmulatedEglWindowSurfaceColorBuffer(
+    HandleType p_surface, HandleType p_colorbuffer) NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VALUE(false);
+    AutoLock mutex(m_lock);
+    return m_emulationGl->setEmulatedEglWindowSurfaceColorBuffer(p_surface, p_colorbuffer);
 }
 
 std::string FrameBuffer::Impl::getEglString(EGLenum name) {
@@ -4207,109 +4075,30 @@ EGLint FrameBuffer::Impl::chooseConfig(EGLint* attribs, EGLint* configs, EGLint 
 }
 
 HandleType FrameBuffer::Impl::createEmulatedEglContext(int config, HandleType shareContextHandle,
-                                                       GLESApi version) {
+                                                       GLESApi version) NO_THREAD_SAFETY_ANALYSIS {
     ENSURE_GL_EMULATION_VALUE(0);
     AutoLock mutex(m_lock);
-    gfxstream::base::AutoWriteLock contextLock(m_contextStructureLock);
-    // Hold the ColorBuffer map lock so that the new handle won't collide with a
-    // ColorBuffer handle.
     AutoLock colorBufferMapLock(m_colorBufferMapLock);
 
-    EmulatedEglContextPtr shareContext = nullptr;
-    if (shareContextHandle != 0) {
-        auto shareContextIt = m_contexts.find(shareContextHandle);
-        if (shareContextIt == m_contexts.end()) {
-            GFXSTREAM_ERROR("Failed to find share EmulatedEglContext:%d", shareContextHandle);
-            return 0;
-        }
-        shareContext = shareContextIt->second;
-    }
-
-    HandleType contextHandle = genHandle_locked();
-    auto context =
-        m_emulationGl->createEmulatedEglContext(config, shareContext.get(), version, contextHandle);
-    if (!context) {
-        GFXSTREAM_ERROR("Failed to create EmulatedEglContext.");
-        return 0;
-    }
-
-    m_contexts[contextHandle] = std::move(context);
-
-    RenderThreadInfo* tinfo = RenderThreadInfo::get();
-    uint64_t puid = tinfo->m_puid;
-    // The new emulator manages render contexts per guest process.
-    // Fall back to per-thread management if the system image does not
-    // support it.
-    if (puid) {
-        m_procOwnedEmulatedEglContexts[puid].insert(contextHandle);
-    } else {  // legacy path to manage context lifetime by threads
-        if (!tinfo->m_glInfo) {
-            GFXSTREAM_ERROR("RenderThreadGL not available.");
-        }
-        else {
-            tinfo->m_glInfo->m_contextSet.insert(contextHandle);
-        }
-    }
-
-    return contextHandle;
+    return m_emulationGl->createEmulatedEglContext(config, shareContextHandle, version);
 }
 
-void FrameBuffer::Impl::destroyEmulatedEglContext(HandleType contextHandle) {
+void FrameBuffer::Impl::destroyEmulatedEglContext(HandleType contextHandle)
+    NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VOID();
     AutoLock mutex(m_lock);
     sweepColorBuffersLocked();
 
-    gfxstream::base::AutoWriteLock contextLock(m_contextStructureLock);
-    m_contexts.erase(contextHandle);
-    RenderThreadInfo* tinfo = RenderThreadInfo::get();
-    uint64_t puid = tinfo->m_puid;
-    // The new emulator manages render contexts per guest process.
-    // Fall back to per-thread management if the system image does not
-    // support it.
-    if (puid) {
-        auto it = m_procOwnedEmulatedEglContexts.find(puid);
-        if (it != m_procOwnedEmulatedEglContexts.end()) {
-            it->second.erase(contextHandle);
-        }
-    } else {
-        if (!tinfo->m_glInfo) {
-            GFXSTREAM_FATAL("RenderThreadGL not available.");
-        }
-        tinfo->m_glInfo->m_contextSet.erase(contextHandle);
-    }
+    m_emulationGl->destroyEmulatedEglContext(contextHandle);
 }
 
-HandleType FrameBuffer::Impl::createEmulatedEglWindowSurface(int p_config, int p_width,
-                                                             int p_height) {
+HandleType FrameBuffer::Impl::createEmulatedEglWindowSurface(
+    int p_config, int p_width, int p_height) NO_THREAD_SAFETY_ANALYSIS {
     ENSURE_GL_EMULATION_VALUE(0);
     AutoLock mutex(m_lock);
-    // Hold the ColorBuffer map lock so that the new handle won't collide with a
-    // ColorBuffer handle.
     AutoLock colorBufferMapLock(m_colorBufferMapLock);
 
-    HandleType handle = genHandle_locked();
-
-    auto window =
-        m_emulationGl->createEmulatedEglWindowSurface(p_config, p_width, p_height, handle);
-    if (!window) {
-        GFXSTREAM_ERROR("Failed to create EmulatedEglWindowSurface.");
-        return 0;
-    }
-
-    m_windows[handle] = {std::move(window), 0};
-
-    RenderThreadInfo* info = RenderThreadInfo::get();
-    if (!info->m_glInfo) {
-        GFXSTREAM_FATAL("RRenderThreadInfoGl not available.");
-    }
-
-    uint64_t puid = info->m_puid;
-    if (puid) {
-        m_procOwnedEmulatedEglWindowSurfaces[puid].insert(handle);
-    } else {  // legacy path to manage window surface lifetime by threads
-        info->m_glInfo->m_windowSet.insert(handle);
-    }
-
-    return handle;
+    return m_emulationGl->createEmulatedEglWindowSurface(p_config, p_width, p_height);
 }
 
 void FrameBuffer::Impl::destroyEmulatedEglWindowSurface(HandleType p_surface) {
@@ -4321,35 +4110,20 @@ void FrameBuffer::Impl::destroyEmulatedEglWindowSurface(HandleType p_surface) {
 }
 
 std::vector<HandleType> FrameBuffer::Impl::destroyEmulatedEglWindowSurfaceLocked(
-    HandleType p_surface) {
+    HandleType p_surface) NO_THREAD_SAFETY_ANALYSIS {
     std::vector<HandleType> colorBuffersToCleanUp;
-    const auto w = m_windows.find(p_surface);
-    if (w != m_windows.end()) {
-        RecursiveScopedContextBind bind(getPbufferSurfaceContextHelper());
+    auto colorBuffers = m_emulationGl->destroyEmulatedEglWindowSurface(p_surface);
+    for (auto cb : colorBuffers) {
         if (!m_guestManagedColorBufferLifetime) {
             if (m_refCountPipeEnabled) {
-                if (decColorBufferRefCountLocked(w->second.second)) {
-                    colorBuffersToCleanUp.push_back(w->second.second);
+                if (decColorBufferRefCountLocked(cb)) {
+                    colorBuffersToCleanUp.push_back(cb);
                 }
             } else {
-                if (closeColorBufferLocked(w->second.second)) {
-                    colorBuffersToCleanUp.push_back(w->second.second);
+                if (closeColorBufferLocked(cb)) {
+                    colorBuffersToCleanUp.push_back(cb);
                 }
             }
-        }
-        m_windows.erase(w);
-        RenderThreadInfo* tinfo = RenderThreadInfo::get();
-        uint64_t puid = tinfo->m_puid;
-        if (puid) {
-            auto ite = m_procOwnedEmulatedEglWindowSurfaces.find(puid);
-            if (ite != m_procOwnedEmulatedEglWindowSurfaces.end()) {
-                ite->second.erase(p_surface);
-            }
-        } else {
-            if (!tinfo->m_glInfo) {
-                GFXSTREAM_FATAL("RenderThreadGL not available.");
-            }
-            tinfo->m_glInfo->m_windowSet.erase(p_surface);
         }
     }
     return colorBuffersToCleanUp;
@@ -4365,47 +4139,18 @@ void FrameBuffer::Impl::createEmulatedEglFenceSync(EGLenum type, int destroyWhen
     }
 
     if (m_emulationGl) {
-        // TODO(b/233939967): move RenderThreadInfoGl usage to EmulationGl.
-        RenderThreadInfoGl* const info = RenderThreadInfoGl::get();
-        if (!info) {
-            GFXSTREAM_FATAL("RenderThreadGL not available.");
+        if (outSync) {
+            *outSync = m_emulationGl->createEmulatedEglFenceSync(type, destroyWhenSignaled);
         }
-        if (!info->currContext) {
-            uint32_t syncContext;
-            uint32_t syncSurface;
-            createTrivialContext(0,  // There is no context to share.
-                                &syncContext, &syncSurface);
-            bindContext(syncContext, syncSurface, syncSurface);
-            // This context is then cleaned up when the render thread exits.
-        }
-
-        auto sync = m_emulationGl->createEmulatedEglFenceSync(type, destroyWhenSignaled);
-        if (sync && outSync) {
-            *outSync = (uint64_t)(uintptr_t)sync.release();
-        }
-    }
-    else if (m_emulationVk) {
+    } else if (m_emulationVk) {
         // No-op: compose operations using this callback will be waited on the futures
         // generated before processing later rc commands. This ensures CPU and GPU
         // synchronization is established for non-async compose scenarios, where this
         // codepath is used via HostFrameComposer on non-virtiogpu/minigbm images.
         // Egl fences are not used on newer images with virtiogpu/minigbm.
-    }
-    else {
+    } else {
         GFXSTREAM_FATAL("Unimplemented");
     }
-}
-
-void FrameBuffer::Impl::postLoadRenderThreadContextSurfacePtrs() {
-    RenderThreadInfoGl* const info = RenderThreadInfoGl::get();
-    if (!info) {
-        GFXSTREAM_FATAL("RenderThreadGL not available.");
-    }
-
-    AutoLock lock(m_lock);
-    info->currContext = getContext_locked(info->currContextHandleFromLoad);
-    info->currDrawSurf = getWindowSurface_locked(info->currDrawSurfHandleFromLoad);
-    info->currReadSurf = getWindowSurface_locked(info->currReadSurfHandleFromLoad);
 }
 
 void FrameBuffer::Impl::drainGlRenderThreadResources() {
@@ -4415,83 +4160,39 @@ void FrameBuffer::Impl::drainGlRenderThreadResources() {
         return;
     }
 
-    // Release references to the current thread's context/surfaces if any
-    bindContext(0, 0, 0);
-
-    drainGlRenderThreadSurfaces();
-    drainGlRenderThreadContexts();
-
-    if (!s_egl.eglReleaseThread()) {
-        GFXSTREAM_ERROR("Error: RenderThread @%p failed to eglReleaseThread()", this);
+    if (m_emulationGl) {
+        m_emulationGl->drainRenderThreadResources();
     }
 }
 
-void FrameBuffer::Impl::drainGlRenderThreadContexts() {
+void FrameBuffer::Impl::drainGlRenderThreadContexts() NO_THREAD_SAFETY_ANALYSIS {
     if (isShuttingDown()) {
         return;
     }
 
-    RenderThreadInfoGl* const tinfo = RenderThreadInfoGl::get();
-    if (!tinfo) {
-        GFXSTREAM_FATAL("RenderThreadGL not available.");
-    }
-
-    if (tinfo->m_contextSet.empty()) {
-        return;
-    }
-
     AutoLock mutex(m_lock);
-    gfxstream::base::AutoWriteLock contextLock(m_contextStructureLock);
-    for (const HandleType contextHandle : tinfo->m_contextSet) {
-        m_contexts.erase(contextHandle);
+    if (m_emulationGl) {
+        m_emulationGl->drainRenderThreadContexts();
     }
-    tinfo->m_contextSet.clear();
 }
 
-void FrameBuffer::Impl::drainGlRenderThreadSurfaces() {
+void FrameBuffer::Impl::drainGlRenderThreadSurfaces() NO_THREAD_SAFETY_ANALYSIS {
     if (isShuttingDown()) {
         return;
     }
 
-    RenderThreadInfoGl* const tinfo = RenderThreadInfoGl::get();
-    if (!tinfo) {
-        GFXSTREAM_FATAL("RenderThreadGL not available.");
-    }
-
-    if (tinfo->m_windowSet.empty()) {
-        return;
-    }
-
-    std::vector<HandleType> colorBuffersToCleanup;
-
     AutoLock mutex(m_lock);
-    RecursiveScopedContextBind bind(getPbufferSurfaceContextHelper());
-    for (const HandleType winHandle : tinfo->m_windowSet) {
-        const auto winIt = m_windows.find(winHandle);
-        if (winIt != m_windows.end()) {
-            if (const HandleType oldColorBufferHandle = winIt->second.second) {
-                if (!m_guestManagedColorBufferLifetime) {
-                    if (m_refCountPipeEnabled) {
-                        if (decColorBufferRefCountLocked(oldColorBufferHandle)) {
-                            colorBuffersToCleanup.push_back(oldColorBufferHandle);
-                        }
-                    } else {
-                        if (closeColorBufferLocked(oldColorBufferHandle)) {
-                            colorBuffersToCleanup.push_back(oldColorBufferHandle);
-                        }
-                    }
-                }
-                m_windows.erase(winIt);
-            }
-        }
+    if (m_emulationGl) {
+        m_emulationGl->drainRenderThreadSurfaces();
     }
-    tinfo->m_windowSet.clear();
 }
 
 EmulationGl& FrameBuffer::Impl::getEmulationGl() {
     ENSURE_GL_EMULATION_FATAL();
     return *m_emulationGl;
 }
+
+gl::EmulationGl* FrameBuffer::Impl::getEmulationGlPtr() { return m_emulationGl.get(); }
 
 VkEmulation& FrameBuffer::Impl::getEmulationVk() {
     if (!m_emulationVk) {
@@ -4500,56 +4201,19 @@ VkEmulation& FrameBuffer::Impl::getEmulationVk() {
     return *m_emulationVk;
 }
 
-EGLDisplay FrameBuffer::Impl::getDisplay() const {
-    ENSURE_GL_EMULATION_VALUE(nullptr);
-    return m_emulationGl->mEglDisplay;
-}
-
-EGLSurface FrameBuffer::Impl::getWindowSurface() const {
-    ENSURE_GL_EMULATION_VALUE(0);
-    if (!m_emulationGl->mWindowSurface) {
-        return EGL_NO_SURFACE;
-    }
-
-    const auto* displaySurfaceGl =
-        reinterpret_cast<const DisplaySurfaceGl*>(m_emulationGl->mWindowSurface->getImpl());
-
-    return displaySurfaceGl->getSurface();
-}
-
-EGLContext FrameBuffer::Impl::getContext() const {
-    ENSURE_GL_EMULATION_VALUE(0);
-    return m_emulationGl->mEglContext;
-}
-
-EGLContext FrameBuffer::Impl::getConfig() const {
-    ENSURE_GL_EMULATION_VALUE(nullptr);
-    return m_emulationGl->mEglConfig;
+bool FrameBuffer::Impl::getRenderOpt(RenderOpt* opt) const {
+    ENSURE_GL_EMULATION_VALUE(false);
+    return m_emulationGl->getRenderOpt(opt);
 }
 
 EGLContext FrameBuffer::Impl::getGlobalEGLContext() const {
     ENSURE_GL_EMULATION_VALUE(0);
-    if (!m_emulationGl->mPbufferSurface) {
-        GFXSTREAM_FATAL("FrameBuffer pbuffer surface not available.");
-    }
-
-    const auto* displaySurfaceGl =
-        reinterpret_cast<const DisplaySurfaceGl*>(m_emulationGl->mPbufferSurface->getImpl());
-
-    return displaySurfaceGl->getContextForShareContext();
-}
-
-EmulatedEglContextPtr FrameBuffer::Impl::getContext_locked(HandleType p_context) {
-    return gfxstream::base::findOrDefault(m_contexts, p_context);
-}
-
-EmulatedEglWindowSurfacePtr FrameBuffer::Impl::getWindowSurface_locked(HandleType p_windowsurface) {
-    return gfxstream::base::findOrDefault(m_windows, p_windowsurface).first;
+    return m_emulationGl->getGlobalEGLContext();
 }
 
 TextureDraw* FrameBuffer::Impl::getTextureDraw() const {
     ENSURE_GL_EMULATION_VALUE(nullptr);
-    return m_emulationGl->mTextureDraw.get();
+    return m_emulationGl->getTextureDraw();
 }
 
 bool FrameBuffer::Impl::isFastBlitSupported() const {
@@ -4563,136 +4227,42 @@ void FrameBuffer::Impl::disableFastBlitForTesting() {
 }
 
 HandleType FrameBuffer::Impl::createEmulatedEglImage(HandleType contextHandle, EGLenum target,
-                                                     GLuint buffer) {
+                                                     GLuint buffer) NO_THREAD_SAFETY_ANALYSIS {
     ENSURE_GL_EMULATION_VALUE(0);
     AutoLock mutex(m_lock);
-
-    EmulatedEglContext* context = nullptr;
-    if (contextHandle) {
-        gfxstream::base::AutoWriteLock contextLock(m_contextStructureLock);
-
-        auto it = m_contexts.find(contextHandle);
-        if (it == m_contexts.end()) {
-            GFXSTREAM_ERROR("Failed to find EmulatedEglContext:%d", contextHandle);
-            return 0;
-        }
-
-        context = it->second.get();
-    }
-
-    auto image = m_emulationGl->createEmulatedEglImage(context, target,
-                                                       reinterpret_cast<EGLClientBuffer>(buffer));
-    if (!image) {
-        GFXSTREAM_ERROR("Failed to create EmulatedEglImage");
-        return 0;
-    }
-
-    HandleType imageHandle = image->getHandle();
-
-    m_images[imageHandle] = std::move(image);
-
-    RenderThreadInfo* tInfo = RenderThreadInfo::get();
-    uint64_t puid = tInfo->m_puid;
-    if (puid) {
-        m_procOwnedEmulatedEglImages[puid].insert(imageHandle);
-    }
-    return imageHandle;
+    return m_emulationGl->createEmulatedEglImage(contextHandle, target,
+                                                 reinterpret_cast<EGLClientBuffer>(buffer));
 }
 
-bool FrameBuffer::Impl::destroyEmulatedEglImage(HandleType imageHandle) {
+bool FrameBuffer::Impl::destroyEmulatedEglImage(HandleType imageHandle) NO_THREAD_SAFETY_ANALYSIS {
     ENSURE_GL_EMULATION_VALUE(false);
     AutoLock mutex(m_lock);
-
-    auto imageIt = m_images.find(imageHandle);
-    if (imageIt == m_images.end()) {
-        GFXSTREAM_ERROR("Failed to find EmulatedEglImage:%d", imageHandle);
-        return false;
-    }
-    auto& image = imageIt->second;
-
-    EGLBoolean success = image->destroy();
-    m_images.erase(imageIt);
-
-    RenderThreadInfo* tInfo = RenderThreadInfo::get();
-    uint64_t puid = tInfo->m_puid;
-    if (puid) {
-        m_procOwnedEmulatedEglImages[puid].erase(imageHandle);
-        // We don't explicitly call m_procOwnedEmulatedEglImages.erase(puid) when the
-        // size reaches 0, since it could go between zero and one many times in
-        // the lifetime of a process. It will be cleaned up by
-        // cleanupProcGLObjects(puid) when the process is dead.
-    }
-    return (success == EGL_TRUE);
+    return m_emulationGl->destroyEmulatedEglImage(imageHandle);
 }
 
-bool FrameBuffer::Impl::flushEmulatedEglWindowSurfaceColorBuffer(HandleType p_surface) {
+bool FrameBuffer::Impl::flushEmulatedEglWindowSurfaceColorBuffer(HandleType p_surface)
+    NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VALUE(false);
     AutoLock mutex(m_lock);
-
-    auto it = m_windows.find(p_surface);
-    if (it == m_windows.end()) {
-        GFXSTREAM_ERROR("FB::flushEmulatedEglWindowSurfaceColorBuffer: window handle %#x not found",
-                        p_surface);
-        // bad surface handle
-        return false;
-    }
-
-    EmulatedEglWindowSurface* surface = it->second.first.get();
-    surface->flushColorBuffer();
-
-    return true;
+    return m_emulationGl->flushEmulatedEglWindowSurfaceColorBuffer(p_surface);
 }
 
 void FrameBuffer::Impl::fillGLESUsages(android_studio::EmulatorGLESUsages* usages) {
-    if (s_egl.eglFillUsages) {
-        s_egl.eglFillUsages(usages);
+    if (m_emulationGl) {
+        m_emulationGl->fillGlesUsages(usages);
     }
 }
 
 void* FrameBuffer::Impl::platformCreateSharedEglContext(void) {
+    ENSURE_GL_EMULATION_VALUE(nullptr);
     AutoLock lock(m_lock);
-
-    EGLContext context = 0;
-    EGLSurface surface = 0;
-    createSharedTrivialContext(&context, &surface);
-
-    void* underlyingContext = s_egl.eglGetNativeContextANDROID(getDisplay(), context);
-    if (!underlyingContext) {
-        GFXSTREAM_ERROR("Error: Underlying egl backend could not produce a native EGL context.");
-        return nullptr;
-    }
-
-    m_platformEglContexts[underlyingContext] = {context, surface};
-
-#if defined(__QNX__)
-    EGLDisplay currDisplay = eglGetCurrentDisplay();
-    EGLSurface currRead = eglGetCurrentSurface(EGL_READ);
-    EGLSurface currDraw = eglGetCurrentSurface(EGL_DRAW);
-    EGLSurface currContext = eglGetCurrentContext();
-    // Make this context current to ensure thread-state is initialized
-    s_egl.eglMakeCurrent(getDisplay(), surface, surface, context);
-    // Revert back to original state
-    s_egl.eglMakeCurrent(currDisplay, currRead, currDraw, currContext);
-#endif
-
-    return underlyingContext;
+    return m_emulationGl->platformCreateSharedEglContext();
 }
 
 bool FrameBuffer::Impl::platformDestroySharedEglContext(void* underlyingContext) {
+    ENSURE_GL_EMULATION_VALUE(false);
     AutoLock lock(m_lock);
-
-    auto it = m_platformEglContexts.find(underlyingContext);
-    if (it == m_platformEglContexts.end()) {
-        GFXSTREAM_ERROR(
-            "Error: Could not find underlying egl context %p (perhaps already destroyed?)",
-            underlyingContext);
-        return false;
-    }
-
-    destroySharedTrivialContext(it->second.context, it->second.surface);
-
-    m_platformEglContexts.erase(it);
-
-    return true;
+    return m_emulationGl->platformDestroySharedEglContext(underlyingContext);
 }
 
 bool FrameBuffer::Impl::flushColorBufferFromGl(HandleType colorBufferHandle) {
@@ -4716,29 +4286,26 @@ bool FrameBuffer::Impl::invalidateColorBufferForGl(HandleType colorBufferHandle)
 
 ContextHelper* FrameBuffer::Impl::getPbufferSurfaceContextHelper() const {
     ENSURE_GL_EMULATION_VALUE(nullptr);
-    if (!m_emulationGl->mPbufferSurface) {
+    auto* pbufferSurface = m_emulationGl->getPbufferSurface();
+    if (!pbufferSurface) {
         GFXSTREAM_FATAL("EGL emulation pbuffer surface not available.");
     }
     const auto* displaySurfaceGl =
-        reinterpret_cast<const DisplaySurfaceGl*>(m_emulationGl->mPbufferSurface->getImpl());
+        reinterpret_cast<const DisplaySurfaceGl*>(pbufferSurface->getImpl());
 
     return displaySurfaceGl->getContextHelper();
 }
 
-bool FrameBuffer::Impl::bindColorBufferToTexture(HandleType p_colorbuffer) {
+bool FrameBuffer::Impl::bindColorBufferToTexture(HandleType p_colorbuffer)
+    NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VALUE(false);
     AutoLock mutex(m_lock);
-
-    ColorBufferPtr colorBuffer =
-        std::static_pointer_cast<ColorBuffer>(findColorBuffer(p_colorbuffer));
-    if (!colorBuffer) {
-        // bad colorbuffer handle
-        return false;
-    }
-
-    return colorBuffer->glOpBindToTexture();
+    return m_emulationGl->bindColorBufferToTexture(p_colorbuffer);
 }
 
-bool FrameBuffer::Impl::bindColorBufferToTexture2(HandleType p_colorbuffer) {
+bool FrameBuffer::Impl::bindColorBufferToTexture2(HandleType p_colorbuffer)
+    NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VALUE(false);
     // This is only called when using multi window display
     // It will deadlock when posting from main thread.
     std::unique_ptr<AutoLock> mutex;
@@ -4746,239 +4313,67 @@ bool FrameBuffer::Impl::bindColorBufferToTexture2(HandleType p_colorbuffer) {
         mutex = std::make_unique<AutoLock>(m_lock);
     }
 
-    ColorBufferPtr colorBuffer =
-        std::static_pointer_cast<ColorBuffer>(findColorBuffer(p_colorbuffer));
-    if (!colorBuffer) {
-        // bad colorbuffer handle
-        return false;
-    }
-
-    if (!colorBuffer->canUseGlOps()) {
-        // cannot call glOpBindToTexture2 without a valid gl colorbuffer
-        static bool errorReported = false;
-        if (!errorReported) {
-            GFXSTREAM_ERROR("%s: Cannot use GL colorbuffer operations", __func__);
-            errorReported = true;
-        }
-        return false;
-    }
-
-    return colorBuffer->glOpBindToTexture2();
+    return m_emulationGl->bindColorBufferToTexture2(p_colorbuffer);
 }
 
-bool FrameBuffer::Impl::bindColorBufferToRenderbuffer(HandleType p_colorbuffer) {
+bool FrameBuffer::Impl::bindColorBufferToRenderbuffer(HandleType p_colorbuffer)
+    NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VALUE(false);
     AutoLock mutex(m_lock);
-
-    ColorBufferPtr colorBuffer =
-        std::static_pointer_cast<ColorBuffer>(findColorBuffer(p_colorbuffer));
-    if (!colorBuffer) {
-        // bad colorbuffer handle
-        return false;
-    }
-
-    return colorBuffer->glOpBindToRenderbuffer();
+    return m_emulationGl->bindColorBufferToRenderbuffer(p_colorbuffer);
 }
 
 bool FrameBuffer::Impl::bindContext(HandleType p_context, HandleType p_drawSurface,
-                                    HandleType p_readSurface) {
+                                    HandleType p_readSurface) NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VALUE(false);
     if (m_shuttingDown) {
         return false;
     }
 
     AutoLock mutex(m_lock);
 
-    EmulatedEglWindowSurfacePtr draw, read;
-    EmulatedEglContextPtr ctx;
-
-    //
-    // if this is not an unbind operation - make sure all handles are good
-    //
-    if (p_context || p_drawSurface || p_readSurface) {
-        ctx = getContext_locked(p_context);
-        if (!ctx) return false;
-        auto drawWindowIt = m_windows.find(p_drawSurface);
-        if (drawWindowIt == m_windows.end()) {
-            // bad surface handle
-            return false;
-        }
-        draw = (*drawWindowIt).second.first;
-
-        if (p_readSurface != p_drawSurface) {
-            auto readWindowIt = m_windows.find(p_readSurface);
-            if (readWindowIt == m_windows.end()) {
-                // bad surface handle
-                return false;
-            }
-            read = (*readWindowIt).second.first;
-        } else {
-            read = draw;
-        }
-    } else {
-        // if unbind operation, sweep color buffers
+    if (!p_context && !p_drawSurface && !p_readSurface) {
         sweepColorBuffersLocked();
     }
 
-    if (!s_egl.eglMakeCurrent(getDisplay(), draw ? draw->getEGLSurface() : EGL_NO_SURFACE,
-                              read ? read->getEGLSurface() : EGL_NO_SURFACE,
-                              ctx ? ctx->getEGLContext() : EGL_NO_CONTEXT)) {
-        GFXSTREAM_ERROR("eglMakeCurrent failed");
-        return false;
-    }
-
-    //
-    // Bind the surface(s) to the context
-    //
-    RenderThreadInfoGl* const tinfo = RenderThreadInfoGl::get();
-    if (!tinfo) {
-        GFXSTREAM_FATAL("RenderThreadGl not available.");
-    }
-
-    EmulatedEglWindowSurfacePtr bindDraw, bindRead;
-    if (draw.get() == NULL && read.get() == NULL) {
-        // Unbind the current read and draw surfaces from the context
-        bindDraw = tinfo->currDrawSurf;
-        bindRead = tinfo->currReadSurf;
-    } else {
-        bindDraw = draw;
-        bindRead = read;
-    }
-
-    if (bindDraw.get() != NULL && bindRead.get() != NULL) {
-        if (bindDraw.get() != bindRead.get()) {
-            bindDraw->bind(ctx, EmulatedEglWindowSurface::BIND_DRAW);
-            bindRead->bind(ctx, EmulatedEglWindowSurface::BIND_READ);
-        } else {
-            bindDraw->bind(ctx, EmulatedEglWindowSurface::BIND_READDRAW);
-        }
-    }
-
-    //
-    // update thread info with current bound context
-    //
-    tinfo->currContext = ctx;
-    tinfo->currDrawSurf = draw;
-    tinfo->currReadSurf = read;
-    if (ctx) {
-        if (ctx->clientVersion() > GLESApi_CM)
-            tinfo->m_gl2Dec.setContextData(&ctx->decoderContextData());
-        else
-            tinfo->m_glDec.setContextData(&ctx->decoderContextData());
-    } else {
-        tinfo->m_glDec.setContextData(NULL);
-        tinfo->m_gl2Dec.setContextData(NULL);
-    }
-    return true;
+    return m_emulationGl->bindContext(p_context, p_drawSurface, p_readSurface);
 }
 
 void FrameBuffer::Impl::createYUVTextures(uint32_t type, uint32_t count, int width, int height,
-                                          uint32_t* output) {
-    auto formatOpt = GetGfxstreamFormat(m_features, static_cast<FrameworkFormat>(type));
-    if (!formatOpt) {
-        GFXSTREAM_ERROR("Unsupported framework format %d", type);
-        return;
-    }
-    auto format = *formatOpt;
-
+                                          uint32_t* output) NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VOID();
     AutoLock mutex(m_lock);
-    auto contextHelper = getPbufferSurfaceContextHelper();
-    if (!contextHelper) {
-        // This should not be called in vulkan-only mode
-        GFXSTREAM_ERROR("%s: invalid pbuffer surface context", __func__);
-        return;
-    }
-    RecursiveScopedContextBind bind(contextHelper);
-    if (!bind.isOk()) {
-        GFXSTREAM_ERROR("%s: could not bind context helper", __func__);
-        return;
-    }
-    for (uint32_t i = 0; i < count; ++i) {
-        if (format == GfxstreamFormat::NV12 || format == GfxstreamFormat::NV21) {
-            YUVConverter::createYUVGLTex(GL_TEXTURE0, width, height, format, YuvPlane::Y, &output[2 * i]);
-            YUVConverter::createYUVGLTex(GL_TEXTURE1, width / 2, height / 2, format, YuvPlane::UV, &output[2 * i + 1]);
-        } else if (format == GfxstreamFormat::YV12 || format == GfxstreamFormat::YV21) {
-            YUVConverter::createYUVGLTex(GL_TEXTURE0, width, height, format, YuvPlane::Y, &output[3 * i]);
-            YUVConverter::createYUVGLTex(GL_TEXTURE1, width / 2, height / 2, format, YuvPlane::U, &output[3 * i + 1]);
-            YUVConverter::createYUVGLTex(GL_TEXTURE2, width / 2, height / 2, format, YuvPlane::V, &output[3 * i + 2]);
-        }
-    }
+    m_emulationGl->createYUVTextures(type, count, width, height, output);
 }
 
-void FrameBuffer::Impl::destroyYUVTextures(uint32_t type, uint32_t count, uint32_t* textures) {
-    auto formatOpt = GetGfxstreamFormat(m_features, static_cast<FrameworkFormat>(type));
-    if (!formatOpt) {
-        GFXSTREAM_ERROR("Unsupported framework format %d", type);
-        return;
-    }
-    auto format = *formatOpt;
-
+void FrameBuffer::Impl::destroyYUVTextures(uint32_t type, uint32_t count,
+                                           uint32_t* textures) NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VOID();
     AutoLock mutex(m_lock);
-    RecursiveScopedContextBind bind(getPbufferSurfaceContextHelper());
-    if (format == GfxstreamFormat::NV12 || format == GfxstreamFormat::NV21) {
-        s_gles2.glDeleteTextures(2 * count, textures);
-    } else if (format == GfxstreamFormat::YV12 || format == GfxstreamFormat::YV21) {
-        s_gles2.glDeleteTextures(3 * count, textures);
-    }
+    m_emulationGl->destroyYUVTextures(type, count, textures);
 }
 
-void FrameBuffer::Impl::updateYUVTextures(uint32_t type, uint32_t* textures, void* privData, void* func) {
-    auto formatOpt = GetGfxstreamFormat(m_features, static_cast<FrameworkFormat>(type));
-    if (!formatOpt) {
-        GFXSTREAM_ERROR("Unsupported framework format %d", type);
-        return;
-    }
-    auto format = *formatOpt;
-
+void FrameBuffer::Impl::updateYUVTextures(uint32_t type, uint32_t* textures, void* privData,
+                                          void* func) NO_THREAD_SAFETY_ANALYSIS {
+    ENSURE_GL_EMULATION_VOID();
     AutoLock mutex(m_lock);
-    RecursiveScopedContextBind bind(getPbufferSurfaceContextHelper());
-
-    yuv_updater_t updater = (yuv_updater_t)func;
-    uint32_t gtextures[3] = {0, 0, 0};
-
-    if (format == GfxstreamFormat::NV12 || format == GfxstreamFormat::NV21) {
-        gtextures[0] = s_gles2.glGetGlobalTexName(textures[0]);
-        gtextures[1] = s_gles2.glGetGlobalTexName(textures[1]);
-    } else if (format == GfxstreamFormat::YV12 || format == GfxstreamFormat::YV21) {
-        gtextures[0] = s_gles2.glGetGlobalTexName(textures[0]);
-        gtextures[1] = s_gles2.glGetGlobalTexName(textures[1]);
-        gtextures[2] = s_gles2.glGetGlobalTexName(textures[2]);
-    }
-
-#ifdef __APPLE__
-    EGLContext prevContext = s_egl.eglGetCurrentContext();
-    auto mydisp = EglGlobalInfo::getInstance()->getDisplayFromDisplayType(EGL_DEFAULT_DISPLAY);
-    void* nativecontext = mydisp->getLowLevelContext(prevContext);
-    struct MediaNativeCallerData callerdata;
-    callerdata.ctx = nativecontext;
-    callerdata.converter = nsConvertVideoFrameToNV12Textures;
-    void* pcallerdata = &callerdata;
-#else
-    void* pcallerdata = nullptr;
-#endif
-
-    updater(privData, type, gtextures, pcallerdata);
+    m_emulationGl->updateYUVTextures(type, textures, privData, func);
 }
 
 void FrameBuffer::Impl::swapTexturesAndUpdateColorBuffer(uint32_t p_colorbuffer, int x, int y,
                                                          int width, int height, uint32_t format,
                                                          uint32_t type, uint32_t texturesType,
                                                          uint32_t* textures) {
-    auto texturesFormatOpt = GetGfxstreamFormat(m_features, (FrameworkFormat)texturesType);
-    if (!texturesFormatOpt) {
-        GFXSTREAM_ERROR("Unsupported framework format %d", texturesType);
+    AutoLock mutex(m_lock);
+    IColorBufferRef colorBuffer = findColorBuffer(p_colorbuffer);
+    if (!colorBuffer) {
+        // bad colorbuffer handle
         return;
     }
-    auto texturesFormat = *texturesFormatOpt;
-
-    {
-        AutoLock mutex(m_lock);
-        ColorBufferPtr colorBuffer =
-            std::static_pointer_cast<ColorBuffer>(findColorBuffer(p_colorbuffer));
-        if (!colorBuffer) {
-            // bad colorbuffer handle
-            return;
-        }
-        colorBuffer->glOpSwapYuvTexturesAndUpdate(format, type, texturesFormat, textures);
-    }
+#if GFXSTREAM_ENABLE_HOST_GLES
+    m_emulationGl->swapTexturesAndUpdateColorBuffer(colorBuffer.get(), format, type, texturesType,
+                                                    textures);
+#endif
 }
 
 void FrameBuffer::Impl::asyncWaitForGpuWithCb(uint64_t eglsync, FenceCompletionCallback cb) {
@@ -5341,7 +4736,7 @@ int FrameBuffer::getScreenshot(unsigned int nChannels, unsigned int* width, unsi
 }
 
 int FrameBuffer::getColorBufferScreenshot(
-    ColorBuffer* cb, int targetWidth, int targetHeight, int skinRotation,
+    IColorBuffer* cb, int targetWidth, int targetHeight, int skinRotation,
     GfxstreamFormat pixelsFormat, void* outPixels, const Rect& rect,
     const std::optional<std::array<float, 16>>& colorTransform) {
     return mImpl->getColorBufferScreenshot(cb, targetWidth, targetHeight, skinRotation,
@@ -5473,6 +4868,10 @@ int32_t FrameBuffer::mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, u
 
 #if GFXSTREAM_ENABLE_HOST_GLES
 
+gl::EmulationGl* FrameBuffer::getEmulationGl() {
+    return mImpl ? mImpl->getEmulationGlPtr() : nullptr;
+}
+
 HandleType FrameBuffer::getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface) {
     return mImpl->getEmulatedEglWindowSurfaceColorBufferHandle(p_surface);
 }
@@ -5553,17 +4952,7 @@ void FrameBuffer::drainGlRenderThreadContexts() { mImpl->drainGlRenderThreadCont
 
 void FrameBuffer::drainGlRenderThreadSurfaces() { mImpl->drainGlRenderThreadSurfaces(); }
 
-void FrameBuffer::postLoadRenderThreadContextSurfacePtrs() {
-    mImpl->postLoadRenderThreadContextSurfacePtrs();
-}
-
-EGLDisplay FrameBuffer::getDisplay() const { return mImpl->getDisplay(); }
-
-EGLSurface FrameBuffer::getWindowSurface() const { return mImpl->getWindowSurface(); }
-
-EGLContext FrameBuffer::getContext() const { return mImpl->getContext(); }
-
-EGLConfig FrameBuffer::getConfig() const { return mImpl->getConfig(); }
+bool FrameBuffer::getRenderOpt(RenderOpt* opt) const { return mImpl->getRenderOpt(opt); }
 
 EGLContext FrameBuffer::getGlobalEGLContext() const { return mImpl->getGlobalEGLContext(); }
 

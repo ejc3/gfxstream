@@ -19,6 +19,7 @@
 
 #include "gfxstream/CancelableFuture.h"
 #include "gfxstream/host/color_buffer_interface.h"
+#include "gfxstream/synchronization/Lock.h"
 
 namespace gfxstream {
 namespace host {
@@ -28,13 +29,17 @@ class GlobalState {
     virtual ~GlobalState() = default;
 
     virtual IColorBufferRef findColorBuffer(uint32_t colorBufferHandle) = 0;
+    virtual void openColorBufferByWindow(uint32_t colorBufferHandle) = 0;
+    virtual bool closeColorBufferByWindow(uint32_t colorBufferHandle) = 0;
+    virtual uint32_t genHandleLocked() = 0;
 
     virtual void registerProcessCleanupCallback(void* key, uint64_t contextId,
                                                 std::function<void()> callback) = 0;
     virtual void unregisterProcessCleanupCallback(void* key) = 0;
 
-    virtual void lockGlobalState() = 0;
-    virtual void unlockGlobalState() = 0;
+    virtual gfxstream::base::Lock& getGlobalLock() = 0;
+    virtual void lockGlobalState() ACQUIRE(getGlobalLock()) = 0;
+    virtual void unlockGlobalState() RELEASE(getGlobalLock()) = 0;
 
     virtual int getColorBufferScreenshot(
         IColorBuffer* cb, int targetWidth, int targetHeight, int skinRotation,
@@ -48,7 +53,6 @@ class GlobalState {
     virtual float getPy() const = 0;
     virtual int getZrot() const = 0;
 
-    virtual void postLoadRenderThreadContextSurfacePtrs() = 0;
     virtual bool bindContext(uint32_t p_context, uint32_t p_drawSurface,
                              uint32_t p_readSurface) = 0;
 

@@ -14,10 +14,6 @@
 
 #pragma once
 
-#if GFXSTREAM_ENABLE_HOST_GLES
-#include <GLES3/gl3.h>
-#endif
-
 #include <array>
 #include <memory>
 #include <optional>
@@ -85,6 +81,7 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
     bool updateGlFromBytes(const void* bytes, std::size_t bytesSize);
 
     bool invalidateForBackend(Backend backend) override;
+    bool flushFromBackend(Backend backend) override;
     bool importHandle(void* handle, bool preserveContent) override;
 
     bool flushFromGl();
@@ -92,25 +89,6 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
     bool flushFromVkBytes(const void* bytes, size_t bytesSize);
 
     std::optional<BlobDescriptorInfo> exportBlob() override;
-
-#if GFXSTREAM_ENABLE_HOST_GLES
-    bool canUseGlOps();
-    bool glOpBlitFromCurrentReadBuffer();
-    bool glOpBindToTexture();
-    bool glOpBindToTexture2();
-    bool glOpBindToRenderbuffer();
-    bool glOpReadback(unsigned char* img, bool readbackBgra);
-    bool glOpReadbackAsync(GLuint buffer, bool readbackBgra);
-    bool glOpImportEglNativePixmap(void* pixmap, bool preserveContent);
-    bool glOpSwapYuvTexturesAndUpdate(GLenum format, GLenum type, GfxstreamFormat texturesFormat,
-                                      GLuint* textures);
-    bool glOpIsFastBlitSupported() const;
-    bool glOpPostLayer(const ComposeLayer& l, int frameWidth, int frameHeight,
-                       const std::optional<std::array<float, 16>>& colorTransform);
-    bool glOpPostViewportScaledWithOverlay(
-        float rotation, float dx, float dy, float scaleX, float scaleY,
-        const std::optional<std::array<float, 16>>& colorTransform);
-#endif
 
    private:
     ColorBuffer() = default;
