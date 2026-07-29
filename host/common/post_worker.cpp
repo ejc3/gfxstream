@@ -1,18 +1,18 @@
 /*
-* Copyright (C) 2017 The Android Open Source Project
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (C) 2017 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #include "gfxstream/host/post_worker.h"
 
 #include <string.h>
@@ -35,8 +35,7 @@ PostWorker::PostWorker(bool mainThreadPostingOnly, gfxstream::host::GlobalState*
       m_mainThreadPostingOnly(mainThreadPostingOnly) {}
 
 std::shared_future<void> PostWorker::composeImpl(const FlatComposeRequest& composeRequest) {
-    std::shared_future<void> completedFuture =
-        std::async(std::launch::deferred, [] {}).share();
+    std::shared_future<void> completedFuture = std::async(std::launch::deferred, [] {}).share();
     completedFuture.wait();
 
     if (!isComposeTargetReady(composeRequest.targetHandle)) {
@@ -92,11 +91,10 @@ PostWorker::~PostWorker() {}
 void PostWorker::post(IColorBuffer* cb, std::unique_ptr<Post::CompletionCallback> postCallback,
                       const std::optional<std::array<float, 16>>& colorTransform) {
     auto packagedPostCallback = std::shared_ptr<Post::CompletionCallback>(std::move(postCallback));
-    runTask(
-        std::packaged_task<void()>([cb, packagedPostCallback, this, colorTransform] {
-            auto completedFuture = postImpl(cb, colorTransform);
-            (*packagedPostCallback)(completedFuture);
-        }));
+    runTask(std::packaged_task<void()>([cb, packagedPostCallback, this, colorTransform] {
+        auto completedFuture = postImpl(cb, colorTransform);
+        (*packagedPostCallback)(completedFuture);
+    }));
 }
 
 void PostWorker::exit() {
@@ -104,8 +102,7 @@ void PostWorker::exit() {
 }
 
 void PostWorker::viewport(int width, int height) {
-    runTask(std::packaged_task<void()>(
-        [width, height, this] { viewportImpl(width, height); }));
+    runTask(std::packaged_task<void()>([width, height, this] { viewportImpl(width, height); }));
 }
 
 void PostWorker::compose(std::unique_ptr<FlatComposeRequest> composeRequest,
@@ -115,13 +112,12 @@ void PostWorker::compose(std::unique_ptr<FlatComposeRequest> composeRequest,
     auto packagedComposeCallback =
         std::shared_ptr<Post::CompletionCallback>(std::move(composeCallback));
     auto packagedComposeRequest = std::shared_ptr<FlatComposeRequest>(std::move(composeRequest));
-    runTask(
-        std::packaged_task<void()>([packagedComposeCallback, packagedComposeRequest, this] {
+    runTask(std::packaged_task<void()>([packagedComposeCallback, packagedComposeRequest, this] {
         auto completedFuture = composeImpl(*packagedComposeRequest);
         m_composeTargetToComposeFuture.emplace(packagedComposeRequest->targetHandle,
                                                completedFuture);
         (*packagedComposeCallback)(completedFuture);
-        }));
+    }));
 }
 
 void PostWorker::clear() {
@@ -157,8 +153,8 @@ void PostWorker::runTask(std::packaged_task<void()> task) {
         if (!get_gfxstream_window_operations().run_on_ui_thread) {
             GFXSTREAM_ERROR("m_runOnUiThread function ptr is NULL, going to crash");
         }
-        get_gfxstream_window_operations()
-            .run_on_ui_thread(RunOnUiThreadTrampoline, taskPtr.release(), false);
+        get_gfxstream_window_operations().run_on_ui_thread(RunOnUiThreadTrampoline,
+                                                           taskPtr.release(), false);
     } else {
         (*taskPtr)();
     }

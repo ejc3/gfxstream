@@ -15,13 +15,13 @@
  */
 #include "post_worker_gl.h"
 
+#include "display_gl.h"
+#include "display_surface_gl.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/host/global_state.h"
 #include "gfxstream/host/renderer_operations.h"
 #include "gfxstream/host/window_operations.h"
-#include "host/gl/display_gl.h"
-#include "host/gl/display_surface_gl.h"
 
 namespace gfxstream {
 namespace host {
@@ -141,7 +141,7 @@ std::shared_future<void> PostWorkerGl::postImpl(
 
                 const auto transform = getTransformFromRotation(m_globalState->getZrot());
                 postLayerOptions.transform = transform;
-                if ( transform == HWC_TRANSFORM_ROT_90 || transform == HWC_TRANSFORM_ROT_270) {
+                if (transform == HWC_TRANSFORM_ROT_90 || transform == HWC_TRANSFORM_ROT_270) {
                     std::swap(currentDisplayW, currentDisplayH);
                 }
                 postLayerOptions.displayFrame = {
@@ -225,12 +225,7 @@ DisplayGl::PostLayer PostWorkerGl::postWithOverlay(
     float dy = py * fy;
 
     DisplayGl::PostLayer::OverlayOptions overlayOptions = {
-        .rotation = static_cast<float>(zRot),
-        .dx = dx,
-        .dy = dy,
-        .scaleX = 1.0f,
-        .scaleY = 1.0f
-    };
+        .rotation = static_cast<float>(zRot), .dx = dx, .dy = dy, .scaleX = 1.0f, .scaleY = 1.0f};
 
     // Adjust offset and scale parameters if a display layout is given
     Rect scaledDisplayRect = {};

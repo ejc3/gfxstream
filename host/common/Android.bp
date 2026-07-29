@@ -31,6 +31,7 @@ cc_library_static {
         "guest_operations.cpp",
         "hwc2.cpp",
         "mem_stream.cpp",
+        "post_worker.cpp",
         "renderer_operations.cpp",
         "stream_utils.cpp",
         "sync_device.cpp",

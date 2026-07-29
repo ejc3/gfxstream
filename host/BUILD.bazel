@@ -71,8 +71,6 @@ cc_library(
         "channel_stream.h",
         "color_buffer.cpp",
         "frame_buffer.cpp",
-        "post_worker.cpp",
-        "post_worker_gl.cpp",
         "read_buffer.cpp",
         "render_channel_impl.cpp",
         "render_control.cpp",
@@ -94,7 +92,6 @@ cc_library(
     hdrs = [
         "color_buffer.h",
         "frame_buffer.h",
-        "post_worker_gl.h",
         "read_buffer.h",
         "render_channel_impl.h",
         "render_control.h",
