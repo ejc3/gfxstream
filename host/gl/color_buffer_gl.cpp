@@ -27,10 +27,10 @@
 #include "common/gl_utils.h"
 #include "debug_gl.h"
 #include "gfxstream/host/renderer_operations.h"
-#include "gl/yuv_converter.h"
 #include "render_thread_info_gl.h"
 #include "texture_draw.h"
 #include "texture_resize.h"
+#include "yuv_converter.h"
 
 namespace gfxstream {
 namespace host {

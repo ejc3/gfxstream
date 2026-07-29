@@ -14,12 +14,13 @@
 
 #include "swap_chain_state_vk.h"
 
+#include <vulkan/vk_enum_string_helper.h>
+
 #include <cinttypes>
 #include <unordered_set>
 
 #include "gfxstream/common/logging.h"
-#include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vk_utils.h"
+#include "vk_utils.h"
 
 namespace gfxstream {
 namespace host {

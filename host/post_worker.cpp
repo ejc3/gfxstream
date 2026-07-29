@@ -13,7 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-#include "post_worker.h"
+#include "gfxstream/host/post_worker.h"
 
 #include <string.h>
 
@@ -24,8 +24,6 @@
 #include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/global_state.h"
 #include "gfxstream/host/window_operations.h"
-#include "render_thread_info.h"
-#include "vulkan/vk_common_operations.h"
 
 namespace gfxstream {
 namespace host {

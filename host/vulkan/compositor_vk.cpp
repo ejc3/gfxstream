@@ -15,19 +15,19 @@
 #include "compositor_vk.h"
 
 #include <string.h>
+#include <vulkan/vk_enum_string_helper.h>
 
 #include <cinttypes>
 #include <glm/gtc/matrix_transform.hpp>
 #include <optional>
 
+#include "color_buffer_vk.h"
+#include "compositor_fragment_shader.h"
+#include "compositor_vertex_shader.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/tracing.h"
-#include "vulkan/color_buffer_vk.h"
-#include "vulkan/compositor_fragment_shader.h"
-#include "vulkan/compositor_vertex_shader.h"
-#include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vk_format_utils.h"
-#include "vulkan/vk_utils.h"
+#include "vk_format_utils.h"
+#include "vk_utils.h"
 
 namespace gfxstream {
 namespace host {

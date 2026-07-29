@@ -20,10 +20,10 @@
 #include "OpenGLESDispatch/DispatchTables.h"
 #include "OpenGLESDispatch/EGLDispatch.h"
 #include "OpenGLESDispatch/GLESv2Dispatch.h"
+#include "color_buffer_gl.h"
 #include "context_helper.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/color_buffer_interface.h"
-#include "gl/color_buffer_gl.h"
 
 namespace gfxstream {
 namespace host {

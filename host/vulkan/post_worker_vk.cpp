@@ -15,13 +15,13 @@
  */
 #include "post_worker_vk.h"
 
+#include "color_buffer_vk.h"
+#include "display_vk.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/host/global_state.h"
 #include "gfxstream/host/renderer_operations.h"
 #include "gfxstream/host/window_operations.h"
-#include "vulkan/color_buffer_vk.h"
-#include "vulkan/display_vk.h"
 
 namespace gfxstream {
 namespace host {

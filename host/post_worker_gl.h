@@ -21,7 +21,7 @@
 #include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/display_surface_user.h"
 #include "gfxstream/host/global_state.h"
-#include "post_worker.h"
+#include "gfxstream/host/post_worker.h"
 #include "host/gl/display_gl.h"
 #include "host/gl/emulation_gl.h"
 

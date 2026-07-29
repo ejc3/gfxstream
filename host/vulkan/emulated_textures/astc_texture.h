@@ -13,10 +13,11 @@
 // limitations under the License.
 #pragma once
 
+#include <vulkan/vulkan.h>
+
 #include "gfxstream/host/astc_cpu_decompressor.h"
-#include "vulkan/vk_decoder_context.h"
 #include "goldfish_vk_dispatch.h"
-#include "vulkan/vulkan.h"
+#include "vk_decoder_context.h"
 
 namespace gfxstream {
 namespace host {

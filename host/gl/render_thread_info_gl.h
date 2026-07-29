@@ -17,13 +17,13 @@
 #include <optional>
 #include <string>
 
+#include "emulated_egl_context.h"
+#include "emulated_egl_window_surface.h"
 #include "gfxstream/host/handle.h"
-#include "stale_ptr_registry.h"
+#include "gles1_dec/gles_v1_decoder.h"
+#include "gles2_dec/gles_v2_decoder.h"
 #include "render-utils/stream.h"
-#include "gl/emulated_egl_context.h"
-#include "gl/emulated_egl_window_surface.h"
-#include "gl/gles1_dec/gles_v1_decoder.h"
-#include "gl/gles2_dec/gles_v2_decoder.h"
+#include "stale_ptr_registry.h"
 
 namespace gfxstream {
 namespace host {

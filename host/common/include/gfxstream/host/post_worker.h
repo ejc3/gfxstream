@@ -31,7 +31,6 @@
 
 namespace gfxstream {
 namespace host {
-struct RenderThreadInfo;
 
 class PostWorker {
    public:

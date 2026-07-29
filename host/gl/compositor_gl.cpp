@@ -15,10 +15,10 @@
 #include "compositor_gl.h"
 
 #include "OpenGLESDispatch/DispatchTables.h"
+#include "color_buffer_gl.h"
 #include "debug_gl.h"
 #include "display_surface_gl.h"
 #include "gfxstream/common/logging.h"
-#include "gl/color_buffer_gl.h"
 #include "texture_draw.h"
 
 namespace gfxstream {

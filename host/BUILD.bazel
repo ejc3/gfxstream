@@ -63,39 +63,13 @@ cc_library(
 )
 
 cc_library(
-    name = "gfxstream_host_headers",
-    hdrs = [
-        "buffer.h",
-        "frame_buffer.h",
-        "post_commands.h",
-        "post_worker.h",
-        "vsync_thread.h",
-    ],
-    copts = GFXSTREAM_HOST_COPTS,
-    defines = GFXSTREAM_HOST_DEFINES,
-    includes = ["."],
-    deps = [
-        ":gfxstream_backend_headers",
-        "//common/base:gfxstream_common_base",
-        "//common/logging:gfxstream_common_logging",
-        "//host/common:gfxstream_host_common",
-        "//host/features:gfxstream_host_features",
-        "//host/snapshot:gfxstream_host_snapshot",
-        "//third_party/opengl:gfxstream_egl_headers",
-        "//third_party/opengl:gfxstream_gles2_headers",
-        "//third_party/opengl:gfxstream_gles3_headers",
-        "//third_party/vulkan:gfxstream_vulkan_headers",
-        "//third_party/xcb",
-    ],
-)
-
-cc_library(
     name = "gfxstream_backend_static",
     srcs = [
         "buffer.cpp",
+        "buffer.h",
         "channel_stream.cpp",
+        "channel_stream.h",
         "color_buffer.cpp",
-        "color_buffer.h",
         "frame_buffer.cpp",
         "post_worker.cpp",
         "post_worker_gl.cpp",
@@ -118,12 +92,8 @@ cc_library(
         "vsync_thread.cpp",
     ],
     hdrs = [
-        "buffer.h",
-        "channel_stream.h",
         "color_buffer.h",
         "frame_buffer.h",
-        "post_commands.h",
-        "post_worker.h",
         "post_worker_gl.h",
         "read_buffer.h",
         "render_channel_impl.h",
@@ -154,14 +124,12 @@ cc_library(
     defines = GFXSTREAM_HOST_DEFINES + ["QEMU_NEXT"],
     includes = [
         ".",
-        "gl",
     ],
     linkstatic = True,
     visibility = ["//visibility:public"],
     deps = [
         ":gfxstream_backend_cc_proto",
         ":gfxstream_backend_headers",
-        ":gfxstream_host_headers",
         "//common/base:gfxstream_common_base",
         "//common/logging:gfxstream_common_logging",
         "//host/address_space:gfxstream_host_address_space",
@@ -213,7 +181,6 @@ cc_library(
         ":gfxstream_backend_cc_proto",
         ":gfxstream_backend_headers",
         ":gfxstream_backend_static",
-        ":gfxstream_host_headers",
         "//common/base:gfxstream_common_base",
         "//common/logging:gfxstream_common_logging",
         "//common/utils:gfxstream_common_utils",
@@ -238,7 +205,6 @@ cc_binary(
         ":gfxstream_backend_cc_proto",
         ":gfxstream_backend_headers",
         ":gfxstream_backend_static",
-        ":gfxstream_host_headers",
         "//common/base:gfxstream_common_base",
         "//common/logging:gfxstream_common_logging",
         "//common/utils:gfxstream_common_utils",
