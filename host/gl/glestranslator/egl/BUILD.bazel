@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "objc_library")
-load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
 
 package(
     default_applicable_licenses = ["//:gfxstream_license"],
@@ -61,6 +61,7 @@ cc_library(
     copts = GFXSTREAM_HOST_COPTS,
     defines = GFXSTREAM_HOST_DEFINES,
     includes = ["glestranslator/egl"],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         "//common/base:gfxstream_common_base",
         "//host:gfxstream_backend_headers",
@@ -136,6 +137,7 @@ cc_library(
         "-Wno-return-type-c-linkage",
     ],
     defines = GFXSTREAM_HOST_DEFINES,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     textual_hdrs = [
         "client_api_exts.in",
     ],

@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
 
 package(
     default_applicable_licenses = ["//:gfxstream_license"],
@@ -11,6 +11,7 @@ cc_library(
     copts = GFXSTREAM_HOST_COPTS,
     defines = GFXSTREAM_HOST_DEFINES,
     includes = ["."],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     textual_hdrs = [
         "vk_android_native_buffer_gfxstream.h",
         "vk_android_native_buffer_structure_type.h",
@@ -41,6 +42,7 @@ cc_library(
     copts = GFXSTREAM_HOST_COPTS,
     defines = GFXSTREAM_HOST_DEFINES,
     includes = ["."],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_vulkan_headers",
         "//common/base:gfxstream_common_base",
@@ -141,7 +143,7 @@ cc_library(
         "cereal",
         "cereal/common",
     ],
-    linkopts = select({
+    linkopts = GFXSTREAM_HOST_LINKOPTS + select({
         "@platforms//os:windows": [
             "-DEFAULTLIB:Advapi32.lib",
         ],
@@ -212,6 +214,7 @@ cc_test(
         "testdata/256x256_golden_transform_rot270.png",
         "testdata/256x256_golden_transform_rot90.png",
     ],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -231,6 +234,7 @@ cc_test(
         "display_vk_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -247,6 +251,7 @@ cc_test(
         "vk_format_utils_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -262,6 +267,7 @@ cc_test(
         "vk_common_operations_tests.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -279,6 +285,7 @@ cc_test(
         "vk_emulated_physical_device_memory_tests.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -295,6 +302,7 @@ cc_test(
         "vk_emulated_physical_device_queue_tests.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",

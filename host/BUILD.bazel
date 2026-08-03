@@ -1,7 +1,7 @@
 load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
 
 package(
     default_applicable_licenses = ["//:gfxstream_license"],
@@ -56,6 +56,7 @@ cc_library(
     defines = GFXSTREAM_HOST_DEFINES,
     features = ["-parse_headers"],
     includes = ["include"],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     visibility = ["//visibility:public"],
     deps = [
         "//host/features:gfxstream_host_features",
@@ -122,6 +123,7 @@ cc_library(
     includes = [
         ".",
     ],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     linkstatic = True,
     visibility = ["//visibility:public"],
     deps = [
@@ -172,6 +174,7 @@ cc_library(
         "-Wno-return-type-c-linkage",
     ],
     defines = GFXSTREAM_HOST_DEFINES,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     linkstatic = True,
     visibility = ["//visibility:public"],
     deps = [
@@ -196,6 +199,7 @@ cc_binary(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     defines = GFXSTREAM_HOST_DEFINES,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     linkshared = True,
     visibility = ["//visibility:public"],
     deps = [
@@ -218,6 +222,7 @@ cc_test(
         "frame_buffer_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_backend_static",
         "//common/base:gfxstream_common_base",
@@ -238,6 +243,7 @@ cc_test(
         "vsync_thread_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_backend_static",
         "//host/testlibs/support:gfxstream_host_testing_support",

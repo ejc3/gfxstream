@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
 
 package(
     default_applicable_licenses = ["//:gfxstream_license"],
@@ -12,6 +12,7 @@ cc_library(
     copts = GFXSTREAM_HOST_COPTS,
     defines = GFXSTREAM_HOST_DEFINES,
     includes = ["include"],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         "//common/logging:gfxstream_common_logging",
         "//host/library:gfxstream_host_library",
@@ -26,6 +27,7 @@ cc_test(
     srcs = [
         "renderdoc_unittest.cpp",
     ],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         ":gfxstream_host_renderdoc",
         "//host/library:gfxstream_host_library",

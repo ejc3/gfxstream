@@ -114,7 +114,7 @@ public:
                   currentState.maxAttributeName);
         ASSERT_EQ(m_program_state.attributes.size(),
                   currentState.attributes.size());
-        for (int i = 0; i < currentState.attributes.size(); i++) {
+        for (size_t i = 0; i < currentState.attributes.size(); i++) {
             SCOPED_TRACE("active attribute i = " + std::to_string(i));
             EXPECT_EQ(m_program_state.attributes[i].size,
                       currentState.attributes[i].size);
@@ -132,7 +132,7 @@ public:
         EXPECT_EQ(m_program_state.maxUniformName, currentState.maxUniformName);
         ASSERT_EQ(m_program_state.uniforms.size(),
                   currentState.uniforms.size());
-        for (int i = 0; i < currentState.uniforms.size(); i++) {
+        for (size_t i = 0; i < currentState.uniforms.size(); i++) {
             SCOPED_TRACE("active uniform i = " + std::to_string(i));
             EXPECT_EQ(m_program_state.uniforms[i].size,
                       currentState.uniforms[i].size);
@@ -225,7 +225,7 @@ protected:
         EXPECT_GE(ret.maxUniformName, 0);
         gl->glGetProgramiv(m_program_name, GL_ACTIVE_UNIFORMS,
                            &ret.activeUniforms);
-        for (GLuint i = 0; i < ret.activeUniforms; i++) {
+        for (GLint i = 0; i < ret.activeUniforms; i++) {
             GlShaderVariable unif = {};
             unif.name.resize(ret.maxUniformName);
             GLsizei unifLen;
@@ -260,7 +260,7 @@ protected:
         EXPECT_GE(ret.maxAttributeName, 0);
         gl->glGetProgramiv(m_program_name, GL_ACTIVE_ATTRIBUTES,
                            &ret.activeAttributes);
-        for (GLuint i = 0; i < ret.activeAttributes; i++) {
+        for (GLint i = 0; i < ret.activeAttributes; i++) {
             GlShaderVariable attr = {};
             attr.name.resize(ret.maxAttributeName);
             GLsizei attrLen;
