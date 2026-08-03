@@ -46,7 +46,7 @@ struct ColorBufferVkImageInfo {
     uint32_t height = 0;
     VkImage image = VK_NULL_HANDLE;
     VkImageView imageView = VK_NULL_HANDLE;
-    VkImageCreateInfo imageCreateInfo = {};
+    VkImageCreateInfo imageCreateInfoShallow = {};
     GfxstreamFormat imageFormat = GfxstreamFormat::UNKNOWN;
     VkImageLayout preBorrowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     uint32_t preBorrowQueueFamilyIndex = 0;
