@@ -159,9 +159,9 @@ class EmulationGl {
 
     std::unique_ptr<DisplaySurface> createFakeWindowSurface();
 
-    bool bindColorBufferToTexture(HandleType colorBufferHandle);
-    bool bindColorBufferToTexture2(HandleType colorBufferHandle);
-    bool bindColorBufferToRenderbuffer(HandleType colorBufferHandle);
+    bool bindColorBufferToTexture(IColorBuffer* colorBuffer);
+    bool bindColorBufferToTexture2(IColorBuffer* colorBuffer);
+    bool bindColorBufferToRenderbuffer(IColorBuffer* colorBuffer);
     bool bindContext(HandleType contextHandle, HandleType drawSurfaceHandle,
                      HandleType readSurfaceHandle);
     bool bindColorBufferToWindowSurface(HandleType surfaceHandle, HandleType colorBufferHandle,

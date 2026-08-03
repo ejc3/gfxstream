@@ -4275,16 +4275,20 @@ ContextHelper* FrameBuffer::Impl::getPbufferSurfaceContextHelper() const {
     return displaySurfaceGl->getContextHelper();
 }
 
-bool FrameBuffer::Impl::bindColorBufferToTexture(HandleType p_colorbuffer)
-    NO_THREAD_SAFETY_ANALYSIS {
+bool FrameBuffer::Impl::bindColorBufferToTexture(HandleType colorBufferHandle) {
     ENSURE_GL_EMULATION_VALUE(false);
+
+    IColorBufferRef colorBuffer = findColorBuffer(colorBufferHandle);
+
     AutoLock mutex(m_lock);
-    return m_emulationGl->bindColorBufferToTexture(p_colorbuffer);
+    return m_emulationGl->bindColorBufferToTexture(colorBuffer.get());
 }
 
-bool FrameBuffer::Impl::bindColorBufferToTexture2(HandleType p_colorbuffer)
-    NO_THREAD_SAFETY_ANALYSIS {
+bool FrameBuffer::Impl::bindColorBufferToTexture2(HandleType colorBufferHandle) {
     ENSURE_GL_EMULATION_VALUE(false);
+
+    IColorBufferRef colorBuffer = findColorBuffer(colorBufferHandle);
+
     // This is only called when using multi window display
     // It will deadlock when posting from main thread.
     std::unique_ptr<AutoLock> mutex;
@@ -4292,14 +4296,16 @@ bool FrameBuffer::Impl::bindColorBufferToTexture2(HandleType p_colorbuffer)
         mutex = std::make_unique<AutoLock>(m_lock);
     }
 
-    return m_emulationGl->bindColorBufferToTexture2(p_colorbuffer);
+    return m_emulationGl->bindColorBufferToTexture2(colorBuffer.get());
 }
 
-bool FrameBuffer::Impl::bindColorBufferToRenderbuffer(HandleType p_colorbuffer)
-    NO_THREAD_SAFETY_ANALYSIS {
+bool FrameBuffer::Impl::bindColorBufferToRenderbuffer(HandleType colorBufferHandle) {
     ENSURE_GL_EMULATION_VALUE(false);
+
+    IColorBufferRef colorBuffer = findColorBuffer(colorBufferHandle);
+
     AutoLock mutex(m_lock);
-    return m_emulationGl->bindColorBufferToRenderbuffer(p_colorbuffer);
+    return m_emulationGl->bindColorBufferToRenderbuffer(colorBuffer.get());
 }
 
 bool FrameBuffer::Impl::bindContext(HandleType p_context, HandleType p_drawSurface,
