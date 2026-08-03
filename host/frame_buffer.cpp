@@ -18,14 +18,14 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
-
-#include <iomanip>
-
-
 #if defined(__linux__)
 #include <sys/resource.h>
 #endif
+#include <time.h>
+
+#include <iomanip>
+#include <string>
+#include <string_view>
 
 #if GFXSTREAM_ENABLE_HOST_GLES
 #include "host/gl/gles_version_detector.h"
@@ -498,7 +498,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
 
     void setDisplayLayout(int screenWidth, int screenHeight, const Rect& displayRect);
 
-    void registerVulkanInstance(uint64_t id, const char* appName) const override;
+    void registerVulkanInstance(uint64_t id, std::string_view appName) const override;
     void unregisterVulkanInstance(uint64_t id) const override;
 
     bool isVulkanEnabled() const { return m_vulkanEnabled; }
@@ -554,7 +554,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     void flushColorBufferFromBytes(uint32_t colorBufferHandle, const void* bytes,
                                    size_t bytesSize) override;
     CancelableFuture scheduleAsyncWork(std::function<void()> work,
-                                       std::string description) override;
+                                       std::string_view description) override;
 
     const ProcessResources* getProcessResources(uint64_t puid);
 
@@ -3626,7 +3626,7 @@ void FrameBuffer::Impl::flushColorBufferFromBytes(uint32_t colorBufferHandle, co
 }
 
 CancelableFuture FrameBuffer::Impl::scheduleAsyncWork(std::function<void()> work,
-                                                      std::string description) {
+                                                      std::string_view description) {
     auto promise = std::make_shared<AutoCancelingPromise>();
     auto future = promise->GetFuture();
     SyncThread::get()->triggerGeneral(
@@ -3634,7 +3634,7 @@ CancelableFuture FrameBuffer::Impl::scheduleAsyncWork(std::function<void()> work
             work();
             promise->MarkComplete();
         },
-        description);
+        std::string(description));
     return future;
 }
 
@@ -3954,7 +3954,7 @@ void FrameBuffer::Impl::setDisplayLayout(int screenWidth, int screenHeight,
 }
 
 #ifdef CONFIG_AEMU
-void FrameBuffer::Impl::registerVulkanInstance(uint64_t id, const char* appName) const {
+void FrameBuffer::Impl::registerVulkanInstance(uint64_t id, std::string_view appName) const {
     auto* tInfo = RenderThreadInfo::get();
     std::string process_name;
     if (tInfo && tInfo->m_processName.has_value()) {
@@ -3975,8 +3975,9 @@ void FrameBuffer::Impl::unregisterVulkanInstance(uint64_t id) const {
     get_gfxstream_vm_operations().unregister_vulkan_instance(id);
 }
 #else
-void FrameBuffer::Impl::registerVulkanInstance(uint64_t id, const char* appName) const {}
-void FrameBuffer::Impl::unregisterVulkanInstance(uint64_t id) const {}
+void FrameBuffer::Impl::registerVulkanInstance(uint64_t /*id*/,
+                                               std::string_view /*appName*/) const {}
+void FrameBuffer::Impl::unregisterVulkanInstance(uint64_t /*id*/) const {}
 #endif
 
 void FrameBuffer::Impl::createTrivialContext(HandleType shared, HandleType* contextOut,

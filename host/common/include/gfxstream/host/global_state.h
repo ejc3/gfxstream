@@ -15,7 +15,7 @@
 #pragma once
 
 #include <functional>
-#include <string>
+#include <string_view>
 
 #include "gfxstream/CancelableFuture.h"
 #include "gfxstream/host/color_buffer_interface.h"
@@ -62,9 +62,9 @@ class GlobalState {
                                            size_t bytesSize) = 0;
 
     virtual CancelableFuture scheduleAsyncWork(std::function<void()> work,
-                                               std::string description) = 0;
+                                               std::string_view description) = 0;
 
-    virtual void registerVulkanInstance(uint64_t id, const char* appName) const {}
+    virtual void registerVulkanInstance(uint64_t id, std::string_view appName) const {}
     virtual void unregisterVulkanInstance(uint64_t id) const {}
 };
 
