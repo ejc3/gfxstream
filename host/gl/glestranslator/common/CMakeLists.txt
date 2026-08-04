@@ -51,7 +51,6 @@ target_link_libraries(
     gfxstream_host_common
     gfxstream_host_compressed_textures
     gfxstream_host_library
-    gfxstream_host_snapshot.headers
     gfxstream_opengl_headers
     gfxstream_openglesdispatch
     PRIVATE

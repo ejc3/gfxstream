@@ -47,7 +47,6 @@ cc_library_static {
         "libgfxstream_host_library",
         "libgfxstream_host_openglesdispatch",
         "libgfxstream_host_renderdoc",
-        "libgfxstream_host_snapshot",
         "libgfxstream_host_vulkan_cereal",
         "libgfxstream_host_vulkan_emulatedtextures",
         "libgfxstream_host_native_window",

@@ -149,7 +149,6 @@ cc_library(
         "//host/native_window:gfxstream_host_native_window",
         "//host/renderControl_dec",
         "//host/renderdoc:gfxstream_host_renderdoc",
-        "//host/snapshot:gfxstream_host_snapshot",
         "//host/tracing:gfxstream_host_tracing",
         "//host/vulkan:gfxstream_vulkan_server",
         "//third_party/drm:gfxstream_drm_headers",
