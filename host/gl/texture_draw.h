@@ -23,7 +23,7 @@
 #include <optional>
 #include <vector>
 
-#include "hwc2.h"
+#include "gfxstream/host/hwc2.h"
 #include "gfxstream/synchronization/Lock.h"
 
 namespace gfxstream {

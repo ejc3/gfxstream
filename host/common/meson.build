@@ -13,6 +13,7 @@ files_lib_host_common = files(
   'file_stream.cpp',
   'graphics_driver_lock.cpp',
   'guest_operations.cpp',
+  'hwc2.cpp',
   'mem_stream.cpp',
   'renderer_operations.cpp',
   'stream_utils.cpp',

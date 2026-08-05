@@ -36,6 +36,7 @@ if (NOT TARGET gfxstream_host_common)
         file_stream.cpp
         graphics_driver_lock.cpp
         guest_operations.cpp
+        hwc2.cpp
         mem_stream.cpp
         renderer_operations.cpp
         stream_utils.cpp

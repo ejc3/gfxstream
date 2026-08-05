@@ -1,24 +1,23 @@
 /*
-* Copyright (C) 2011 The Android Open Source Project
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (C) 2011 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #import <QuartzCore/CALayer.h>
 #import <QuartzCore/CAMetalLayer.h>
 
-
-#include "native_sub_window.h"
 #include <Cocoa/Cocoa.h>
+#include "gfxstream/host/native_sub_window.h"
 
 /*
  * EmuGLView inherit from NSOpenGLView and override the isOpaque
@@ -26,51 +25,46 @@
  * when the view needs to be redrawn.
  */
 @interface EmuGLView : NSOpenGLView {
-} @end
+}
+@end
 
 @implementation EmuGLView
 
-  - (BOOL)isOpaque {
-      return YES;
-  }
+- (BOOL)isOpaque {
+    return YES;
+}
 
 @end
 
 @interface EmuGLViewWithMetal : NSOpenGLView
 
-- (CAMetalLayer *)getMetalLayer;
+- (CAMetalLayer*)getMetalLayer;
 
 @end
-
 
 @implementation EmuGLViewWithMetal
 
-  - (BOOL)isOpaque {
-      return YES;
-  }
+- (BOOL)isOpaque {
+    return YES;
+}
 
-  - (CALayer *)makeBackingLayer {
-    CALayer * layer = [CAMetalLayer layer];
+- (CALayer*)makeBackingLayer {
+    CALayer* layer = [CAMetalLayer layer];
     return layer;
-  }
+}
 
-  - (CAMetalLayer *)getMetalLayer {
-      // The 'layer' property on NSView returns a CALayer. We can safely cast it
-      // to CAMetalLayer because we configured the view to use it.
-      return (CAMetalLayer *)self.layer;
-  }
+- (CAMetalLayer*)getMetalLayer {
+    // The 'layer' property on NSView returns a CALayer. We can safely cast it
+    // to CAMetalLayer because we configured the view to use it.
+    return (CAMetalLayer*)self.layer;
+}
 @end
 
-EGLNativeWindowType createSubWindow(FBNativeWindowType p_window,
-                                    int x,
-                                    int y,
-                                    int width,
-                                    int height,
-                                    float dpr,
+EGLNativeWindowType createSubWindow(FBNativeWindowType p_window, int x, int y, int width,
+                                    int height, float dpr,
                                     SubWindowRepaintCallback repaint_callback,
-                                    void* repaint_callback_param,
-                                    int hideWindow) {
-    NSWindow* win = (NSWindow *)p_window;
+                                    void* repaint_callback_param, int hideWindow) {
+    NSWindow* win = (NSWindow*)p_window;
     if (!win) {
         return NULL;
     }
@@ -116,26 +110,21 @@ EGLNativeWindowType createSubWindow(FBNativeWindowType p_window,
 }
 
 void destroySubWindow(EGLNativeWindowType win) {
-    if(win){
-        NSView *glView = (NSView *)win;
+    if (win) {
+        NSView* glView = (NSView*)win;
         [glView removeFromSuperview];
         [glView release];
     }
 }
 
-int moveSubWindow(FBNativeWindowType p_parent_window,
-                  EGLNativeWindowType p_sub_window,
-                  int x,
-                  int y,
-                  int width,
-                  int height,
-                  float dpr) {
-    NSWindow *win = (NSWindow *)p_parent_window;
+int moveSubWindow(FBNativeWindowType p_parent_window, EGLNativeWindowType p_sub_window, int x,
+                  int y, int width, int height, float dpr) {
+    NSWindow* win = (NSWindow*)p_parent_window;
     if (!win) {
         return 0;
     }
 
-    NSView *glView = (NSView *)p_sub_window;
+    NSView* glView = (NSView*)p_sub_window;
     if (!glView) {
         return 0;
     }

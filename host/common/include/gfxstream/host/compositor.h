@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "gfxstream/host/color_buffer_interface.h"
-#include "hwc2.h"
+#include "gfxstream/host/hwc2.h"
 #include "render-utils/Renderer.h"
 
 namespace gfxstream {
@@ -54,9 +54,7 @@ class Compositor {
         int screenWidth;
         int screenHeight;
     };
-    std::optional<DisplayLayout> getDisplayLayout() const {
-        return m_displayLayout;
-    }
+    std::optional<DisplayLayout> getDisplayLayout() const { return m_displayLayout; }
     void setDisplayLayout(int screenWidth, int screenHeight, const Rect& displayRect) {
         if (displayRect.size.w > 0 && displayRect.size.h > 0) {
             DisplayLayout layout;

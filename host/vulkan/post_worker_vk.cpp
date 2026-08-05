@@ -17,9 +17,9 @@
 
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/display_operations.h"
+#include "gfxstream/host/global_state.h"
 #include "gfxstream/host/renderer_operations.h"
 #include "gfxstream/host/window_operations.h"
-#include "host/frame_buffer.h"
 #include "vulkan/color_buffer_vk.h"
 #include "vulkan/display_vk.h"
 
@@ -43,8 +43,9 @@ hwc_transform_t getTransformFromRotation(int rotation) {
 
 }  // namespace
 
-PostWorkerVk::PostWorkerVk(FrameBuffer* fb, Compositor* compositor, vk::DisplayVk* displayVk)
-    : PostWorker(false, fb, compositor), m_displayVk(displayVk) {}
+PostWorkerVk::PostWorkerVk(gfxstream::host::GlobalState* globalState, Compositor* compositor,
+                           vk::DisplayVk* displayVk)
+    : PostWorker(false, globalState, compositor), m_displayVk(displayVk) {}
 
 std::shared_future<void> PostWorkerVk::postImpl(
     IColorBuffer* cb, const std::optional<std::array<float, 16>>& colorTransform) {
@@ -86,12 +87,12 @@ std::shared_future<void> PostWorkerVk::postImpl(
     if (pixel_fold) {
 #ifdef CONFIG_AEMU
         if (!get_gfxstream_should_skip_draw()) {
-            const float dpr = mFb->getDpr();
-            const float px = mFb->getPx();
-            const float py = mFb->getPy();
-            const int windowWidth = mFb->windowWidth();
-            const int windowHeight = mFb->windowHeight();
-            const float zRot = static_cast<float>(mFb->getZrot());
+            const float dpr = m_globalState->getDpr();
+            const float px = m_globalState->getPx();
+            const float py = m_globalState->getPy();
+            const int windowWidth = m_globalState->windowWidth();
+            const int windowHeight = m_globalState->windowHeight();
+            const float zRot = static_cast<float>(m_globalState->getZrot());
 
             // Calculate "excess" space (difference between viewport and content size)
             // m_viewportWidth/Height are updated in viewportImpl
@@ -130,7 +131,8 @@ std::shared_future<void> PostWorkerVk::postImpl(
                     currentDisplayId, currentDisplayColorBufferHandle);
             }
             // Main window post
-             addPostImage(cb, 0, 0, 0, 0, static_cast<float>(mFb->getZrot()), colorTransform);
+            addPostImage(cb, 0, 0, 0, 0, static_cast<float>(m_globalState->getZrot()),
+                         colorTransform);
         } else {
             uint32_t combinedDisplayW = 0;
             uint32_t combinedDisplayH = 0;
@@ -160,13 +162,13 @@ std::shared_future<void> PostWorkerVk::postImpl(
                 IColorBuffer* currentCb =
                     currentDisplayId == 0
                         ? cb
-                        : mFb->findColorBuffer(currentDisplayColorBufferHandle).get();
+                        : m_globalState->findColorBuffer(currentDisplayColorBufferHandle).get();
                 if (!currentCb) {
                     continue;
                 }
 
-                float rotation = static_cast<float>(mFb->getZrot());
-                const auto transform = getTransformFromRotation(mFb->getZrot());
+                float rotation = static_cast<float>(m_globalState->getZrot());
+                const auto transform = getTransformFromRotation(m_globalState->getZrot());
                 if (transform == HWC_TRANSFORM_ROT_90 || transform == HWC_TRANSFORM_ROT_270) {
                     std::swap(currentDisplayW, currentDisplayH);
                 }
@@ -177,10 +179,10 @@ std::shared_future<void> PostWorkerVk::postImpl(
     } else if (get_gfxstream_window_operations().is_folded()) {
         // TODO: Implement fold logic if needed (similar to GL)
         // For now simple post
-        addPostImage(cb, 0, 0, 0, 0, static_cast<float>(mFb->getZrot()), colorTransform);
+        addPostImage(cb, 0, 0, 0, 0, static_cast<float>(m_globalState->getZrot()), colorTransform);
     } else {
         // Simple case: single display, no special mode
-        addPostImage(cb, 0, 0, 0, 0, static_cast<float>(mFb->getZrot()), colorTransform);
+        addPostImage(cb, 0, 0, 0, 0, static_cast<float>(m_globalState->getZrot()), colorTransform);
     }
 
     constexpr const int kMaxPostRetries = 2;
@@ -196,7 +198,7 @@ std::shared_future<void> PostWorkerVk::postImpl(
 }
 
 void PostWorkerVk::viewportImpl(int width, int height) {
-    const float dpr = mFb->getDpr();
+    const float dpr = m_globalState->getDpr();
     m_viewportWidth = width * dpr;
     m_viewportHeight = height * dpr;
 }

@@ -18,7 +18,9 @@
 #include <future>
 #include <optional>
 
+#include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/display_surface_user.h"
+#include "gfxstream/host/global_state.h"
 #include "post_worker.h"
 #include "host/gl/display_gl.h"
 #include "host/gl/emulation_gl.h"
@@ -33,8 +35,8 @@ class RecursiveScopedContextBind;
 
 class PostWorkerGl : public PostWorker, public DisplaySurfaceUser {
    public:
-    PostWorkerGl(bool mainThreadPostingOnly, FrameBuffer* fb, Compositor* compositor,
-                 gl::DisplayGl* displayGl, gl::EmulationGl* emulationGl);
+    PostWorkerGl(bool mainThreadPostingOnly, GlobalState* globalState,
+                 Compositor* compositor, gl::DisplayGl* displayGl, gl::EmulationGl* emulationGl);
 
    protected:
     std::shared_future<void> postImpl(

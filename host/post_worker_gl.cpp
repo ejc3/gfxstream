@@ -15,9 +15,9 @@
  */
 #include "post_worker_gl.h"
 
-#include "frame_buffer.h"
-#include "gfxstream/host/display_operations.h"
 #include "gfxstream/common/logging.h"
+#include "gfxstream/host/display_operations.h"
+#include "gfxstream/host/global_state.h"
 #include "gfxstream/host/renderer_operations.h"
 #include "gfxstream/host/window_operations.h"
 #include "host/gl/display_gl.h"
@@ -43,9 +43,10 @@ hwc_transform_t getTransformFromRotation(int rotation) {
 
 }  // namespace
 
-PostWorkerGl::PostWorkerGl(bool mainThreadPostingOnly, FrameBuffer* fb, Compositor* compositor,
-                           DisplayGl* displayGl, gl::EmulationGl* emulationGl)
-    : PostWorker(mainThreadPostingOnly, fb, compositor),
+PostWorkerGl::PostWorkerGl(bool mainThreadPostingOnly, gfxstream::host::GlobalState* globalState,
+                           Compositor* compositor, DisplayGl* displayGl,
+                           gl::EmulationGl* emulationGl)
+    : PostWorker(mainThreadPostingOnly, globalState, compositor),
       m_displayGl(displayGl),
       mEmulationGl(emulationGl) {
     if (!m_displayGl) {
@@ -133,12 +134,12 @@ std::shared_future<void> PostWorkerGl::postImpl(
                 IColorBuffer* currentCb =
                     currentDisplayId == 0
                         ? cb
-                        : mFb->findColorBuffer(currentDisplayColorBufferHandle).get();
+                        : m_globalState->findColorBuffer(currentDisplayColorBufferHandle).get();
                 if (!currentCb) {
                     continue;
                 }
 
-                const auto transform = getTransformFromRotation(mFb->getZrot());
+                const auto transform = getTransformFromRotation(m_globalState->getZrot());
                 postLayerOptions.transform = transform;
                 if ( transform == HWC_TRANSFORM_ROT_90 || transform == HWC_TRANSFORM_ROT_270) {
                     std::swap(currentDisplayW, currentDisplayH);
@@ -163,7 +164,7 @@ std::shared_future<void> PostWorkerGl::postImpl(
             }
         }
     } else if (get_gfxstream_window_operations().is_folded()) {
-        const float dpr = mFb->getDpr();
+        const float dpr = m_globalState->getDpr();
 
         post.frameWidth = m_viewportWidth / dpr;
         post.frameHeight = m_viewportHeight / dpr;
@@ -179,8 +180,8 @@ std::shared_future<void> PostWorkerGl::postImpl(
         postLayerOptions.displayFrame = {
             .left = 0,
             .top = 0,
-            .right = mFb->windowWidth(),
-            .bottom = mFb->windowHeight(),
+            .right = m_globalState->windowWidth(),
+            .bottom = m_globalState->windowHeight(),
         };
         postLayerOptions.crop = {
             .left = static_cast<float>(displayOffsetX),
@@ -188,7 +189,7 @@ std::shared_future<void> PostWorkerGl::postImpl(
             .right = static_cast<float>(displayOffsetX + displayW),
             .bottom = static_cast<float>(displayOffsetY),
         };
-        postLayerOptions.transform = getTransformFromRotation(mFb->getZrot());
+        postLayerOptions.transform = getTransformFromRotation(m_globalState->getZrot());
 
         post.layers.push_back(DisplayGl::PostLayer{
             .colorBuffer = cb,
@@ -205,12 +206,12 @@ std::shared_future<void> PostWorkerGl::postImpl(
 
 DisplayGl::PostLayer PostWorkerGl::postWithOverlay(
     IColorBuffer* cb, const std::optional<std::array<float, 16>>& colorTransform) {
-    float dpr = mFb->getDpr();
-    int windowWidth = mFb->windowWidth();
-    int windowHeight = mFb->windowHeight();
-    float px = mFb->getPx();
-    float py = mFb->getPy();
-    int zRot = mFb->getZrot();
+    float dpr = m_globalState->getDpr();
+    int windowWidth = m_globalState->windowWidth();
+    int windowHeight = m_globalState->windowHeight();
+    float px = m_globalState->getPx();
+    float py = m_globalState->getPy();
+    int zRot = m_globalState->getZrot();
 
     // Find the x and y values at the origin when "fully scrolled."
     // Multiply by 2 because the texture goes from -1 to 1, not 0 to 1.
@@ -256,7 +257,7 @@ DisplayGl::PostLayer PostWorkerGl::postWithOverlay(
 // and resets the posting viewport.
 void PostWorkerGl::viewportImpl(int width, int height) {
     setupContext();
-    const float dpr = mFb->getDpr();
+    const float dpr = m_globalState->getDpr();
     m_viewportWidth = width * dpr;
     m_viewportHeight = height * dpr;
 

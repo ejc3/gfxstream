@@ -50,6 +50,7 @@ cc_library_static {
         "libgfxstream_host_snapshot",
         "libgfxstream_host_vulkan_cereal",
         "libgfxstream_host_vulkan_emulatedtextures",
+        "libgfxstream_host_native_window",
     ],
     export_static_lib_headers: [
         "libgfxstream_host_decoder_common",

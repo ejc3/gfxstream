@@ -19,10 +19,10 @@
 
 #include <chrono>
 
-#include "color_buffer.h"
-#include "frame_buffer.h"
 #include "gfxstream/Tracing.h"
 #include "gfxstream/common/logging.h"
+#include "gfxstream/host/color_buffer_interface.h"
+#include "gfxstream/host/global_state.h"
 #include "gfxstream/host/window_operations.h"
 #include "render_thread_info.h"
 #include "vulkan/vk_common_operations.h"
@@ -30,8 +30,9 @@
 namespace gfxstream {
 namespace host {
 
-PostWorker::PostWorker(bool mainThreadPostingOnly, FrameBuffer* fb, Compositor* compositor)
-    : mFb(fb),
+PostWorker::PostWorker(bool mainThreadPostingOnly, gfxstream::host::GlobalState* globalState,
+                       Compositor* compositor)
+    : m_globalState(globalState),
       m_compositor(compositor),
       m_mainThreadPostingOnly(mainThreadPostingOnly) {}
 
@@ -45,7 +46,7 @@ std::shared_future<void> PostWorker::composeImpl(const FlatComposeRequest& compo
     }
 
     Compositor::CompositionRequest compositorRequest = {};
-    compositorRequest.target = mFb->findColorBuffer(composeRequest.targetHandle);
+    compositorRequest.target = m_globalState->findColorBuffer(composeRequest.targetHandle);
     if (!compositorRequest.target) {
         GFXSTREAM_ERROR("Compose target is null (cb=0x%x).", composeRequest.targetHandle);
         return completedFuture;
@@ -57,7 +58,7 @@ std::shared_future<void> PostWorker::composeImpl(const FlatComposeRequest& compo
             auto& compositorLayer = compositorRequest.layers.emplace_back();
             compositorLayer.props = guestLayer;
         } else {
-            auto source = mFb->findColorBuffer(guestLayer.cbHandle);
+            auto source = m_globalState->findColorBuffer(guestLayer.cbHandle);
             if (!source) {
                 continue;
             }
@@ -129,16 +130,16 @@ void PostWorker::clear() {
     runTask(std::packaged_task<void()>([this] { clearImpl(); }));
 }
 
-void PostWorker::screenshot(ColorBuffer* cb, int screenwidth, int screenheight, int skinRotation,
+void PostWorker::screenshot(IColorBuffer* cb, int screenwidth, int screenheight, int skinRotation,
                             GfxstreamFormat pixelsFormat, void* outPixels, const Rect& rect,
                             const std::optional<std::array<float, 16>>& colorTransform) {
     // See b/292237104.
-    mFb->lock();
+    m_globalState->lockGlobalState();
 
-    mFb->getColorBufferScreenshot(cb, screenwidth, screenheight, skinRotation, pixelsFormat,
-                                  outPixels, rect, colorTransform);
+    m_globalState->getColorBufferScreenshot(cb, screenwidth, screenheight, skinRotation,
+                                            pixelsFormat, outPixels, rect, colorTransform);
 
-    mFb->unlock();
+    m_globalState->unlockGlobalState();
 }
 
 namespace {

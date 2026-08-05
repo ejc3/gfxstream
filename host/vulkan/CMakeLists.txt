@@ -72,6 +72,7 @@ target_link_libraries(gfxstream-vulkan-server PUBLIC
         gfxstream_vulkan_headers
         gfxstream_xcb_headers
         OpenglRender_vulkan_cereal
+        gfxstream_host_native_window
         PRIVATE
         gfxstream_opengl_headers
         )

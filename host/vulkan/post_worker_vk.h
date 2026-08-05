@@ -30,7 +30,8 @@ class DisplayVk;
 
 class PostWorkerVk : public PostWorker {
    public:
-    PostWorkerVk(FrameBuffer* fb, Compositor* compositor, vk::DisplayVk* displayGl);
+    PostWorkerVk(gfxstream::host::GlobalState* globalState, Compositor* compositor,
+                 vk::DisplayVk* displayGl);
 
    protected:
     std::shared_future<void> postImpl(

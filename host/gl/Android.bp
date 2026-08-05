@@ -41,12 +41,13 @@ cc_library_static {
         "yuv_converter.cpp",
     ],
     header_libs: [
-        "libgfxstream_thirdparty_opengl_headers",
         "libgfxstream_backend_headers",
         "libgfxstream_thirdparty_glm",
+        "libgfxstream_thirdparty_opengl_headers",
     ],
     static_libs: [
         "libgfxstream_common_base",
+        "libgfxstream_common_logging",
         "libgfxstream_host_common",
         "libgfxstream_host_decoder_common",
         "libgfxstream_host_features",
@@ -54,7 +55,6 @@ cc_library_static {
         "libgfxstream_host_gles2_dec",
         "libgfxstream_host_glestranslator_glcommon",
         "libgfxstream_host_glsnapshot",
-        "libgfxstream_common_logging",
         "libgfxstream_host_openglesdispatch",
         "libgfxstream_host_renderdoc",
     ],

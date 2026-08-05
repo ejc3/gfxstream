@@ -31,6 +31,7 @@
 
 namespace gfxstream {
 namespace host {
+class GlobalState;
 
 // A class used to model the state of each RenderThread related
 struct RenderThreadInfo {
@@ -49,7 +50,7 @@ struct RenderThreadInfo {
     static void forAllRenderThreadInfos(std::function<void(RenderThreadInfo*)>);
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-    void initGl();
+    void initGl(gl::EmulationGl* emulationGl);
 #endif
 
     // The unique id of owner guest process of this render thread

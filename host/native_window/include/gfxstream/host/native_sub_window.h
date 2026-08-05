@@ -1,27 +1,31 @@
 /*
-* Copyright (C) 2011 The Android Open Source Project
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (C) 2011 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #ifndef NATIVE_SUB_WINDOW_H
 #define NATIVE_SUB_WINDOW_H
+
+#include <cstdint>
 
 #include "render-utils/render_api_platform_types.h"
 
 #if GFXSTREAM_ENABLE_HOST_GLES
 #include <EGL/egl.h>
 #else
-#include "GlesCompat.h"
+typedef unsigned int GLenum;
+typedef int32_t EGLint;
+typedef unsigned int EGLNativeWindowType;
 #endif
 
 #ifdef __cplusplus
@@ -44,15 +48,10 @@ typedef void (*SubWindowRepaintCallback)(void*);
 // repaint callback when/if it's invoked.
 // On success, return a new platform-specific window handle, cast as an
 // EGLNativeWindowType. Or 0/NULL in case of failure.
-EGLNativeWindowType createSubWindow(FBNativeWindowType p_window,
-                                    int x,
-                                    int y,
-                                    int width,
-                                    int height,
-                                    float dpr,
+EGLNativeWindowType createSubWindow(FBNativeWindowType p_window, int x, int y, int width,
+                                    int height, float dpr,
                                     SubWindowRepaintCallback repaint_callback,
-                                    void* repaint_callback_param,
-                                    int hideWindow);
+                                    void* repaint_callback_param, int hideWindow);
 
 // Destroy a sub-window previously created through createSubWindow() above.
 void destroySubWindow(EGLNativeWindowType win);
@@ -62,13 +61,8 @@ void destroySubWindow(EGLNativeWindowType win);
 // |p_sub_window| is the platform-specific handle to the EGL subwindow.
 // |x|,|y|,|width|,|height| are the new location and dimensions of the
 // subwindow.
-int moveSubWindow(FBNativeWindowType p_parent_window,
-                  EGLNativeWindowType p_sub_window,
-                  int x,
-                  int y,
-                  int width,
-                  int height,
-                  float dpr);
+int moveSubWindow(FBNativeWindowType p_parent_window, EGLNativeWindowType p_sub_window, int x,
+                  int y, int width, int height, float dpr);
 
 void* getNativeDisplay();
 

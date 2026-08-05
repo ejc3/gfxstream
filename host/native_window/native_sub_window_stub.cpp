@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "gles_compat.h"
-#include "native_sub_window.h"
+#include <cstdio>
+
+#include "gfxstream/host/native_sub_window.h"
 
 EGLNativeWindowType createSubWindow(FBNativeWindowType p_window, int x, int y, int width,
                                     int height, float dpr,

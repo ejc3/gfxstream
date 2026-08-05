@@ -22,7 +22,7 @@
 #include <memory>
 
 #include "context_helper.h"
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 #include "render-utils/stream.h"
 
 namespace gfxstream {

@@ -27,13 +27,13 @@
 #include <vector>
 
 #include "color_buffer_vk.h"
-#include "compositor.h"
 #include "debug_utils_helper.h"
 #include "gfxstream/LruCache.h"
+#include "gfxstream/host/compositor.h"
 #include "gfxstream/host/gfxstream_format.h"
+#include "gfxstream/host/hwc2.h"
 #include "gfxstream/synchronization/Lock.h"
 #include "goldfish_vk_dispatch.h"
-#include "host/hwc2.h"
 #include "vulkan/vk_format_support.h"
 #include "vulkan/vk_utils.h"
 

@@ -19,19 +19,32 @@
 #include <optional>
 #include <vector>
 
-#include "display_surface_gl.h"
-#include "gles_version_detector.h"
-#include "common/gles_context.h"
 #include "OpenGLESDispatch/DispatchTables.h"
 #include "OpenGLESDispatch/EGLDispatch.h"
 #include "OpenGLESDispatch/GLESv2Dispatch.h"
 #include "OpenGLESDispatch/OpenGLDispatchLoader.h"
-#include "render_thread_info_gl.h"
+#include "common/gles_context.h"
+#include "display_surface_gl.h"
 #include "gfxstream/ThreadAnnotations.h"
 #include "gfxstream/common/logging.h"
+#include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/driver_info.h"
+#include "gfxstream/host/global_state.h"
 #include "gfxstream/host/renderer_operations.h"
+#include "gfxstream/host/stream_utils.h"
 #include "gfxstream/misc/StringUtils.h"
+#include "gles_version_detector.h"
+#include "render-utils/MediaNative.h"
+#include "render-utils/RenderLib.h"
+#include "render_thread_info_gl.h"
+#include "yuv_converter.h"
+
+namespace gfxstream {
+namespace host {
+std::optional<GfxstreamFormat> GetGfxstreamFormat(const FeatureSet& features,
+                                                  FrameworkFormat format);
+}
+}  // namespace gfxstream
 
 namespace gfxstream {
 namespace host {
@@ -39,6 +52,34 @@ namespace gl {
 namespace {
 
 using gfxstream::host::GfxstreamFormat;
+using gfxstream::host::loadCollection;
+using gfxstream::host::saveCollection;
+
+template <class Collection>
+static void saveProcOwnedCollection(gfxstream::Stream* stream, const Collection& c) {
+    const int count = std::count_if(
+        c.begin(), c.end(),
+        [](const typename Collection::value_type& pair) { return !pair.second.empty(); });
+    stream->putBe32(count);
+    for (const auto& pair : c) {
+        if (pair.second.empty()) {
+            continue;
+        }
+        stream->putBe64(pair.first);
+        saveCollection(stream, pair.second,
+                       [](gfxstream::Stream* s, HandleType h) { s->putBe32(h); });
+    }
+}
+
+template <class Collection>
+static void loadProcOwnedCollection(gfxstream::Stream* stream, Collection* c) {
+    loadCollection(stream, c, [](gfxstream::Stream* stream) -> typename Collection::value_type {
+        const int processId = stream->getBe64();
+        typename Collection::mapped_type handles;
+        loadCollection(stream, &handles, [](gfxstream::Stream* s) { return s->getBe32(); });
+        return {processId, std::move(handles)};
+    });
+}
 
 #ifdef ENABLE_GFXSTREAM_DEBUG
 
@@ -247,12 +288,14 @@ bool EmulationGl::initDispatchers(bool eglOnEgl) {
 
 std::unique_ptr<EmulationGl> EmulationGl::create(uint32_t width, uint32_t height,
                                                  const gfxstream::host::FeatureSet& features,
-                                                 bool allowWindowSurface) {
+                                                 bool allowWindowSurface,
+                                                 GlobalState* globalState) {
     std::unique_ptr<EmulationGl> emulationGl(new EmulationGl());
 
     emulationGl->mFeatures = features;
     emulationGl->mWidth = width;
     emulationGl->mHeight = height;
+    emulationGl->mGlobalState = globalState;
 
     emulationGl->mEglDisplay = s_egl.eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (emulationGl->mEglDisplay == EGL_NO_DISPLAY) {
@@ -597,6 +640,10 @@ EmulationGl::~EmulationGl() {
         }
     }
 
+    for (auto it : mPlatformEglContexts) {
+        destroySharedTrivialContext(it.second.context, it.second.surface);
+    }
+
     if (mEglDisplay != EGL_NO_DISPLAY) {
         s_egl.eglMakeCurrent(mEglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (mEglContext != EGL_NO_CONTEXT) {
@@ -743,6 +790,16 @@ ContextHelper* EmulationGl::getColorBufferContextHelper() {
     return surfaceGl->getContextHelper();
 }
 
+ContextHelper* EmulationGl::getPbufferSurfaceContextHelper() const {
+    if (!mPbufferSurface) {
+        GFXSTREAM_FATAL("EGL emulation pbuffer surface not available.");
+    }
+    const auto* displaySurfaceGl =
+        reinterpret_cast<const DisplaySurfaceGl*>(mPbufferSurface->getImpl());
+
+    return displaySurfaceGl->getContextHelper();
+}
+
 std::unique_ptr<BufferGl> EmulationGl::createBuffer(uint64_t size, HandleType handle) {
     return BufferGl::create(size, handle, getColorBufferContextHelper());
 }
@@ -782,11 +839,9 @@ std::unique_ptr<ColorBufferGl> EmulationGl::loadColorBuffer(gfxstream::Stream* s
                                  mPixelReadFormats);
 }
 
-std::unique_ptr<EmulatedEglContext> EmulationGl::createEmulatedEglContext(
-        uint32_t emulatedEglConfigIndex,
-        const EmulatedEglContext* sharedContext,
-        GLESApi api,
-        HandleType handle) {
+std::unique_ptr<EmulatedEglContext> EmulationGl::createEmulatedEglContextImpl(
+    uint32_t emulatedEglConfigIndex, const EmulatedEglContext* sharedContext, GLESApi api,
+    HandleType handle) {
     if (!mEmulatedEglConfigs) {
         GFXSTREAM_ERROR("EmulatedEglConfigs unavailable.");
         return nullptr;
@@ -809,29 +864,75 @@ std::unique_ptr<EmulatedEglContext> EmulationGl::loadEmulatedEglContext(
     return EmulatedEglContext::onLoad(stream, mEglDisplay);
 }
 
-std::unique_ptr<EmulatedEglFenceSync> EmulationGl::createEmulatedEglFenceSync(
-        EGLenum type,
-        int destroyWhenSignaled) {
+uint64_t EmulationGl::createEmulatedEglFenceSync(EGLenum type, int destroyWhenSignaled) {
+    RenderThreadInfoGl* const info = RenderThreadInfoGl::get();
+    if (!info) {
+        GFXSTREAM_FATAL("RenderThreadGL not available.");
+    }
+    if (!info->currContext) {
+        uint32_t syncContext;
+        uint32_t syncSurface;
+        createTrivialContext(0,  // There is no context to share.
+                             &syncContext, &syncSurface);
+        bindContext(syncContext, syncSurface, syncSurface);
+        // This context is then cleaned up when the render thread exits.
+    }
+
     const bool hasNativeFence = type == EGL_SYNC_NATIVE_FENCE_ANDROID;
-    return EmulatedEglFenceSync::create(mEglDisplay,
-                                        hasNativeFence,
-                                        destroyWhenSignaled);
-
+    auto sync = EmulatedEglFenceSync::create(mEglDisplay, hasNativeFence, destroyWhenSignaled);
+    return sync ? (uint64_t)(uintptr_t)sync.release() : 0;
 }
 
-std::unique_ptr<EmulatedEglImage> EmulationGl::createEmulatedEglImage(
-        EmulatedEglContext* context,
-        EGLenum target,
-        EGLClientBuffer buffer) {
-    EGLContext eglContext = context ? context->getEGLContext() : EGL_NO_CONTEXT;
-    return EmulatedEglImage::create(mEglDisplay, eglContext, target, buffer);
+HandleType EmulationGl::createEmulatedEglImage(HandleType contextHandle, EGLenum target,
+                                               EGLClientBuffer buffer) {
+    EGLContext eglContext = EGL_NO_CONTEXT;
+    if (contextHandle) {
+        auto it = mContexts.find(contextHandle);
+        if (it != mContexts.end()) {
+            eglContext = it->second->getEGLContext();
+        } else {
+            GFXSTREAM_ERROR("Failed to find EmulatedEglContext:%d", contextHandle);
+            return 0;
+        }
+    }
+    auto image = EmulatedEglImage::create(mEglDisplay, eglContext, target, buffer);
+    if (!image) {
+        GFXSTREAM_ERROR("Failed to create EmulatedEglImage");
+        return 0;
+    }
+
+    HandleType imageHandle = image->getHandle();
+    mImages[imageHandle] = std::move(image);
+
+    RenderThreadInfoGl* tInfo = RenderThreadInfoGl::get();
+    uint64_t puid = tInfo->m_puid;
+    if (puid) {
+        mProcOwnedEmulatedEglImages[puid].insert(imageHandle);
+    }
+    return imageHandle;
 }
 
-std::unique_ptr<EmulatedEglWindowSurface> EmulationGl::createEmulatedEglWindowSurface(
-        uint32_t emulatedConfigIndex,
-        uint32_t width,
-        uint32_t height,
-        HandleType handle) {
+bool EmulationGl::destroyEmulatedEglImage(HandleType imageHandle) {
+    auto imageIt = mImages.find(imageHandle);
+    if (imageIt == mImages.end()) {
+        GFXSTREAM_ERROR("Failed to find EmulatedEglImage:%d", imageHandle);
+        return false;
+    }
+    auto& image = imageIt->second;
+
+    EGLBoolean success = image->destroy();
+    mImages.erase(imageIt);
+
+    RenderThreadInfoGl* tInfo = RenderThreadInfoGl::get();
+    uint64_t puid = tInfo->m_puid;
+    if (puid) {
+        mProcOwnedEmulatedEglImages[puid].erase(imageHandle);
+    }
+    return (success == EGL_TRUE);
+}
+
+std::unique_ptr<EmulatedEglWindowSurface> EmulationGl::createEmulatedEglWindowSurfaceImpl(
+    uint32_t emulatedConfigIndex, uint32_t width, uint32_t height, HandleType handle) {
     if (!mEmulatedEglConfigs) {
         GFXSTREAM_ERROR("EmulatedEglConfigs unavailable.");
         return nullptr;
@@ -852,6 +953,720 @@ std::unique_ptr<EmulatedEglWindowSurface> EmulationGl::loadEmulatedEglWindowSurf
     gfxstream::Stream* stream, const std::function<IColorBufferRef(uint32_t)>& colorBufferLookup,
     const EmulatedEglContextMap& contexts) {
     return EmulatedEglWindowSurface::onLoad(stream, mEglDisplay, colorBufferLookup, contexts);
+}
+
+HandleType EmulationGl::createEmulatedEglContext(uint32_t emulatedConfigIndex,
+                                                 HandleType shareContextHandle, GLESApi api) {
+    gfxstream::base::AutoWriteLock contextLock(mContextStructureLock);
+    HandleType handle = mGlobalState->genHandleLocked();
+
+    EmulatedEglContextPtr shareContext = nullptr;
+    if (shareContextHandle != 0) {
+        auto shareContextIt = mContexts.find(shareContextHandle);
+        if (shareContextIt == mContexts.end()) {
+            GFXSTREAM_ERROR("Failed to find share EmulatedEglContext:%d", shareContextHandle);
+            return 0;
+        }
+        shareContext = shareContextIt->second;
+    }
+
+    auto context =
+        createEmulatedEglContextImpl(emulatedConfigIndex, shareContext.get(), api, handle);
+    if (!context) {
+        GFXSTREAM_ERROR("Failed to create EmulatedEglContext.");
+        return 0;
+    }
+
+    mContexts[handle] = std::move(context);
+
+    RenderThreadInfoGl* tinfo = RenderThreadInfoGl::get();
+    if (!tinfo) {
+        GFXSTREAM_FATAL("RenderThreadInfoGl not available.");
+    }
+    uint64_t puid = tinfo->m_puid;
+    if (puid) {
+        mProcOwnedEmulatedEglContexts[puid].insert(handle);
+    }
+    return handle;
+}
+
+void EmulationGl::destroyEmulatedEglContext(HandleType contextHandle) {
+    gfxstream::base::AutoWriteLock contextLock(mContextStructureLock);
+    auto it = mContexts.find(contextHandle);
+    if (it == mContexts.end()) {
+        GFXSTREAM_ERROR("Failed to find EmulatedEglContext:%d", contextHandle);
+        return;
+    }
+    mContexts.erase(it);
+
+    RenderThreadInfoGl* tinfo = RenderThreadInfoGl::get();
+    if (!tinfo) {
+        GFXSTREAM_FATAL("RenderThreadInfoGl not available.");
+    }
+    uint64_t puid = tinfo->m_puid;
+    if (puid) {
+        auto procIte = mProcOwnedEmulatedEglContexts.find(puid);
+        if (procIte != mProcOwnedEmulatedEglContexts.end()) {
+            procIte->second.erase(contextHandle);
+        }
+    } else {
+        tinfo->m_contextSet.erase(contextHandle);
+    }
+}
+
+HandleType EmulationGl::createEmulatedEglWindowSurface(uint32_t emulatedConfigIndex, uint32_t width,
+                                                       uint32_t height) {
+    HandleType handle = mGlobalState->genHandleLocked();
+    auto window = createEmulatedEglWindowSurfaceImpl(emulatedConfigIndex, width, height, handle);
+    if (!window) {
+        GFXSTREAM_ERROR("Failed to create EmulatedEglWindowSurface.");
+        return 0;
+    }
+
+    mWindows[handle] = {std::move(window), 0};
+
+    RenderThreadInfoGl* info = RenderThreadInfoGl::get();
+    if (!info) {
+        GFXSTREAM_FATAL("RenderThreadInfoGl not available.");
+    }
+
+    uint64_t puid = info->m_puid;
+    if (puid) {
+        mProcOwnedEmulatedEglWindowSurfaces[puid].insert(handle);
+    } else {
+        info->m_windowSet.insert(handle);
+    }
+
+    return handle;
+}
+
+std::vector<HandleType> EmulationGl::destroyEmulatedEglWindowSurface(HandleType surfaceHandle) {
+    std::vector<HandleType> colorBuffersToCleanUp;
+    const auto w = mWindows.find(surfaceHandle);
+    if (w != mWindows.end()) {
+        RecursiveScopedContextBind bind(getColorBufferContextHelper());
+        if (w->second.second != 0) {
+            colorBuffersToCleanUp.push_back(w->second.second);
+        }
+        mWindows.erase(w);
+        RenderThreadInfoGl* tinfo = RenderThreadInfoGl::get();
+        if (!tinfo) {
+            GFXSTREAM_FATAL("RenderThreadInfoGl not available.");
+        }
+        uint64_t puid = tinfo->m_puid;
+        if (puid) {
+            auto ite = mProcOwnedEmulatedEglWindowSurfaces.find(puid);
+            if (ite != mProcOwnedEmulatedEglWindowSurfaces.end()) {
+                ite->second.erase(surfaceHandle);
+            }
+        } else {
+            tinfo->m_windowSet.erase(surfaceHandle);
+        }
+    }
+    return colorBuffersToCleanUp;
+}
+
+bool EmulationGl::isHandleInUse(HandleType handle) const {
+    return mContexts.find(handle) != mContexts.end() || mWindows.find(handle) != mWindows.end();
+}
+
+EmulatedEglContextPtr EmulationGl::getContext(HandleType contextHandle) {
+    return gfxstream::base::findOrDefault(mContexts, contextHandle);
+}
+
+EmulatedEglWindowSurfacePtr EmulationGl::getWindowSurface(HandleType surfaceHandle) {
+    return gfxstream::base::findOrDefault(mWindows, surfaceHandle).first;
+}
+
+bool EmulationGl::bindColorBufferToTexture(HandleType colorBufferHandle) {
+    IColorBufferRef cb = mGlobalState->findColorBuffer(colorBufferHandle);
+    if (!cb) return false;
+    cb->touch();
+    auto cbGl = cb->getColorBufferGl();
+    if (!cbGl) return false;
+    return cbGl->bindToTexture();
+}
+
+bool EmulationGl::bindColorBufferToTexture2(HandleType colorBufferHandle) {
+    IColorBufferRef cb = mGlobalState->findColorBuffer(colorBufferHandle);
+    if (!cb) return false;
+    cb->touch();
+    auto cbGl = cb->getColorBufferGl();
+    if (!cbGl) return false;
+    return cbGl->bindToTexture2();
+}
+
+bool EmulationGl::bindColorBufferToRenderbuffer(HandleType colorBufferHandle) {
+    IColorBufferRef cb = mGlobalState->findColorBuffer(colorBufferHandle);
+    if (!cb) return false;
+    cb->touch();
+    auto cbGl = cb->getColorBufferGl();
+    if (!cbGl) return false;
+    return cbGl->bindToRenderbuffer();
+}
+
+bool EmulationGl::bindContext(HandleType contextHandle, HandleType drawSurfaceHandle,
+                              HandleType readSurfaceHandle) {
+    EmulatedEglWindowSurfacePtr draw = nullptr;
+    EmulatedEglWindowSurfacePtr read = nullptr;
+    EmulatedEglContextPtr ctx = nullptr;
+
+    if (contextHandle || drawSurfaceHandle || readSurfaceHandle) {
+        ctx = getContext(contextHandle);
+        if (!ctx) return false;
+
+        auto drawWindowIt = mWindows.find(drawSurfaceHandle);
+        if (drawWindowIt == mWindows.end()) {
+            return false;
+        }
+        draw = drawWindowIt->second.first;
+
+        if (readSurfaceHandle != drawSurfaceHandle) {
+            auto readWindowIt = mWindows.find(readSurfaceHandle);
+            if (readWindowIt == mWindows.end()) {
+                return false;
+            }
+            read = readWindowIt->second.first;
+        } else {
+            read = draw;
+        }
+    }
+
+    if (!s_egl.eglMakeCurrent(mEglDisplay, draw ? draw->getEGLSurface() : EGL_NO_SURFACE,
+                              read ? read->getEGLSurface() : EGL_NO_SURFACE,
+                              ctx ? ctx->getEGLContext() : EGL_NO_CONTEXT)) {
+        GFXSTREAM_ERROR("eglMakeCurrent failed");
+        return false;
+    }
+
+    RenderThreadInfoGl* const tinfo = RenderThreadInfoGl::get();
+    if (!tinfo) {
+        GFXSTREAM_FATAL("RenderThreadGl not available.");
+    }
+
+    EmulatedEglWindowSurfacePtr bindDraw, bindRead;
+    if (draw.get() == NULL && read.get() == NULL) {
+        bindDraw = tinfo->currDrawSurf;
+        bindRead = tinfo->currReadSurf;
+    } else {
+        bindDraw = draw;
+        bindRead = read;
+    }
+
+    if (bindDraw.get() != NULL && bindRead.get() != NULL) {
+        if (bindDraw.get() != bindRead.get()) {
+            bindDraw->bind(ctx, EmulatedEglWindowSurface::BIND_DRAW);
+            bindRead->bind(ctx, EmulatedEglWindowSurface::BIND_READ);
+        } else {
+            bindDraw->bind(ctx, EmulatedEglWindowSurface::BIND_READDRAW);
+        }
+    }
+
+    tinfo->currContext = ctx;
+    tinfo->currDrawSurf = draw;
+    tinfo->currReadSurf = read;
+    if (ctx) {
+        if (ctx->clientVersion() > GLESApi_CM)
+            tinfo->m_gl2Dec.setContextData(&ctx->decoderContextData());
+        else
+            tinfo->m_glDec.setContextData(&ctx->decoderContextData());
+    } else {
+        tinfo->m_glDec.setContextData(NULL);
+        tinfo->m_gl2Dec.setContextData(NULL);
+    }
+    return true;
+}
+
+void EmulationGl::preSave(Stream* stream, const gfxstream::ITextureSaverPtr& textureSaver) {
+    if (s_egl.eglPreSaveContext && s_egl.eglSaveAllImages) {
+        for (const auto& ctx : mContexts) {
+            s_egl.eglPreSaveContext(mEglDisplay, ctx.second->getEGLContext(), stream);
+        }
+        s_egl.eglSaveAllImages(mEglDisplay, stream, &textureSaver);
+    }
+}
+
+void EmulationGl::saveContexts(Stream* stream) {
+    saveCollection(stream, mContexts, [](Stream* s, const EmulatedEglContextMap::value_type& pair) {
+        pair.second->onSave(s);
+    });
+}
+
+void EmulationGl::saveWindowSurfaces(Stream* stream) {
+    saveCollection(stream, mWindows,
+                   [](Stream* s, const EmulatedEglWindowSurfaceMap::value_type& pair) {
+                       pair.second.first->onSave(s);
+                       s->putBe32(pair.second.second);
+                   });
+}
+
+void EmulationGl::saveProcOwnedWindowSurfaces(Stream* stream) {
+    saveProcOwnedCollection(stream, mProcOwnedEmulatedEglWindowSurfaces);
+}
+
+void EmulationGl::saveProcOwnedContexts(Stream* stream) {
+    saveProcOwnedCollection(stream, mProcOwnedEmulatedEglContexts);
+}
+
+void EmulationGl::saveProcOwnedImages(Stream* stream) {
+    saveProcOwnedCollection(stream, mProcOwnedEmulatedEglImages);
+}
+
+bool EmulationGl::loadContexts(Stream* stream) {
+    loadCollection(stream, &mContexts, [this](Stream* stream) -> EmulatedEglContextMap::value_type {
+        auto context = loadEmulatedEglContext(stream);
+        auto contextHandle = context ? context->getHndl() : 0;
+        return {contextHandle, std::move(context)};
+    });
+    assert(!gfxstream::base::find(mContexts, 0));
+    return true;
+}
+
+bool EmulationGl::loadWindowSurfaces(
+    Stream* stream, const std::function<IColorBufferRef(uint32_t)>& colorBufferLookup) {
+    loadCollection(
+        stream, &mWindows,
+        [this, &colorBufferLookup](Stream* stream) -> EmulatedEglWindowSurfaceMap::value_type {
+            auto window = loadEmulatedEglWindowSurface(stream, colorBufferLookup, mContexts);
+
+            HandleType handle = window->getHndl();
+            HandleType colorBufferHandle = stream->getBe32();
+            return {handle, {std::move(window), colorBufferHandle}};
+        });
+    return true;
+}
+
+void EmulationGl::loadProcOwnedWindowSurfaces(Stream* stream) {
+    loadProcOwnedCollection(stream, &mProcOwnedEmulatedEglWindowSurfaces);
+}
+
+void EmulationGl::loadProcOwnedContexts(Stream* stream) {
+    loadProcOwnedCollection(stream, &mProcOwnedEmulatedEglContexts);
+}
+
+void EmulationGl::loadProcOwnedImages(Stream* stream) {
+    loadProcOwnedCollection(stream, &mProcOwnedEmulatedEglImages);
+}
+
+void EmulationGl::loadAllImages(Stream* stream, const gfxstream::ITextureLoaderPtr& textureLoader) {
+    if (s_egl.eglLoadAllImages) {
+        s_egl.eglLoadAllImages(mEglDisplay, stream, &textureLoader);
+    }
+}
+
+void EmulationGl::postLoad(Stream* stream) {
+    if (s_egl.eglPostLoadAllImages) {
+        s_egl.eglPostLoadAllImages(mEglDisplay, stream);
+    }
+}
+
+bool EmulationGl::bindColorBufferToWindowSurface(HandleType surfaceHandle,
+                                                 HandleType colorBufferHandle,
+                                                 HandleType* outOldColorBufferHandle) {
+    auto w = mWindows.find(surfaceHandle);
+    if (w == mWindows.end()) {
+        return false;
+    }
+
+    IColorBufferRef cb = nullptr;
+    if (colorBufferHandle) {
+        cb = mGlobalState->findColorBuffer(colorBufferHandle);
+        if (!cb) {
+            GFXSTREAM_ERROR("bad color buffer handle %d", colorBufferHandle);
+            return false;
+        }
+    }
+
+    w->second.first->setColorBuffer(cb);
+    *outOldColorBufferHandle = w->second.second;
+    w->second.second = colorBufferHandle;
+    return true;
+}
+
+HandleType EmulationGl::getWindowSurfaceColorBufferHandle(HandleType surfaceHandle) const {
+    auto it = mWindows.find(surfaceHandle);
+    if (it == mWindows.end()) {
+        return 0;
+    }
+    return it->second.second;
+}
+
+std::vector<HandleType> EmulationGl::cleanupProcGLObjects(uint64_t puid) {
+    RecursiveScopedContextBind bind(getColorBufferContextHelper());
+    std::vector<HandleType> colorBuffersToCleanUp;
+
+    // Clean up window surfaces
+    auto procWindowsIt = mProcOwnedEmulatedEglWindowSurfaces.find(puid);
+    if (procWindowsIt != mProcOwnedEmulatedEglWindowSurfaces.end()) {
+        for (auto whndl : procWindowsIt->second) {
+            auto w = mWindows.find(whndl);
+            if (w != mWindows.end()) {
+                if (w->second.second != 0) {
+                    colorBuffersToCleanUp.push_back(w->second.second);
+                }
+                mWindows.erase(w);
+            }
+        }
+        mProcOwnedEmulatedEglWindowSurfaces.erase(procWindowsIt);
+    }
+
+    // Cleanup render contexts
+    auto procContextsIt = mProcOwnedEmulatedEglContexts.find(puid);
+    if (procContextsIt != mProcOwnedEmulatedEglContexts.end()) {
+        for (auto ctx : procContextsIt->second) {
+            mContexts.erase(ctx);
+        }
+        mProcOwnedEmulatedEglContexts.erase(procContextsIt);
+    }
+
+    // Cleanup EGLImages
+    auto procImagesIt = mProcOwnedEmulatedEglImages.find(puid);
+    if (procImagesIt != mProcOwnedEmulatedEglImages.end()) {
+        for (auto image : procImagesIt->second) {
+            mImages.erase(image);
+        }
+        mProcOwnedEmulatedEglImages.erase(procImagesIt);
+    }
+    return colorBuffersToCleanUp;
+}
+
+void EmulationGl::postSave(Stream* stream) {
+    if (s_egl.eglPostSaveContext) {
+        for (const auto& ctx : mContexts) {
+            s_egl.eglPostSaveContext(mEglDisplay, ctx.second->getEGLContext(), stream);
+        }
+        if (mEglContext != EGL_NO_CONTEXT) {
+            s_egl.eglPostSaveContext(mEglDisplay, mEglContext, stream);
+        }
+    }
+}
+
+bool EmulationGl::hasContextsOrWindowSurfaces() const {
+    return !mContexts.empty() || !mWindows.empty();
+}
+
+void EmulationGl::clearContextsAndWindowSurfaces() {
+    mContexts.clear();
+    mWindows.clear();
+}
+
+bool EmulationGl::hasProcOwnedResources() const {
+    return !mProcOwnedEmulatedEglContexts.empty() || !mProcOwnedEmulatedEglWindowSurfaces.empty() ||
+           !mProcOwnedEmulatedEglImages.empty();
+}
+
+std::vector<uint64_t> EmulationGl::getGLPUIDs() const {
+    std::vector<uint64_t> puids;
+    for (const auto& pair : mProcOwnedEmulatedEglContexts) {
+        puids.push_back(pair.first);
+    }
+    for (const auto& pair : mProcOwnedEmulatedEglWindowSurfaces) {
+        if (std::find(puids.begin(), puids.end(), pair.first) == puids.end()) {
+            puids.push_back(pair.first);
+        }
+    }
+    for (const auto& pair : mProcOwnedEmulatedEglImages) {
+        if (std::find(puids.begin(), puids.end(), pair.first) == puids.end()) {
+            puids.push_back(pair.first);
+        }
+    }
+    return puids;
+}
+
+void EmulationGl::drainRenderThreadContexts() {
+    gfxstream::base::AutoWriteLock contextLock(mContextStructureLock);
+    RenderThreadInfoGl* const tinfo = RenderThreadInfoGl::get();
+    if (!tinfo) {
+        GFXSTREAM_FATAL("RenderThreadGL not available.");
+    }
+    for (const HandleType contextHandle : tinfo->m_contextSet) {
+        mContexts.erase(contextHandle);
+    }
+    tinfo->m_contextSet.clear();
+}
+
+void EmulationGl::drainRenderThreadSurfaces() {
+    RenderThreadInfoGl* const tinfo = RenderThreadInfoGl::get();
+    if (!tinfo) {
+        GFXSTREAM_FATAL("RenderThreadGL not available.");
+    }
+    RecursiveScopedContextBind bind(getColorBufferContextHelper());
+    for (const HandleType winHandle : tinfo->m_windowSet) {
+        const auto winIt = mWindows.find(winHandle);
+        if (winIt != mWindows.end()) {
+            if (winIt->second.second != 0) {
+                mGlobalState->closeColorBufferByWindow(winIt->second.second);
+            }
+            mWindows.erase(winIt);
+        }
+    }
+    tinfo->m_windowSet.clear();
+}
+
+bool EmulationGl::flushEmulatedEglWindowSurfaceColorBuffer(HandleType surfaceHandle) {
+    auto it = mWindows.find(surfaceHandle);
+    if (it == mWindows.end()) {
+        GFXSTREAM_ERROR("flushEmulatedEglWindowSurfaceColorBuffer: window handle %#x not found",
+                        surfaceHandle);
+        return false;
+    }
+    it->second.first->flushColorBuffer();
+    return true;
+}
+
+void EmulationGl::createTrivialContext(HandleType shared, HandleType* contextOut,
+                                       HandleType* surfOut) {
+    assert(contextOut);
+    assert(surfOut);
+
+    *contextOut = createEmulatedEglContext(0, shared, GLESApi_2);
+    *surfOut = createEmulatedEglWindowSurface(0, 1, 1);
+}
+
+void EmulationGl::createSharedTrivialContext(EGLContext* contextOut, EGLSurface* surfOut) {
+    assert(contextOut);
+    assert(surfOut);
+
+    if (mEglConfig == EGL_NO_CONFIG) {
+        GFXSTREAM_FATAL("GL/EGL emulation has not chosen a config.");
+    }
+
+    int maj, min;
+    get_gfxstream_gles_version(&maj, &min);
+
+    const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION_KHR, maj,
+                                     EGL_CONTEXT_MINOR_VERSION_KHR, min, EGL_NONE};
+
+    *contextOut = s_egl.eglCreateContext(mEglDisplay, mEglConfig, mEglContext, contextAttribs);
+
+    const EGLint pbufAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+
+    *surfOut = s_egl.eglCreatePbufferSurface(mEglDisplay, mEglConfig, pbufAttribs);
+}
+
+void EmulationGl::destroySharedTrivialContext(EGLContext context, EGLSurface surface) {
+    if (mEglDisplay != EGL_NO_DISPLAY) {
+        s_egl.eglDestroyContext(mEglDisplay, context);
+        s_egl.eglDestroySurface(mEglDisplay, surface);
+    }
+}
+
+bool EmulationGl::setEmulatedEglWindowSurfaceColorBuffer(HandleType surfaceHandle,
+                                                         HandleType colorBufferHandle) {
+    HandleType oldColorBuffer = 0;
+    if (!bindColorBufferToWindowSurface(surfaceHandle, colorBufferHandle, &oldColorBuffer)) {
+        return false;
+    }
+
+    if (colorBufferHandle) {
+        mGlobalState->openColorBufferByWindow(colorBufferHandle);
+    }
+
+    if (oldColorBuffer) {
+        mGlobalState->closeColorBufferByWindow(oldColorBuffer);
+    }
+
+    return true;
+}
+
+void* EmulationGl::platformCreateSharedEglContext() {
+    EGLContext context = 0;
+    EGLSurface surface = 0;
+    createSharedTrivialContext(&context, &surface);
+
+    void* underlyingContext = s_egl.eglGetNativeContextANDROID(mEglDisplay, context);
+    if (!underlyingContext) {
+        GFXSTREAM_ERROR("Error: Underlying egl backend could not produce a native EGL context.");
+        return nullptr;
+    }
+
+    mPlatformEglContexts[underlyingContext] = {context, surface};
+
+#if defined(__QNX__)
+    EGLDisplay currDisplay = eglGetCurrentDisplay();
+    EGLSurface currRead = eglGetCurrentSurface(EGL_READ);
+    EGLSurface currDraw = eglGetCurrentSurface(EGL_DRAW);
+    EGLSurface currContext = eglGetCurrentContext();
+    // Make this context current to ensure thread-state is initialized
+    s_egl.eglMakeCurrent(mEglDisplay, surface, surface, context);
+    // Revert back to original state
+    s_egl.eglMakeCurrent(currDisplay, currRead, currDraw, currContext);
+#endif
+
+    return underlyingContext;
+}
+
+bool EmulationGl::platformDestroySharedEglContext(void* underlyingContext) {
+    auto it = mPlatformEglContexts.find(underlyingContext);
+    if (it == mPlatformEglContexts.end()) {
+        GFXSTREAM_ERROR(
+            "Error: Could not find underlying egl context %p (perhaps already destroyed?)",
+            underlyingContext);
+        return false;
+    }
+
+    destroySharedTrivialContext(it->second.context, it->second.surface);
+
+    mPlatformEglContexts.erase(it);
+
+    return true;
+}
+
+void EmulationGl::createYUVTextures(uint32_t type, uint32_t count, int width, int height,
+                                    uint32_t* output) {
+    auto formatOpt =
+        gfxstream::host::GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
+    if (!formatOpt) {
+        GFXSTREAM_ERROR("Unsupported framework format %d", type);
+        return;
+    }
+    auto format = *formatOpt;
+
+    auto contextHelper = getPbufferSurfaceContextHelper();
+    if (!contextHelper) {
+        // This should not be called in vulkan-only mode
+        GFXSTREAM_ERROR("%s: invalid pbuffer surface context", __func__);
+        return;
+    }
+    RecursiveScopedContextBind bind(contextHelper);
+    if (!bind.isOk()) {
+        GFXSTREAM_ERROR("%s: could not bind context helper", __func__);
+        return;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (format == GfxstreamFormat::NV12 || format == GfxstreamFormat::NV21) {
+            YUVConverter::createYUVGLTex(GL_TEXTURE0, width, height, format, YuvPlane::Y,
+                                         &output[2 * i]);
+            YUVConverter::createYUVGLTex(GL_TEXTURE1, width / 2, height / 2, format, YuvPlane::UV,
+                                         &output[2 * i + 1]);
+        } else if (format == GfxstreamFormat::YV12 || format == GfxstreamFormat::YV21) {
+            YUVConverter::createYUVGLTex(GL_TEXTURE0, width, height, format, YuvPlane::Y,
+                                         &output[3 * i]);
+            YUVConverter::createYUVGLTex(GL_TEXTURE1, width / 2, height / 2, format, YuvPlane::U,
+                                         &output[3 * i + 1]);
+            YUVConverter::createYUVGLTex(GL_TEXTURE2, width / 2, height / 2, format, YuvPlane::V,
+                                         &output[3 * i + 2]);
+        }
+    }
+}
+
+void EmulationGl::destroyYUVTextures(uint32_t type, uint32_t count, uint32_t* textures) {
+    auto formatOpt =
+        gfxstream::host::GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
+    if (!formatOpt) {
+        GFXSTREAM_ERROR("Unsupported framework format %d", type);
+        return;
+    }
+    auto format = *formatOpt;
+
+    RecursiveScopedContextBind bind(getPbufferSurfaceContextHelper());
+    if (format == GfxstreamFormat::NV12 || format == GfxstreamFormat::NV21) {
+        s_gles2.glDeleteTextures(2 * count, textures);
+    } else if (format == GfxstreamFormat::YV12 || format == GfxstreamFormat::YV21) {
+        s_gles2.glDeleteTextures(3 * count, textures);
+    }
+}
+
+void EmulationGl::updateYUVTextures(uint32_t type, uint32_t* textures, void* privData, void* func) {
+    auto formatOpt =
+        gfxstream::host::GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
+    if (!formatOpt) {
+        GFXSTREAM_ERROR("Unsupported framework format %d", type);
+        return;
+    }
+    auto format = *formatOpt;
+
+    RecursiveScopedContextBind bind(getPbufferSurfaceContextHelper());
+
+    yuv_updater_t updater = (yuv_updater_t)func;
+    uint32_t gtextures[3] = {0, 0, 0};
+
+    if (format == GfxstreamFormat::NV12 || format == GfxstreamFormat::NV21) {
+        gtextures[0] = s_gles2.glGetGlobalTexName(textures[0]);
+        gtextures[1] = s_gles2.glGetGlobalTexName(textures[1]);
+    } else if (format == GfxstreamFormat::YV12 || format == GfxstreamFormat::YV21) {
+        gtextures[0] = s_gles2.glGetGlobalTexName(textures[0]);
+        gtextures[1] = s_gles2.glGetGlobalTexName(textures[1]);
+        gtextures[2] = s_gles2.glGetGlobalTexName(textures[2]);
+    }
+
+#ifdef __APPLE__
+    EGLContext prevContext = s_egl.eglGetCurrentContext();
+    auto mydisp = EglGlobalInfo::getInstance()->getDisplayFromDisplayType(EGL_DEFAULT_DISPLAY);
+    void* nativecontext = mydisp->getLowLevelContext(prevContext);
+    struct MediaNativeCallerData callerdata;
+    callerdata.ctx = nativecontext;
+    callerdata.converter = nsConvertVideoFrameToNV12Textures;
+    void* pcallerdata = &callerdata;
+#else
+    void* pcallerdata = nullptr;
+#endif
+
+    updater(privData, type, gtextures, pcallerdata);
+}
+
+void EmulationGl::drainRenderThreadResources() {
+    bindContext(0, 0, 0);
+    drainRenderThreadSurfaces();
+    drainRenderThreadContexts();
+    if (!s_egl.eglReleaseThread()) {
+        GFXSTREAM_ERROR("Error: RenderThread failed to eglReleaseThread()");
+    }
+}
+
+void EmulationGl::fillGlesUsages(android_studio::EmulatorGLESUsages* usages) {
+    if (s_egl.eglFillUsages) {
+        s_egl.eglFillUsages(usages);
+    }
+}
+
+bool EmulationGl::getRenderOpt(gfxstream::RenderOpt* opt) const {
+    if (!opt) {
+        return false;
+    }
+    opt->display = mEglDisplay;
+    opt->config = mEglConfig;
+
+    if (!mWindowSurface) {
+        opt->surface = EGL_NO_SURFACE;
+    } else {
+        const auto* displaySurfaceGl =
+            reinterpret_cast<const DisplaySurfaceGl*>(mWindowSurface->getImpl());
+        opt->surface = displaySurfaceGl->getSurface();
+    }
+
+    return (opt->display && opt->surface && opt->config);
+}
+
+EGLContext EmulationGl::getGlobalEGLContext() const {
+    if (!mPbufferSurface) {
+        GFXSTREAM_FATAL("FrameBuffer pbuffer surface not available.");
+    }
+    const auto* displaySurfaceGl =
+        reinterpret_cast<const DisplaySurfaceGl*>(mPbufferSurface->getImpl());
+    return displaySurfaceGl->getContextForShareContext();
+}
+
+void EmulationGl::swapTexturesAndUpdateColorBuffer(IColorBuffer* colorBuffer, uint32_t format,
+                                                   uint32_t type, uint32_t texturesType,
+                                                   uint32_t* textures) {
+    auto texturesFormatOpt = GetGfxstreamFormat(mFeatures, (FrameworkFormat)texturesType);
+    if (!texturesFormatOpt) {
+        GFXSTREAM_ERROR("Unsupported framework format %d", texturesType);
+        return;
+    }
+    auto texturesFormat = *texturesFormatOpt;
+
+    ColorBufferGl* colorBufferGl = colorBuffer->getColorBufferGl();
+    if (!colorBufferGl) {
+        return;
+    }
+
+    colorBufferGl->swapYUVTextures(texturesFormat, textures);
+    colorBufferGl->subUpdate(0, 0, colorBuffer->getWidth(), colorBuffer->getHeight(),
+                             texturesFormat, nullptr);
+
+    colorBuffer->flushFromBackend(Backend::GL);
 }
 
 }  // namespace gl
