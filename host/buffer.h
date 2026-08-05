@@ -18,8 +18,8 @@
 
 #include "gfxstream/host/external_object_manager.h"
 #include "gfxstream/host/handle.h"
+#include "gfxstream/host/lazy_snapshot_object.h"
 #include "render-utils/stream.h"
-#include "snapshot/LazySnapshotObj.h"
 
 namespace gfxstream {
 namespace host {

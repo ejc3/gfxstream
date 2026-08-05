@@ -76,7 +76,7 @@ public:
         GLint maxAttribs;
         gl->glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &maxAttribs);
         EXPECT_EQ(GL_NO_ERROR, gl->glGetError());
-        if (index >= maxAttribs) {
+        if (index >= static_cast<GLuint>(maxAttribs)) {
             fprintf(stderr,
                     "cannot select index %d: GL_MAX_VERTEX_ATTRIBS is %d.\n",
                     index, maxAttribs);

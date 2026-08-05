@@ -26,7 +26,7 @@
 #include "gfxstream/host/handle.h"
 #include "render-utils/Renderer.h"
 #include "render-utils/stream.h"
-#include "snapshot/LazySnapshotObj.h"
+#include "gfxstream/host/lazy_snapshot_object.h"
 
 namespace gfxstream {
 namespace host {

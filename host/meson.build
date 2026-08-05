@@ -16,7 +16,6 @@ subdir('iostream')
 subdir('library')
 subdir('tracing')
 subdir('renderdoc')
-subdir('snapshot')
 subdir('decoder_common')
 subdir('address_space')
 subdir('common')
@@ -37,7 +36,6 @@ inc_gfxstream_backend = [
   inc_host_library,
   inc_host_native_window,
   inc_host_renderdoc,
-  inc_host_snapshot,
   inc_host_tracing,
   inc_include,
   inc_opengl_headers,
@@ -55,7 +53,6 @@ link_gfxstream_backend = [
   lib_host_iostream,
   lib_host_library,
   lib_host_native_window,
-  lib_host_snapshot,
   lib_host_tracing,
 ]
 

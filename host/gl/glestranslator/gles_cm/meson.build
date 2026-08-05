@@ -15,21 +15,19 @@ lib_glescm_translator = static_library(
   cpp_args: gfxstream_host_args,
   include_directories: [
     inc_common_base,
+    inc_common_logging,
     inc_etc,
     inc_gfxstream_server,
     inc_gl_common,
     inc_gl_openglesdispatch,
     inc_glm,
     inc_host_common,
-    inc_common_logging,
-    inc_host_snapshot,
     inc_include,
     inc_opengl_headers,
   ],
   link_with: [
     lib_common_base,
-    lib_host_common,
     lib_common_logging,
-    lib_host_snapshot,
+    lib_host_common,
   ],
 )

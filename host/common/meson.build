@@ -29,6 +29,7 @@ lib_host_common = static_library(
   include_directories: [
     inc_common_base,
     inc_common_logging,
+    inc_common_utils,
     inc_gfxstream_server,
     inc_host_address_space,
     inc_host_common,
@@ -36,6 +37,7 @@ lib_host_common = static_library(
   link_with: [
     lib_common_base,
     lib_common_logging,
+    lib_common_utils,
     lib_host_address_space,
   ],
 )

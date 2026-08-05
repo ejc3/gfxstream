@@ -40,11 +40,9 @@ cc_library_static {
         "libgfxstream_host_compressedtextures",
         "libgfxstream_host_library",
         "libgfxstream_common_logging",
-        "libgfxstream_host_snapshot",
     ],
     export_static_lib_headers: [
         "libgfxstream_etc",
-        "libgfxstream_host_snapshot",
     ],
     srcs: [
         "rgtc.cpp",
