@@ -91,7 +91,7 @@ class DisplayVkTest : public ::testing::Test {
         info->width = texture->m_vkImageCreateInfo.extent.width;
         info->height = texture->m_vkImageCreateInfo.extent.height;
         info->image = texture->m_vkImage;
-        info->imageCreateInfo = texture->m_vkImageCreateInfo;
+        info->imageCreateInfoShallow = texture->m_vkImageCreateInfo;
         info->preBorrowLayout = RenderTexture::k_vkImageLayout;
         info->preBorrowQueueFamilyIndex = m_compositorQueueFamilyIndex;
         info->postBorrowLayout = RenderTexture::k_vkImageLayout;

@@ -1090,31 +1090,49 @@ EmulatedEglWindowSurfacePtr EmulationGl::getWindowSurface(HandleType surfaceHand
     return gfxstream::base::findOrDefault(mWindows, surfaceHandle).first;
 }
 
-bool EmulationGl::bindColorBufferToTexture(HandleType colorBufferHandle) {
-    IColorBufferRef cb = mGlobalState->findColorBuffer(colorBufferHandle);
-    if (!cb) return false;
-    cb->touch();
-    auto cbGl = cb->getColorBufferGl();
-    if (!cbGl) return false;
-    return cbGl->bindToTexture();
+bool EmulationGl::bindColorBufferToTexture(IColorBuffer* colorBuffer) {
+    if (!colorBuffer) {
+        GFXSTREAM_ERROR("Failed to bind to texture: invalid color buffer.");
+        return false;
+    }
+    colorBuffer->touch();
+
+    auto colorBufferGl = colorBuffer->getColorBufferGl();
+    if (!colorBufferGl) {
+        GFXSTREAM_ERROR("Failed to bind to texture: invalid color buffer gl.");
+        return false;
+    }
+    return colorBufferGl->bindToTexture();
 }
 
-bool EmulationGl::bindColorBufferToTexture2(HandleType colorBufferHandle) {
-    IColorBufferRef cb = mGlobalState->findColorBuffer(colorBufferHandle);
-    if (!cb) return false;
-    cb->touch();
-    auto cbGl = cb->getColorBufferGl();
-    if (!cbGl) return false;
-    return cbGl->bindToTexture2();
+bool EmulationGl::bindColorBufferToTexture2(IColorBuffer* colorBuffer) {
+    if (!colorBuffer) {
+        GFXSTREAM_ERROR("Failed to bind to texture: invalid color buffer.");
+        return false;
+    }
+    colorBuffer->touch();
+
+    auto colorBufferGl = colorBuffer->getColorBufferGl();
+    if (!colorBufferGl) {
+        GFXSTREAM_ERROR("Failed to bind to texture: invalid color buffer gl.");
+        return false;
+    }
+    return colorBufferGl->bindToTexture2();
 }
 
-bool EmulationGl::bindColorBufferToRenderbuffer(HandleType colorBufferHandle) {
-    IColorBufferRef cb = mGlobalState->findColorBuffer(colorBufferHandle);
-    if (!cb) return false;
-    cb->touch();
-    auto cbGl = cb->getColorBufferGl();
-    if (!cbGl) return false;
-    return cbGl->bindToRenderbuffer();
+bool EmulationGl::bindColorBufferToRenderbuffer(IColorBuffer* colorBuffer) {
+    if (!colorBuffer) {
+        GFXSTREAM_ERROR("Failed to bind to renderbuffer: invalid color buffer.");
+        return false;
+    }
+    colorBuffer->touch();
+
+    auto colorBufferGl = colorBuffer->getColorBufferGl();
+    if (!colorBufferGl) {
+        GFXSTREAM_ERROR("Failed to bind to renderbuffer: invalid color buffer gl.");
+        return false;
+    }
+    return colorBufferGl->bindToRenderbuffer();
 }
 
 bool EmulationGl::bindContext(HandleType contextHandle, HandleType drawSurfaceHandle,

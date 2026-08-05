@@ -1165,9 +1165,10 @@ CompositorVk::RenderTarget* CompositorVk::getOrCreateRenderTargetInfo(
     }
     VkRenderPass renderPass = renderPassIt->second;
 
-    auto* renderTarget = new RenderTarget(m_vk, m_vkDevice, imageInfo.image, imageInfo.imageView,
-                                          imageInfo.imageCreateInfo.extent.width,
-                                          imageInfo.imageCreateInfo.extent.height, renderPass);
+    auto* renderTarget =
+        new RenderTarget(m_vk, m_vkDevice, imageInfo.image, imageInfo.imageView,
+                         imageInfo.imageCreateInfoShallow.extent.width,
+                         imageInfo.imageCreateInfoShallow.extent.height, renderPass);
 
     m_renderTargetCache.set(imageInfo.id, std::unique_ptr<RenderTarget>(renderTarget));
 
@@ -1221,7 +1222,7 @@ void CompositorVk::buildCompositionVk(const CompositionRequestVk& compositionReq
             sourceImageHeight = targetHeight;
         } else if (layer.source) {
             sourceImage = layer.source;
-            if (!canCompositeFrom(sourceImage->imageCreateInfo)) {
+            if (!canCompositeFrom(sourceImage->imageCreateInfoShallow)) {
                 continue;
             }
 
@@ -1535,8 +1536,8 @@ CompositorVk::CompositionFinishedWaitable CompositorVk::compose(
                     },
                 .extent =
                     {
-                        .width = compositionVk.targetImage->imageCreateInfo.extent.width,
-                        .height = compositionVk.targetImage->imageCreateInfo.extent.height,
+                        .width = compositionVk.targetImage->imageCreateInfoShallow.extent.width,
+                        .height = compositionVk.targetImage->imageCreateInfoShallow.extent.height,
                     },
             },
         .clearValueCount = 1,
@@ -1557,15 +1558,16 @@ CompositorVk::CompositionFinishedWaitable CompositorVk::compose(
             },
         .extent =
             {
-                .width = compositionVk.targetImage->imageCreateInfo.extent.width,
-                .height = compositionVk.targetImage->imageCreateInfo.extent.height,
+                .width = compositionVk.targetImage->imageCreateInfoShallow.extent.width,
+                .height = compositionVk.targetImage->imageCreateInfoShallow.extent.height,
             },
     };
     const VkViewport viewport = {
         .x = 0.0f,
         .y = 0.0f,
-        .width = static_cast<float>(compositionVk.targetImage->imageCreateInfo.extent.width),
-        .height = static_cast<float>(compositionVk.targetImage->imageCreateInfo.extent.height),
+        .width = static_cast<float>(compositionVk.targetImage->imageCreateInfoShallow.extent.width),
+        .height =
+            static_cast<float>(compositionVk.targetImage->imageCreateInfoShallow.extent.height),
         .minDepth = 0.0f,
         .maxDepth = 1.0f,
     };

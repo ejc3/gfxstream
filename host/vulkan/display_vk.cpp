@@ -411,7 +411,7 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
         if (layer.rotationDegrees == 0 && !layer.colorTransform.has_value() &&
             hwc_rect_get_width(&layer.displayFrame) == 0 && !postCmd.colorTransform.has_value()) {
             const auto* sourceImageInfoVk = layer.info;
-            if (canPost(sourceImageInfoVk->imageCreateInfo)) {
+            if (canPost(sourceImageInfoVk->imageCreateInfoShallow)) {
                 useBlit = true;
             }
         }
@@ -586,10 +586,11 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
                                .mipLevel = 0,
                                .baseArrayLayer = 0,
                                .layerCount = 1},
-            .srcOffsets = {{0, 0, 0},
-                           {static_cast<int32_t>(sourceImageInfoVk->imageCreateInfo.extent.width),
-                            static_cast<int32_t>(sourceImageInfoVk->imageCreateInfo.extent.height),
-                            1}},
+            .srcOffsets =
+                {{0, 0, 0},
+                 {static_cast<int32_t>(sourceImageInfoVk->imageCreateInfoShallow.extent.width),
+                  static_cast<int32_t>(sourceImageInfoVk->imageCreateInfoShallow.extent.height),
+                  1}},
             .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                .mipLevel = 0,
                                .baseArrayLayer = 0,
@@ -598,8 +599,8 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
                            {static_cast<int32_t>(swapchainImageExtent.width),
                             static_cast<int32_t>(swapchainImageExtent.height), 1}},
         };
-        VkFormat displayBufferFormat = sourceImageInfoVk->imageCreateInfo.format;
-        VkImageTiling displayBufferTiling = sourceImageInfoVk->imageCreateInfo.tiling;
+        VkFormat displayBufferFormat = sourceImageInfoVk->imageCreateInfoShallow.format;
+        VkImageTiling displayBufferTiling = sourceImageInfoVk->imageCreateInfoShallow.tiling;
 
         VkFilter filter = VK_FILTER_NEAREST;
         VkFormatFeatureFlags displayBufferFormatFeatures =
