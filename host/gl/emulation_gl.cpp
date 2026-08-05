@@ -29,6 +29,8 @@
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/driver_info.h"
+#include "gfxstream/host/framework_formats.h"
+#include "gfxstream/host/gfxstream_format.h"
 #include "gfxstream/host/global_state.h"
 #include "gfxstream/host/renderer_operations.h"
 #include "gfxstream/host/stream_utils.h"
@@ -41,19 +43,29 @@
 
 namespace gfxstream {
 namespace host {
-std::optional<GfxstreamFormat> GetGfxstreamFormat(const FeatureSet& features,
-                                                  FrameworkFormat format);
-}
-}  // namespace gfxstream
-
-namespace gfxstream {
-namespace host {
 namespace gl {
 namespace {
 
-using gfxstream::host::GfxstreamFormat;
-using gfxstream::host::loadCollection;
-using gfxstream::host::saveCollection;
+std::optional<GfxstreamFormat> GetGfxstreamFormat(const FeatureSet& features,
+                                                  FrameworkFormat format) {
+    switch (format) {
+        case FRAMEWORK_FORMAT_NV12:
+            return GfxstreamFormat::NV12;
+        case FRAMEWORK_FORMAT_YV12:
+            return GfxstreamFormat::YV12;
+        case FRAMEWORK_FORMAT_P010:
+            return GfxstreamFormat::P010;
+        case FRAMEWORK_FORMAT_YUV_420_888: {
+            if (features.Yuv420888ToNv21.enabled()) {
+                return GfxstreamFormat::NV21;
+            } else {
+                return GfxstreamFormat::YV21;
+            }
+        }
+        default:
+            return std::nullopt;
+    }
+}
 
 template <class Collection>
 static void saveProcOwnedCollection(gfxstream::Stream* stream, const Collection& c) {
@@ -1514,8 +1526,7 @@ bool EmulationGl::platformDestroySharedEglContext(void* underlyingContext) {
 
 void EmulationGl::createYUVTextures(uint32_t type, uint32_t count, int width, int height,
                                     uint32_t* output) {
-    auto formatOpt =
-        gfxstream::host::GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
+    auto formatOpt = GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
     if (!formatOpt) {
         GFXSTREAM_ERROR("Unsupported framework format %d", type);
         return;
@@ -1551,8 +1562,7 @@ void EmulationGl::createYUVTextures(uint32_t type, uint32_t count, int width, in
 }
 
 void EmulationGl::destroyYUVTextures(uint32_t type, uint32_t count, uint32_t* textures) {
-    auto formatOpt =
-        gfxstream::host::GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
+    auto formatOpt = GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
     if (!formatOpt) {
         GFXSTREAM_ERROR("Unsupported framework format %d", type);
         return;
@@ -1568,8 +1578,7 @@ void EmulationGl::destroyYUVTextures(uint32_t type, uint32_t count, uint32_t* te
 }
 
 void EmulationGl::updateYUVTextures(uint32_t type, uint32_t* textures, void* privData, void* func) {
-    auto formatOpt =
-        gfxstream::host::GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
+    auto formatOpt = GetGfxstreamFormat(mFeatures, static_cast<FrameworkFormat>(type));
     if (!formatOpt) {
         GFXSTREAM_ERROR("Unsupported framework format %d", type);
         return;

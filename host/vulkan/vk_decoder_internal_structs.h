@@ -29,20 +29,20 @@
 #include <string>
 #include <unordered_map>
 
+#include "common/goldfish_vk_deepcopy.h"
 #include "debug_utils_helper.h"
 #include "device_op_tracker.h"
-#include "gfxstream/host/handle.h"
-#include "vk_emulated_physical_device_memory.h"
-#include "vk_emulated_physical_device_queue.h"
-#include "render-utils/stream.h"
+#include "emulated_textures/compressed_image_info.h"
 #include "gfxstream/common/logging.h"
+#include "gfxstream/host/handle.h"
 #include "gfxstream/memory/SharedMemory.h"
 #include "gfxstream/synchronization/ConditionVariable.h"
 #include "gfxstream/synchronization/Lock.h"
-#include "common/goldfish_vk_deepcopy.h"
-#include "vulkan/vk_android_native_buffer_operations.h"
-#include "vulkan/vk_format_utils.h"
-#include "vulkan/emulated_textures/compressed_image_info.h"
+#include "render-utils/stream.h"
+#include "vk_android_native_buffer_operations.h"
+#include "vk_emulated_physical_device_memory.h"
+#include "vk_emulated_physical_device_queue.h"
+#include "vk_format_utils.h"
 
 namespace gfxstream {
 namespace host {

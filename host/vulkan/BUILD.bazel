@@ -156,7 +156,6 @@ cc_library(
         "//common/logging:gfxstream_common_logging",
         "//common/utils:gfxstream_common_utils",
         "//host:gfxstream_backend_headers",
-        "//host:gfxstream_host_headers",
         "//host/common:gfxstream_host_common",
         "//host/compressed_textures:gfxstream_host_compressed_textures",
         "//host/decoder_common:gfxstream_host_decoder_common",
@@ -235,7 +234,6 @@ cc_test(
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
-        "//host:gfxstream_host_headers",
         "//host/testlibs/oswindow:gfxstream_oswindow_test_support",
         "//host/testlibs/support:gfxstream_host_testing_support",
         "@com_google_googletest//:gtest",
@@ -284,7 +282,6 @@ cc_test(
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
-        "//host:gfxstream_host_headers",
         "//host/features:gfxstream_host_features",
         "//host/testlibs/support:gfxstream_host_testing_support",
         "@com_google_googletest//:gtest",
@@ -301,7 +298,6 @@ cc_test(
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
-        "//host:gfxstream_host_headers",
         "//host/features:gfxstream_host_features",
         "//host/testlibs/support:gfxstream_host_testing_support",
         "//third_party/vulkan:gfxstream_vulkan_headers",

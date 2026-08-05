@@ -15,6 +15,7 @@ files_lib_host_common = files(
   'guest_operations.cpp',
   'hwc2.cpp',
   'mem_stream.cpp',
+  'post_worker.cpp',
   'renderer_operations.cpp',
   'stream_utils.cpp',
   'sync_device.cpp',

@@ -16,11 +16,11 @@
 #pragma once
 
 #include <array>
-#include <optional>
 #include <future>
+#include <optional>
 
 #include "gfxstream/host/display_surface_user.h"
-#include "host/post_worker.h"
+#include "gfxstream/host/post_worker.h"
 
 namespace gfxstream {
 namespace host {

@@ -35,6 +35,7 @@ files_lib_gl_server = files(
   'emulation_gl.cpp',
   'gles_version_detector.cpp',
   'pixel_read_formats.cpp',
+  'post_worker_gl.cpp',
   'readback_worker_gl.cpp',
   'render_thread_info_gl.cpp',
   'texture_draw.cpp',

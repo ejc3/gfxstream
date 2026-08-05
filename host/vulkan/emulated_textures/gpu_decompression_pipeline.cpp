@@ -14,15 +14,15 @@
 
 #include "gpu_decompression_pipeline.h"
 
+#include <vulkan/vk_enum_string_helper.h>
+
+#include "emulated_textures/shaders/decompression_shaders.h"
 #include "gfxstream/common/logging.h"
-#include "vulkan/vk_format_utils.h"
-#include "vulkan/emulated_textures/shaders/decompression_shaders.h"
-#include "vulkan/vk_enum_string_helper.h"
+#include "vk_format_utils.h"
 
 namespace gfxstream {
 namespace host {
 namespace vk {
-
 namespace {
 
 // Which GPU decoder we use for ASTC textures.

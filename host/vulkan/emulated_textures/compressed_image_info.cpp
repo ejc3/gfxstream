@@ -14,12 +14,12 @@
 
 #include "compressed_image_info.h"
 
+#include <vulkan/vk_enum_string_helper.h>
+
+#include "emulated_textures/shaders/decompression_shaders.h"
 #include "gfxstream/ArraySize.h"
 #include "gfxstream/common/logging.h"
-#include "vulkan/vk_format_utils.h"
-#include "vulkan/emulated_textures/shaders/decompression_shaders.h"
-#include "vulkan/vk_format_utils.h"
-#include "vulkan/vk_enum_string_helper.h"
+#include "vk_format_utils.h"
 
 namespace gfxstream {
 namespace host {

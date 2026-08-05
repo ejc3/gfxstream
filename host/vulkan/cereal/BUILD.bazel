@@ -54,7 +54,6 @@ cc_library(
     deps = [
         "//common/base:gfxstream_common_base",
         "//common/logging:gfxstream_common_logging",
-        "//host:gfxstream_host_headers",
         "//host/common:gfxstream_host_common",
         "//host/features:gfxstream_host_features",
         "//host/tracing:gfxstream_host_tracing",

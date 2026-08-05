@@ -38,7 +38,6 @@
 #include "common/goldfish_vk_marshaling.h"
 #include "common/goldfish_vk_reserved_marshaling.h"
 #include "common/goldfish_vk_transform.h"
-#include "frame_buffer.h"
 #include "gfxstream/BumpPool.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/iostream.h"

@@ -14,17 +14,18 @@
 
 #include "display_vk.h"
 
+#include <vulkan/vk_enum_string_helper.h>
+
 #include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "color_buffer_vk.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/system/System.h"
-#include "vulkan/color_buffer_vk.h"
-#include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vk_format_utils.h"
+#include "vk_format_utils.h"
 
 namespace gfxstream {
 namespace host {

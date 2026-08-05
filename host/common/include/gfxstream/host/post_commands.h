@@ -21,6 +21,7 @@
 #include <optional>
 #include <vector>
 
+#include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/host/gfxstream_format.h"
 #include "gfxstream/host/handle.h"
@@ -28,8 +29,6 @@
 
 namespace gfxstream {
 namespace host {
-
-class IColorBuffer;
 
 // Posting
 enum class PostCmd {
@@ -49,8 +48,7 @@ struct Post {
         // The block task won't stop until continueSignal is ready.
         std::future<void> continueSignal;
     };
-    using CompletionCallback =
-        std::function<void(std::shared_future<void> waitForGpu)>;
+    using CompletionCallback = std::function<void(std::shared_future<void> waitForGpu)>;
     PostCmd cmd;
     int composeVersion;
     std::vector<char> composeBuffer;
@@ -59,7 +57,7 @@ struct Post {
     HandleType cbHandle = 0;
     std::optional<std::array<float, 16>> colorTransform;
 
-    //TODO: remove union here and separate into message structures
+    // TODO: remove union here and separate into message structures
     union {
         IColorBuffer* cb;
         struct {

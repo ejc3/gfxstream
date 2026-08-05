@@ -34,8 +34,8 @@
 #include "gfxstream/host/hwc2.h"
 #include "gfxstream/synchronization/Lock.h"
 #include "goldfish_vk_dispatch.h"
-#include "vulkan/vk_format_support.h"
-#include "vulkan/vk_utils.h"
+#include "vk_format_support.h"
+#include "vk_utils.h"
 
 namespace gfxstream {
 namespace host {

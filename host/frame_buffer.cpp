@@ -303,27 +303,6 @@ static std::optional<std::array<float, 16>> GetColorTransform(uint32_t displayId
 
 }  // namespace
 
-std::optional<GfxstreamFormat> GetGfxstreamFormat(const gfxstream::host::FeatureSet& features,
-                                                  FrameworkFormat format) {
-    switch (format) {
-        case FRAMEWORK_FORMAT_NV12:
-            return GfxstreamFormat::NV12;
-        case FRAMEWORK_FORMAT_YV12:
-            return GfxstreamFormat::YV12;
-        case FRAMEWORK_FORMAT_P010:
-            return GfxstreamFormat::P010;
-        case FRAMEWORK_FORMAT_YUV_420_888: {
-            if (features.Yuv420888ToNv21.enabled()) {
-                return GfxstreamFormat::NV21;
-            } else {
-                return GfxstreamFormat::YV21;
-            }
-        }
-        default:
-            return std::nullopt;
-    }
-}
-
 static HandleType sNextHandle = 0;
 
 struct BufferRef {
