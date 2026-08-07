@@ -83,8 +83,11 @@ GFXSTREAM_HOST_DEFINES = GFXSTREAM_HOST_VK_DEFINES + [
     "//conditions:default": [],
 })
 
-GFXSTREAM_HOST_LINKOPTS = [
-    "-Wl,--warn-backrefs",
-    "-Wl,--warn-backrefs-exclude=*llvm*",
-    "-Wl,--fatal-warnings",
-]
+GFXSTREAM_HOST_LINKOPTS = select({
+    "@platforms//os:linux": [
+        "-Wl,--warn-backrefs",
+        "-Wl,--warn-backrefs-exclude=*llvm*",
+        "-Wl,--fatal-warnings",
+    ],
+    "//conditions:default": [],
+})

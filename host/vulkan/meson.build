@@ -103,7 +103,6 @@ lib_vulkan_server = static_library(
     lib_host_common,
     lib_host_compressed_textures,
     lib_host_features,
-    lib_host_iostream,
     lib_host_library,
     lib_host_native_window,
     lib_host_tracing,

@@ -13,37 +13,59 @@ on:
         type: string
         default: ''
 
+      # Which targets to build. Defaults to everything, but platforms that can
+      # not build the full target graph (e.g. macOS, which lacks the Linux-only
+      # mesa/libdrm/guest dependencies) can override this with a curated list.
+      build-targets:
+        type: string
+        default: '...'
+
       # Whether or not to run the `bazel test` step:
       run-tests:
         type: boolean
         default: true
+
+permissions:
+  contents: read
 
 jobs:
   presubmit_bazel_workflow:
     runs-on: ${{ inputs.runner }}
     steps:
     - name: Free disk space
-      uses: jlumbroso/free-disk-space@v1.3.1
+      if: runner.os == 'Linux'
+      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
       with:
         tool-cache: true
 
     - name: Checkout repository
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+      with:
+        # No step needs the token afterwards, so do not leave it
+        # behind in .git/config.
+        persist-credentials: false
 
-    - name: Install bazel
+    - name: Install bazel (Linux)
+      if: runner.os == 'Linux'
       run: sudo bash toolchain/bazel/install_bazel.sh
 
-    - name: Install toolchain dependencies
+    - name: Install toolchain dependencies (Linux)
+      if: runner.os == 'Linux'
       run: sudo bash toolchain/bazel/install_toolchain_dependencies.sh
 
-    - name: Install runtime dependencies
+    - name: Install runtime dependencies (Linux)
+      if: runner.os == 'Linux'
       run: sudo apt-get install -y libvulkan1
+
+    - name: Install bazel (macOS)
+      if: runner.os == 'macOS'
+      run: brew install bazelisk
 
     - name: Load cache config
       run: cat .config/cache-config.env >> $GITHUB_ENV
 
     - name: Mount Bazel cache
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
       with:
         path: "~/bazel-disk-cache"
         key: ${{ format('{0}-{1}-bazel-disk-cache-{2}-{3}-{4}-', runner.os, runner.arch, env.CACHE_VERSION, github.ref_name, github.sha) }}
@@ -53,15 +75,24 @@ jobs:
           ${{ format('{0}-{1}-bazel-disk-cache-{2}-', runner.os, runner.arch, env.CACHE_VERSION) || '' }}
 
     - name: Build
+      # Workflow inputs reach the script through the environment rather than
+      # being expanded into it, so that their contents can never be parsed as
+      # shell code. They are deliberately left unquoted below so that the shell
+      # still splits them into separate arguments.
+      env:
+        BUILD_TARGETS: ${{ inputs.build-targets }}
+        ADDITIONAL_BAZEL_ARGS: ${{ inputs.additional-bazel-args }}
       run: |
-        bazel build ... \
+        bazel build $BUILD_TARGETS \
           --disk_cache=$HOME/bazel-disk-cache \
           --graphics_drivers=gles_angle_vulkan_swiftshader \
           --verbose_failures \
-          ${{ inputs.additional-bazel-args }}
+          $ADDITIONAL_BAZEL_ARGS
 
     - name: Test
       if: ${{ inputs.run-tests }}
+      env:
+        ADDITIONAL_BAZEL_ARGS: ${{ inputs.additional-bazel-args }}
       run: |
         bazel test \
           --disk_cache=$HOME/bazel-disk-cache \
@@ -74,4 +105,4 @@ jobs:
           host/vulkan:vk_common_operations_tests \
           host/vulkan:vk_format_utils_tests \
           tests/end2end:gfxstream_end2end_tests \
-          ${{ inputs.additional-bazel-args }}
+          $ADDITIONAL_BAZEL_ARGS

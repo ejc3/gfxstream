@@ -18,7 +18,6 @@ endif()
 add_library(
     gfxstream_host_native_window
     STATIC
-    native_sub_window_stub.cpp
     ${gfxstream_host_native_window_platform_sources})
 
 target_include_directories(

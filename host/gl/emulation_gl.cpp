@@ -25,6 +25,7 @@
 #include "OpenGLESDispatch/OpenGLDispatchLoader.h"
 #include "common/gles_context.h"
 #include "display_surface_gl.h"
+#include "glestranslator/egl/egl_global_info.h"
 #include "gfxstream/ThreadAnnotations.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/color_buffer_interface.h"
