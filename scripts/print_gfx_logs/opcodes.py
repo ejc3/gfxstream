@@ -576,6 +576,13 @@ opcodes = {
     10062: "OP_rcCreateDisplayById",
     10063: "OP_rcSetDisplayPoseDpi",
     10064: "OP_rcReadColorBufferDMA",
+    10065: "OP_rcGetFBDisplayConfigsCount",
+    10066: "OP_rcGetFBDisplayConfigsParam",
+    10067: "OP_rcGetFBDisplayActiveConfig",
+    10068: "OP_rcSetProcessMetadata",
+    10069: "OP_rcGetHostExtensionsString",
+    10070: "OP_rcGetDisplayColorTransform",
+    10071: "OP_rcSetDisplayColorTransform",
 
     ###############################################################################################
     # GLES1 opcodes
