@@ -94,6 +94,8 @@ static const struct _renderControl_funcs_by_name {
 	{"rcGetHostExtensionsString", (void*)rcGetHostExtensionsString},
 	{"rcGetDisplayColorTransform", (void*)rcGetDisplayColorTransform},
 	{"rcSetDisplayColorTransform", (void*)rcSetDisplayColorTransform},
+	{"rcSetDisplayPowerMode", (void*)rcSetDisplayPowerMode},
+	{"rcGetDisplayPowerMode", (void*)rcGetDisplayPowerMode},
 };
 static const int renderControl_num_funcs = sizeof(renderControl_funcs_by_name) / sizeof(struct _renderControl_funcs_by_name);
 

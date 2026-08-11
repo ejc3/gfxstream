@@ -54,6 +54,11 @@ typedef int (*gfxstream_multi_display_set_color_transform_matrix_t)(uint32_t dis
 typedef int (*gfxstream_multi_display_get_color_transform_matrix_t)(uint32_t displayId,
                                                                      float outColorMatrix[16]);
 
+typedef int (*gfxstream_multi_display_get_display_power_mode_t)(uint32_t displayId,
+                                                                uint32_t* outPowerMode);
+typedef int (*gfxstream_multi_display_set_display_power_mode_t)(uint32_t displayId,
+                                                                uint32_t powerMode);
+
 typedef struct gfxstream_multi_display_ops {
     gfxstream_multi_display_is_multi_display_enabled_t is_multi_display_enabled;
     gfxstream_multi_display_is_multi_display_window_t is_multi_window;
@@ -78,4 +83,8 @@ typedef struct gfxstream_multi_display_ops {
 
     gfxstream_multi_display_get_color_transform_matrix_t get_color_transform_matrix;
     gfxstream_multi_display_set_color_transform_matrix_t set_color_transform_matrix;
+
+    gfxstream_multi_display_get_display_power_mode_t get_display_power_mode;
+    gfxstream_multi_display_set_display_power_mode_t set_display_power_mode;
 } gfxstream_multi_display_ops;
+

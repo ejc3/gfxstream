@@ -96,6 +96,8 @@ struct renderControl_server_context_t {
 	rcGetHostExtensionsString_server_proc_t rcGetHostExtensionsString;
 	rcGetDisplayColorTransform_server_proc_t rcGetDisplayColorTransform;
 	rcSetDisplayColorTransform_server_proc_t rcSetDisplayColorTransform;
+	rcSetDisplayPowerMode_server_proc_t rcSetDisplayPowerMode;
+	rcGetDisplayPowerMode_server_proc_t rcGetDisplayPowerMode;
 	virtual ~renderControl_server_context_t() {}
 	int initDispatchByName( void *(*getProc)(const char *name, void *userData), void *userData);
 };

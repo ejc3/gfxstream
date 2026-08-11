@@ -89,7 +89,9 @@
 #define OP_rcGetHostExtensionsString 					10069
 #define OP_rcGetDisplayColorTransform 					10070
 #define OP_rcSetDisplayColorTransform 					10071
-#define OP_last 					10072
+#define OP_rcSetDisplayPowerMode 					10072
+#define OP_rcGetDisplayPowerMode 					10073
+#define OP_last 					10074
 
 
 #endif
