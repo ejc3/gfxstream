@@ -70,3 +70,5 @@ GL_ENTRY(void, rcSetProcessMetadata, char* key, RenderControlByte* valuePtr, uin
 GL_ENTRY(int, rcGetHostExtensionsString, uint32_t bufferSize, void *buffer);
 GL_ENTRY(int, rcGetDisplayColorTransform, uint32_t displayId, mat4x4_ptr outColorTransformMatrix);
 GL_ENTRY(int, rcSetDisplayColorTransform, uint32_t displayId, const mat4x4_ptr colorTransformMatrix);
+GL_ENTRY(int, rcSetDisplayPowerMode, uint32_t displayId, uint32_t mode);
+GL_ENTRY(int, rcGetDisplayPowerMode, uint32_t displayId, uint32_t* mode);

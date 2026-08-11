@@ -36,6 +36,15 @@ struct DisplayColorTransform {
     DisplayColorTransform() : mat{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1} {}
 };
 
+// Must match ComposerClient::PowerMode
+enum class PowerMode : uint32_t {
+    OFF = 0,
+    DOZE = 1,
+    ON = 2,
+    DOZE_SUSPEND = 3,
+    ON_SUSPEND = 4,
+};
+
 struct DisplayInfo {
     int32_t pos_x = 0 ;
     int32_t pos_y = 0;
@@ -49,6 +58,7 @@ struct DisplayInfo {
     int32_t rotation = 0;
     bool enabled = false;
     DisplayColorTransform colorTransform;
+    PowerMode powerMode = PowerMode::ON;
 };
 
 std::map<uint32_t, DisplayInfo> sDisplayInfos;
@@ -292,6 +302,30 @@ int DefaultGfxstreamWindowSetColorTransform(uint32_t id, const float colorMatrix
     return 0;
 }
 
+int DefaultGfxstreamMultiDisplayGetDisplayPowerMode(uint32_t id, uint32_t* powerMode) {
+    auto it = sDisplayInfos.find(id);
+    if (it == sDisplayInfos.end()) {
+        GFXSTREAM_ERROR("Failed to get display power mode: cannot find display %d", id);
+        return -1;
+    }
+    const DisplayInfo& info = it->second;
+    if (powerMode) {
+        *powerMode = static_cast<uint32_t>(info.powerMode);
+    }
+    return 0;
+}
+
+int DefaultGfxstreamMultiDisplaySetDisplayPowerMode(uint32_t id, uint32_t powerMode) {
+    auto it = sDisplayInfos.find(id);
+    if (it == sDisplayInfos.end()) {
+        GFXSTREAM_ERROR("Failed to set display power mode: cannot find display %d", id);
+        return -1;
+    }
+    DisplayInfo& info = it->second;
+    info.powerMode = static_cast<PowerMode>(powerMode);
+    return 0;
+}
+
 gfxstream_multi_display_ops sGfxstreamMultiDisplayOps = {
     .is_multi_display_enabled = DefaultGfxstreamMultiDisplayIsMultiDisplayEnabled,
     .is_multi_window = DefaultGfxstreamMultiDisplayIsMultiDisplayWindow,
@@ -308,6 +342,8 @@ gfxstream_multi_display_ops sGfxstreamMultiDisplayOps = {
     .set_display_pose = DefaultGfxstreamMultiDisplaySetDisplayPose,
     .get_color_transform_matrix = DefaultGfxstreamWindowGetColorTransform,
     .set_color_transform_matrix = DefaultGfxstreamWindowSetColorTransform,
+    .get_display_power_mode = DefaultGfxstreamMultiDisplayGetDisplayPowerMode,
+    .set_display_power_mode = DefaultGfxstreamMultiDisplaySetDisplayPowerMode,
 };
 
 }  // namespace

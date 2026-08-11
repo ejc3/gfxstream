@@ -1387,6 +1387,27 @@ static int rcSetDisplayColorTransform(uint32_t displayId, const mat4x4_ptr color
     return fb->setDisplayColorTransform(displayId, reinterpret_cast<const float*>(colorTransform));
 }
 
+static int rcGetDisplayPowerMode(uint32_t displayId, uint32_t* mode) {
+    FrameBuffer* fb = FrameBuffer::getFB();
+    if (!fb) {
+        GFXSTREAM_WARNING("%s: framebuffer cannot be found!", __func__);
+        return -1;
+    }
+
+    return fb->getDisplayPowerMode(displayId, mode);
+}
+
+static int rcSetDisplayPowerMode(uint32_t displayId, uint32_t mode) {
+    FrameBuffer* fb = FrameBuffer::getFB();
+    if (!fb) {
+        GFXSTREAM_WARNING("%s: framebuffer cannot be found!", __func__);
+        return -1;
+    }
+
+    return fb->setDisplayPowerMode(displayId, mode);
+}
+
+
 static int rcSetDisplayPoseDpi(uint32_t displayId,
                                int32_t x,
                                int32_t y,
@@ -1696,6 +1717,8 @@ void initRenderControlContext(renderControl_decoder_context_t *dec)
     dec->rcGetFBDisplayActiveConfig = rcGetFBDisplayActiveConfig;
     dec->rcSetProcessMetadata = rcSetProcessMetadata;
     dec->rcGetHostExtensionsString = rcGetHostExtensionsString;
+    dec->rcSetDisplayPowerMode = rcSetDisplayPowerMode;
+    dec->rcGetDisplayPowerMode = rcGetDisplayPowerMode;
 }
 
 }  // namespace host

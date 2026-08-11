@@ -131,3 +131,7 @@ rcGetDisplayColorTransform
 
 rcSetDisplayColorTransform
     flag server_add_size_param_for_buffers
+
+rcGetDisplayPowerMode
+    dir mode out
+    len mode sizeof(uint32_t)

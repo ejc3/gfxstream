@@ -96,6 +96,8 @@ int renderControl_client_context_t::initDispatchByName(void *(*getProc)(const ch
 	rcGetHostExtensionsString = (rcGetHostExtensionsString_client_proc_t) getProc("rcGetHostExtensionsString", userData);
 	rcGetDisplayColorTransform = (rcGetDisplayColorTransform_client_proc_t) getProc("rcGetDisplayColorTransform", userData);
 	rcSetDisplayColorTransform = (rcSetDisplayColorTransform_client_proc_t) getProc("rcSetDisplayColorTransform", userData);
+	rcSetDisplayPowerMode = (rcSetDisplayPowerMode_client_proc_t) getProc("rcSetDisplayPowerMode", userData);
+	rcGetDisplayPowerMode = (rcGetDisplayPowerMode_client_proc_t) getProc("rcGetDisplayPowerMode", userData);
 	return 0;
 }
 

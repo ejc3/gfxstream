@@ -583,6 +583,8 @@ opcodes = {
     10069: "OP_rcGetHostExtensionsString",
     10070: "OP_rcGetDisplayColorTransform",
     10071: "OP_rcSetDisplayColorTransform",
+    10072: "OP_rcSetDisplayPowerMode",
+    10073: "OP_rcGetDisplayPowerMode",
 
     ###############################################################################################
     # GLES1 opcodes

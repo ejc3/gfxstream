@@ -2874,6 +2874,93 @@ int rcSetDisplayColorTransform_enc(void *self , uint32_t displayId, const mat4x4
 	return retval;
 }
 
+int rcSetDisplayPowerMode_enc(void *self , uint32_t displayId, uint32_t mode)
+{
+	ENCODER_DEBUG_LOG("rcSetDisplayPowerMode(displayId:0x%08x, mode:0x%08x)", displayId, mode);
+	AEMU_SCOPED_TRACE("rcSetDisplayPowerMode encode");
+
+	renderControl_encoder_context_t *ctx = (renderControl_encoder_context_t *)self;
+	IOStream *stream = ctx->m_stream;
+	gfxstream::guest::ChecksumCalculator *checksumCalculator = ctx->m_checksumCalculator;
+	bool useChecksum = checksumCalculator->getVersion() > 0;
+
+	 unsigned char *ptr;
+	 unsigned char *buf;
+	 const size_t sizeWithoutChecksum = 8 + 4 + 4;
+	 const size_t checksumSize = checksumCalculator->checksumByteSize();
+	 const size_t totalSize = sizeWithoutChecksum + checksumSize;
+	buf = stream->alloc(totalSize);
+	ptr = buf;
+	int tmp = OP_rcSetDisplayPowerMode;memcpy(ptr, &tmp, 4); ptr += 4;
+	memcpy(ptr, &totalSize, 4);  ptr += 4;
+
+		memcpy(ptr, &displayId, 4); ptr += 4;
+		memcpy(ptr, &mode, 4); ptr += 4;
+
+	if (useChecksum) checksumCalculator->addBuffer(buf, ptr-buf);
+	if (useChecksum) checksumCalculator->writeChecksum(ptr, checksumSize); ptr += checksumSize;
+
+
+	int retval;
+	stream->readback(&retval, 4);
+	if (useChecksum) checksumCalculator->addBuffer(&retval, 4);
+	if (useChecksum) {
+		unsigned char *checksumBufPtr = NULL;
+		unsigned char checksumBuf[gfxstream::guest::ChecksumCalculator::kMaxChecksumSize];
+		if (checksumSize > 0) checksumBufPtr = &checksumBuf[0];
+		stream->readback(checksumBufPtr, checksumSize);
+		if (!checksumCalculator->validate(checksumBufPtr, checksumSize)) {
+			GFXSTREAM_FATAL("rcSetDisplayPowerMode: GL communication error, please report this issue to b.android.com.\n");
+		}
+	}
+	return retval;
+}
+
+int rcGetDisplayPowerMode_enc(void *self , uint32_t displayId, uint32_t* mode)
+{
+	ENCODER_DEBUG_LOG("rcGetDisplayPowerMode(displayId:0x%08x, mode:0x%08x)", displayId, mode);
+	AEMU_SCOPED_TRACE("rcGetDisplayPowerMode encode");
+
+	renderControl_encoder_context_t *ctx = (renderControl_encoder_context_t *)self;
+	IOStream *stream = ctx->m_stream;
+	gfxstream::guest::ChecksumCalculator *checksumCalculator = ctx->m_checksumCalculator;
+	bool useChecksum = checksumCalculator->getVersion() > 0;
+
+	const unsigned int __size_mode =  sizeof(uint32_t);
+	 unsigned char *ptr;
+	 unsigned char *buf;
+	 const size_t sizeWithoutChecksum = 8 + 4 + 0 + 1*4;
+	 const size_t checksumSize = checksumCalculator->checksumByteSize();
+	 const size_t totalSize = sizeWithoutChecksum + checksumSize;
+	buf = stream->alloc(totalSize);
+	ptr = buf;
+	int tmp = OP_rcGetDisplayPowerMode;memcpy(ptr, &tmp, 4); ptr += 4;
+	memcpy(ptr, &totalSize, 4);  ptr += 4;
+
+		memcpy(ptr, &displayId, 4); ptr += 4;
+	memcpy(ptr, &__size_mode, 4); ptr += 4;
+
+	if (useChecksum) checksumCalculator->addBuffer(buf, ptr-buf);
+	if (useChecksum) checksumCalculator->writeChecksum(ptr, checksumSize); ptr += checksumSize;
+
+	stream->readback(mode, __size_mode);
+	if (useChecksum) checksumCalculator->addBuffer(mode, __size_mode);
+
+	int retval;
+	stream->readback(&retval, 4);
+	if (useChecksum) checksumCalculator->addBuffer(&retval, 4);
+	if (useChecksum) {
+		unsigned char *checksumBufPtr = NULL;
+		unsigned char checksumBuf[gfxstream::guest::ChecksumCalculator::kMaxChecksumSize];
+		if (checksumSize > 0) checksumBufPtr = &checksumBuf[0];
+		stream->readback(checksumBufPtr, checksumSize);
+		if (!checksumCalculator->validate(checksumBufPtr, checksumSize)) {
+			GFXSTREAM_FATAL("rcGetDisplayPowerMode: GL communication error, please report this issue to b.android.com.\n");
+		}
+	}
+	return retval;
+}
+
 }  // namespace
 
 renderControl_encoder_context_t::renderControl_encoder_context_t(IOStream *stream, ChecksumCalculator *checksumCalculator)
@@ -2953,5 +3040,7 @@ renderControl_encoder_context_t::renderControl_encoder_context_t(IOStream *strea
 	this->rcGetHostExtensionsString = &rcGetHostExtensionsString_enc;
 	this->rcGetDisplayColorTransform = &rcGetDisplayColorTransform_enc;
 	this->rcSetDisplayColorTransform = &rcSetDisplayColorTransform_enc;
+	this->rcSetDisplayPowerMode = &rcSetDisplayPowerMode_enc;
+	this->rcGetDisplayPowerMode = &rcGetDisplayPowerMode_enc;
 }
 

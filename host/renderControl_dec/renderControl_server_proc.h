@@ -98,6 +98,8 @@ typedef void (renderControl_APIENTRY *rcSetProcessMetadata_server_proc_t) (char*
 typedef int (renderControl_APIENTRY *rcGetHostExtensionsString_server_proc_t) (uint32_t, void*);
 typedef int (renderControl_APIENTRY *rcGetDisplayColorTransform_server_proc_t) (uint32_t, mat4x4_ptr, uint32_t);
 typedef int (renderControl_APIENTRY *rcSetDisplayColorTransform_server_proc_t) (uint32_t, const mat4x4_ptr, uint32_t);
+typedef int (renderControl_APIENTRY *rcSetDisplayPowerMode_server_proc_t) (uint32_t, uint32_t);
+typedef int (renderControl_APIENTRY *rcGetDisplayPowerMode_server_proc_t) (uint32_t, uint32_t*);
 
 
 #endif

@@ -1566,6 +1566,53 @@ size_t renderControl_decoder_context_t::decode(void *buf, size_t len, IOStream *
 			gfxstream::base::endTrace();
 			break;
 		}
+		case OP_rcSetDisplayPowerMode: {
+			gfxstream::base::beginTrace("rcSetDisplayPowerMode decode");
+			uint32_t var_displayId = Unpack<uint32_t,uint32_t>(ptr + 8);
+			uint32_t var_mode = Unpack<uint32_t,uint32_t>(ptr + 8 + 4);
+			if (useChecksum) {
+				ChecksumCalculatorThreadInfo::validOrDie(checksumCalc, ptr, 8 + 4 + 4, ptr + 8 + 4 + 4, checksumSize,
+					"renderControl_decoder_context_t::decode, OP_rcSetDisplayPowerMode: GL checksumCalculator failure\n");
+			}
+			size_t totalTmpSize = sizeof(int);
+			totalTmpSize += checksumSize;
+			unsigned char *tmpBuf = stream->alloc(totalTmpSize);
+			DECODER_DEBUG_LOG("renderControl(%p): rcSetDisplayPowerMode(displayId:0x%08x mode:0x%08x )", stream, var_displayId, var_mode);
+			int function_call_retval = 			this->rcSetDisplayPowerMode(var_displayId, var_mode);
+			std::memcpy(&tmpBuf[0], &function_call_retval, sizeof(int));
+			if (useChecksum) {
+				ChecksumCalculatorThreadInfo::writeChecksum(checksumCalc, &tmpBuf[0], totalTmpSize - checksumSize, &tmpBuf[totalTmpSize - checksumSize], checksumSize);
+			}
+			stream->flush();
+			SET_LASTCALL("rcSetDisplayPowerMode");
+			gfxstream::base::endTrace();
+			break;
+		}
+		case OP_rcGetDisplayPowerMode: {
+			gfxstream::base::beginTrace("rcGetDisplayPowerMode decode");
+			uint32_t var_displayId = Unpack<uint32_t,uint32_t>(ptr + 8);
+			uint32_t size_mode __attribute__((unused)) = Unpack<uint32_t,uint32_t>(ptr + 8 + 4);
+			if (useChecksum) {
+				ChecksumCalculatorThreadInfo::validOrDie(checksumCalc, ptr, 8 + 4 + 4, ptr + 8 + 4 + 4, checksumSize,
+					"renderControl_decoder_context_t::decode, OP_rcGetDisplayPowerMode: GL checksumCalculator failure\n");
+			}
+			size_t totalTmpSize = size_mode;
+			totalTmpSize += sizeof(int);
+			totalTmpSize += checksumSize;
+			unsigned char *tmpBuf = stream->alloc(totalTmpSize);
+			OutputBuffer outptr_mode(&tmpBuf[0], size_mode);
+			DECODER_DEBUG_LOG("renderControl(%p): rcGetDisplayPowerMode(displayId:0x%08x mode:%p(%u) )", stream, var_displayId, (uint32_t*)(outptr_mode.get()), size_mode);
+			int function_call_retval = 			this->rcGetDisplayPowerMode(var_displayId, (uint32_t*)(outptr_mode.get()));
+			std::memcpy(&tmpBuf[0 + size_mode], &function_call_retval, sizeof(int));
+			outptr_mode.flush();
+			if (useChecksum) {
+				ChecksumCalculatorThreadInfo::writeChecksum(checksumCalc, &tmpBuf[0], totalTmpSize - checksumSize, &tmpBuf[totalTmpSize - checksumSize], checksumSize);
+			}
+			stream->flush();
+			SET_LASTCALL("rcGetDisplayPowerMode");
+			gfxstream::base::endTrace();
+			break;
+		}
 		default:
 			return ptr - (unsigned char*)buf;
 		} //switch
