@@ -53,6 +53,7 @@ class ExtendedRCEncoderContext : public renderControl_encoder_context_t {
     bool hasSyncBufferData() const { return m_featureInfo.hasSyncBufferData; }
     bool hasHWCMultiConfigs() const { return m_featureInfo.hasHWCMultiConfigs; }
     bool hasHWCColorTransform() const { return m_featureInfo.hasHWCColorTransform; }
+    bool hasHWCDisplayPowerMode() const { return m_featureInfo.hasHWCDisplayPowerMode; }
     void bindDmaDirectly(void* dmaPtr, uint64_t dmaPhysAddr) {
         m_dmaPtr = dmaPtr;
         m_dmaPhysAddr = dmaPhysAddr;
@@ -97,6 +98,7 @@ class ExtendedRCEncoderContext : public renderControl_encoder_context_t {
     void queryAndSetReadColorBufferDma();
     void queryAndSetHWCMultiConfigs();
     void queryAndSetHWCColorTransform();
+    void queryAndSetHWCPowerDisplayModeSupport();
     void queryAndSetVulkanAuxCommandBufferMemory();
     GLint queryVersion();
     void setVulkanFeatureInfo(void* info);

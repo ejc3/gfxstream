@@ -353,6 +353,7 @@ ExtendedRCEncoderContext *HostConnection::rcEncoder()
         rcEnc->queryAndSetReadColorBufferDma();
         rcEnc->queryAndSetHWCMultiConfigs();
         rcEnc->queryAndSetHWCColorTransform();
+        rcEnc->queryAndSetHWCPowerDisplayModeSupport();
         rcEnc->queryAndSetVulkanAuxCommandBufferMemory();
         rcEnc->queryVersion();
 

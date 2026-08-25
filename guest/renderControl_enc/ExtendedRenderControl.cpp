@@ -292,6 +292,13 @@ void ExtendedRCEncoderContext::queryAndSetHWCColorTransform() {
     }
 }
 
+void ExtendedRCEncoderContext::queryAndSetHWCPowerDisplayModeSupport() {
+    std::string hostExtensions = queryHostExtensions();
+    if (hostExtensions.find(kHWCDisplayPowerMode) != std::string::npos) {
+        this->featureInfo()->hasHWCDisplayPowerMode = true;
+    }
+}
+
 void ExtendedRCEncoderContext::queryAndSetVulkanAuxCommandBufferMemory() {
     std::string hostExtensions = queryHostExtensions();
     this->featureInfo()->hasVulkanAuxCommandMemory =
