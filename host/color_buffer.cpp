@@ -494,6 +494,8 @@ std::shared_ptr<ColorBuffer> ColorBuffer::onLoad(gl::EmulationGl* emulationGl,
     return colorbuffer;
 }
 
+ColorBuffer::~ColorBuffer() = default;
+
 void ColorBuffer::onSave(gfxstream::Stream* stream) { mImpl->onSave(stream); }
 
 void ColorBuffer::restore() { mImpl->touch(); }
