@@ -8291,7 +8291,7 @@ VULKAN_HPP_EXPORT namespace VULKAN_HPP_NAMESPACE
       void destroy( T t ) VULKAN_HPP_NOEXCEPT
       {
         VULKAN_HPP_ASSERT( m_owner && m_dispatch );
-        ( m_owner.free )( t, m_allocationCallbacks, *m_dispatch );
+        (void)( m_owner.free )( t, m_allocationCallbacks, *m_dispatch );
       }
 
     private:
@@ -8367,7 +8367,7 @@ VULKAN_HPP_EXPORT namespace VULKAN_HPP_NAMESPACE
       template <typename T>
       void destroy( T t ) VULKAN_HPP_NOEXCEPT
       {
-        ( m_owner.free )( m_pool, t, *m_dispatch );
+        (void)( m_owner.free )( m_pool, t, *m_dispatch );
       }
 
     private:
