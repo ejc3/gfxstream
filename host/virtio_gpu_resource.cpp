@@ -976,11 +976,9 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
         if (snapshotDescriptorInfo.has_context_id()) {
             auto memoryMappingOpt = ExternalObjectManager::get()->removeMapping(
                 snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
-            if (!memoryMappingOpt) {
-                GFXSTREAM_ERROR("Failed to restore resource: failed to find mapping info.");
-                return std::nullopt;
+            if (memoryMappingOpt) {
+                resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
             }
-            resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
         }
     }
 
