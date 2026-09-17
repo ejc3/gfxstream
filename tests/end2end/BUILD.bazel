@@ -28,6 +28,8 @@ copy_to_directory(
         "//guest/rendercontrol:gfxstream_guest_rendercontrol",
         "@mesa//:mesa_gfxstream_guest_vulkan",
         "@rutabaga//:rutabaga_gfx_kumquat_server",
+        "@vulkan_validation_layers//:VkLayer_khronos_validation",
+        "@vulkan_validation_layers//:VkLayer_khronos_validation_json",
     ],
     include_external_repositories = ["*"],
     # Effectively, all of the "prefixes" to flatten.
@@ -56,6 +58,7 @@ cc_test(
         "gfxstream_end2end_tests.cpp",
         "gfxstream_end2end_tests.h",
         "gfxstream_end2end_vk_tests.cpp",
+        "gfxstream_end2end_vvl_tests.cpp",
         "kumquat_instance.cpp",
         "kumquat_instance.h",
         "test_data_utils.cpp",
