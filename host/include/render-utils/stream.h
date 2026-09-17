@@ -14,7 +14,11 @@
 
 #pragma once
 
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
+#include <inttypes.h>
+#include <optional>
 #include <string>
 #include <string.h>
 
@@ -48,9 +52,24 @@ class Stream {
     // error.
     virtual ssize_t write(const void* buffer, size_t size) = 0;
 
+    // Error handling interface.
+    virtual bool hasErrors() const = 0;
+    virtual const std::optional<std::string>& getErrors() const = 0;
+    virtual void addErrorV(const char* fmt, va_list args) const = 0;
+
+    void addError(const char* fmt, ...) const {
+        va_list args;
+        va_start(args, fmt);
+        addErrorV(fmt, args);
+        va_end(args);
+    }
+
     // Write a single byte |value| into the stream. Ignore errors.
     void putByte(uint8_t value) {
-        write(&value, 1U);
+        ssize_t ret = write(&value, 1U);
+        if (ret != 1) {
+            addError("%s: expected 1, got %zd", __func__, ret);
+        }
     }
 
     // Write a 16-bit |value| as big-endian into the stream. Ignore errors.
@@ -59,7 +78,10 @@ class Stream {
             (uint8_t)(value >> 8),
             (uint8_t) value
         };
-        write(b, 2U);
+        ssize_t ret = write(b, 2U);
+        if (ret != 2) {
+            addError("%s: expected 2, got %zd", __func__, ret);
+        }
     }
 
     // Write a 32-bit |value| as big-endian into the stream. Ignore errors.
@@ -70,7 +92,10 @@ class Stream {
             (uint8_t)(value >> 8),
             (uint8_t) value,
         };
-        write(b, 4U);
+        ssize_t ret = write(b, 4U);
+        if (ret != 4) {
+            addError("%s: expected 4, got %zd", __func__, ret);
+        }
     }
 
     // Write a 64-bit |value| as big-endian into the stream. Ignore errors.
@@ -85,13 +110,19 @@ class Stream {
             (uint8_t)(value >> 8),
             (uint8_t )value,
         };
-        write(b, 8U);
+        ssize_t ret = write(b, 8U);
+        if (ret != 8) {
+            addError("%s: expected 8, got %zd", __func__, ret);
+        }
     }
 
     // Read a single byte from the stream. Return 0 on error.
     uint8_t getByte() {
         uint8_t value[1] = { 0 };
-        read(value, 1U);
+        ssize_t ret = read(value, 1U);
+        if (ret != 1) {
+            addError("%s: expected 1, got %zd", __func__, ret);
+        }
         return value[0];
     }
 
@@ -99,34 +130,46 @@ class Stream {
     // Return 0 on error.
     uint16_t getBe16() {
         uint8_t b[2] = { 0, 0 };
-        read(b, 2U);
-        return ((uint16_t)b[0] << 8) | (uint16_t)b[1];
+        ssize_t ret = read(b, 2U);
+        uint16_t v = ((uint16_t)b[0] << 8) | (uint16_t)b[1];
+        if (ret != 2) {
+            addError("%s: expected 2, got %zd", __func__, ret);
+        }
+        return v;
     }
 
     // Read a single big-endian 32-bit value from the stream.
     // Return 0 on error.
     uint32_t getBe32() {
         uint8_t b[4] = { 0, 0, 0, 0 };
-        read(b, 4U);
-        return ((uint32_t)b[0] << 24) |
-               ((uint32_t)b[1] << 16) |
-               ((uint32_t)b[2] << 8) |
-                (uint32_t)b[3];
+        ssize_t ret = read(b, 4U);
+        uint32_t v = ((uint32_t)b[0] << 24) |
+                     ((uint32_t)b[1] << 16) |
+                     ((uint32_t)b[2] << 8) |
+                      (uint32_t)b[3];
+        if (ret != 4) {
+            addError("%s: expected 4, got %zd", __func__, ret);
+        }
+        return v;
     }
 
     // Read a single big-endian 64-bit value from the stream.
     // Return 0 on error.
     uint64_t getBe64() {
         uint8_t b[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
-        read(b, 8U);
-        return ((uint64_t)b[0] << 56) |
-               ((uint64_t)b[1] << 48) |
-               ((uint64_t)b[2] << 40) |
-               ((uint64_t)b[3] << 32) |
-               ((uint64_t)b[4] << 24) |
-               ((uint64_t)b[5] << 16) |
-               ((uint64_t)b[6] << 8) |
-                (uint64_t)b[7];
+        ssize_t ret = read(b, 8U);
+        uint64_t v = ((uint64_t)b[0] << 56) |
+                     ((uint64_t)b[1] << 48) |
+                     ((uint64_t)b[2] << 40) |
+                     ((uint64_t)b[3] << 32) |
+                     ((uint64_t)b[4] << 24) |
+                     ((uint64_t)b[5] << 16) |
+                     ((uint64_t)b[6] << 8) |
+                      (uint64_t)b[7];
+        if (ret != 8) {
+            addError("%s: expected 8, got %zd", __func__, ret);
+        }
+        return v;
     }
 
     // Write a 32-bit float |value| to the stream.
@@ -136,7 +179,10 @@ class Stream {
             uint8_t bytes[sizeof(float)];
         } u;
         u.f = v;
-        this->write(u.bytes, sizeof(u.bytes));
+        ssize_t ret = this->write(u.bytes, sizeof(u.bytes));
+        if (ret != sizeof(float)) {
+            addError("%s: expected %zu, got %zd", __func__, sizeof(float), ret);
+        }
     }
 
     // Read a single 32-bit float value from the stream.
@@ -145,7 +191,10 @@ class Stream {
             float f;
             uint8_t bytes[sizeof(float)];
         } u;
-        this->read(u.bytes, sizeof(u.bytes));
+        ssize_t ret = this->read(u.bytes, sizeof(u.bytes));
+        if (ret != sizeof(float)) {
+            addError("%s: expected %zu, got %zd", __func__, sizeof(float), ret);
+        }
         return u.f;
     }
 
@@ -153,12 +202,15 @@ class Stream {
     // Ignore errors.
     void putString(const char* str, size_t len) {
         this->putBe32(len);
-        this->write(str, len);
+        ssize_t ret = this->write(str, len);
+        if (ret != static_cast<ssize_t>(len)) {
+            addError("%s: expected %zu, got %zd", __func__, len, ret);
+        }
     }
 
     // Write a 0-terminated C string |str| into the stream. Ignore error.
     void putString(const char* str) {
-        putString(str, strlen(str));
+        putString(str, str ? strlen(str) : 0);
     }
 
     void putString(const std::string& str) {
@@ -173,7 +225,9 @@ class Stream {
         size_t len = this->getBe32();
         if (len > 0) {
             result.resize(len);
-            if (this->read(&result[0], len) != static_cast<ssize_t>(len)) {
+            ssize_t ret = this->read(&result[0], len);
+            if (ret != static_cast<ssize_t>(len)) {
+                addError("%s: expected %zu, got %zd", __func__, len, ret);
                 result.clear();
             }
         }
@@ -276,6 +330,43 @@ class Stream {
              (uint64_t)b[7];
         memcpy(v, &value, sizeof(uint64_t));
     }
+};
+
+// Mix-in class that implements the error logging interface for Stream.
+class StreamWithErrorLogger : public Stream {
+   public:
+    bool hasErrors() const override { return mError.has_value(); }
+    const std::optional<std::string>& getErrors() const override { return mError; }
+
+    void addErrorV(const char* fmt, va_list args) const override {
+        char stackBuf[256];
+        va_list argsCopy;
+        va_copy(argsCopy, args);
+        int len = vsnprintf(stackBuf, sizeof(stackBuf), fmt, argsCopy);
+        va_end(argsCopy);
+
+        if (len < 0) {
+            return;
+        }
+
+        if (!mError.has_value()) {
+            mError.emplace();
+        } else if (!mError->empty()) {
+            mError->push_back('\n');
+        }
+
+        if (static_cast<size_t>(len) < sizeof(stackBuf)) {
+            mError->append(stackBuf, static_cast<size_t>(len));
+        } else {
+            size_t oldSize = mError->size();
+            mError->resize(oldSize + len + 1);
+            vsnprintf(mError->data() + oldSize, len + 1, fmt, args);
+            mError->resize(oldSize + len);
+        }
+    }
+
+   protected:  // mutable, to support logging within 'const' functions
+    mutable std::optional<std::string> mError;
 };
 
 }  // namespace gfxstream

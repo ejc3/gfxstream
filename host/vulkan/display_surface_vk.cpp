@@ -18,7 +18,7 @@
 #if defined(VK_USE_PLATFORM_XCB_KHR)
 #include "gfxstream/host/X11Support.h"
 #endif
-#include "native_sub_window.h"
+#include "gfxstream/host/native_sub_window.h"
 #include "vk_utils.h"
 
 namespace gfxstream {

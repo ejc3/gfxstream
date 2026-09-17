@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <GLES2/gl2.h>
+#pragma once
+
+#include <vulkan/vulkan.h>
 
 #include <memory>
 #include <vector>
 
-#include "gfxstream/host/borrowed_image.h"
 #include "gfxstream/host/external_object_manager.h"
 #include "gfxstream/host/gfxstream_format.h"
 #include "render-utils/Renderer.h"
@@ -39,6 +40,20 @@ enum class LoadImageBehavior {
 
 class VkEmulation;
 
+struct ColorBufferVkImageInfo {
+    uint32_t id = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView imageView = VK_NULL_HANDLE;
+    VkImageCreateInfo imageCreateInfoShallow = {};
+    GfxstreamFormat imageFormat = GfxstreamFormat::UNKNOWN;
+    VkImageLayout preBorrowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    uint32_t preBorrowQueueFamilyIndex = 0;
+    VkImageLayout postBorrowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    uint32_t postBorrowQueueFamilyIndex = 0;
+};
+
 class ColorBufferVk {
    public:
     static std::unique_ptr<ColorBufferVk> create(VkEmulation& emulationVk, uint32_t handle,
@@ -58,11 +73,11 @@ class ColorBufferVk {
     bool updateFromBytes(const std::vector<uint8_t>& bytes);
     bool updateFromBytes(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void* bytes);
 
-    std::unique_ptr<BorrowedImageInfo> borrowForComposition(bool colorBufferIsTarget);
-    std::unique_ptr<BorrowedImageInfo> borrowForDisplay();
+    std::unique_ptr<ColorBufferVkImageInfo> prepareForComposition(bool colorBufferIsTarget);
+    std::unique_ptr<ColorBufferVkImageInfo> prepareForDisplay();
 
-    void onLoad(gfxstream::Stream* stream, LoadImageBehavior behavior);
-    void onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
+    bool onLoad(gfxstream::Stream* stream, LoadImageBehavior behavior);
+    bool onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
 
     std::optional<BlobDescriptorInfo> exportBlob();
 

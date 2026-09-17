@@ -25,7 +25,7 @@
 
 namespace {
 
-static EGLBoolean sEgl2Egl = false;
+[[maybe_unused]] static EGLBoolean sEgl2Egl = false;
 
 static EglGlobalInfo* sSingleton(bool nullEgl = false) {
     static EglGlobalInfo* i = new EglGlobalInfo(nullEgl);

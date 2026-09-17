@@ -77,6 +77,7 @@ class DependencyGraph {
 
     void removeGrandChildren(const NodeId id);
     void removeNodesAndDescendants(const NodeId* toRemove, uint32_t count);
+    bool isDeleteDelayedType(NodeId id) const;
     void removeDescendantsOfHandle(const NodeId handle);
 
     void setCreatedNodeIdsForApi(ApiCallId apiCallId, const NodeId* nodeIds, uint32_t count);

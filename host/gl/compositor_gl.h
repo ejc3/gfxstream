@@ -14,14 +14,14 @@
 
 #pragma once
 
-#include <atomic>
-
 #include <EGL/egl.h>
 #include <GLES/gl.h>
 #include <GLES/glext.h>
 #include <GLES3/gl3.h>
 
-#include "compositor.h"
+#include <atomic>
+
+#include "gfxstream/host/compositor.h"
 #include "gfxstream/host/display_surface_user.h"
 #include "texture_draw.h"
 

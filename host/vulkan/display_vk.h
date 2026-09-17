@@ -27,11 +27,10 @@
 #include "compositor_vk.h"
 #include "debug_utils_helper.h"
 #include "display_surface_vk.h"
-#include "gfxstream/host/borrowed_image.h"
 #include "gfxstream/host/display.h"
+#include "gfxstream/host/hwc2.h"
 #include "gfxstream/synchronization/Lock.h"
 #include "goldfish_vk_dispatch.h"
-#include "host/hwc2.h"
 #include "swap_chain_state_vk.h"
 
 // The DisplayVk class holds the Vulkan and other states required to draw a
@@ -40,6 +39,8 @@
 namespace gfxstream {
 namespace host {
 namespace vk {
+
+struct ColorBufferVkImageInfo;
 
 class DisplayVk : public Display {
    public:
@@ -52,7 +53,7 @@ class DisplayVk : public Display {
     ~DisplayVk();
 
     struct PostLayer {
-        const BorrowedImageInfo* info;
+        const ColorBufferVkImageInfo* info;
         float rotationDegrees;
         std::optional<std::array<float, 16>> colorTransform;
         hwc_rect_t displayFrame;

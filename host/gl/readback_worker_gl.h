@@ -15,17 +15,17 @@
 */
 #pragma once
 
-#include <map>
-#include <stdint.h>
-#include <vector>
-
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
+#include <stdint.h>
 
-#include "gfxstream/Compiler.h"
-#include "gfxstream/synchronization/Lock.h"
+#include <map>
+#include <vector>
+
 #include "display_surface_gl.h"
-#include "readback_worker.h"
+#include "gfxstream/Compiler.h"
+#include "gfxstream/host/readback_worker.h"
+#include "gfxstream/synchronization/Lock.h"
 
 namespace gfxstream {
 namespace host {
@@ -63,6 +63,8 @@ class ReadbackWorkerGl : public ReadbackWorker {
     // readback image that is suitable for webrtc, which expects formats like that.
     DoNextReadbackResult doNextReadback(uint32_t displayId, IColorBuffer* cb, void* fbImage,
                                         bool repaint, bool readbackBgra) override;
+
+    void doNextReadbackSync(IColorBuffer* cb, void* fbImage, bool readbackBgra) override;
 
     // getPixels(): Run this on a separate GL thread. This retrieves the
     // latest framebuffer that has been posted and read with doNextReadback.

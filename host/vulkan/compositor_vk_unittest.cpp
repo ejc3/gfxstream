@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include "compositor_vk.h"
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <glm/gtx/matrix_transform_2d.hpp>
 #include <memory>
 #include <optional>
 
-#include <glm/gtx/matrix_transform_2d.hpp>
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
-#include "borrowed_image_vk.h"
+#include "color_buffer_vk.h"
 #include "gfxstream/common/testing/graphics_test_environment.h"
 #include "gfxstream/host/testing/VkTestUtils.h"
 #include "gfxstream/image_utils.h"
@@ -131,6 +131,7 @@ class CompositorVkTest : public ::testing::Test {
     }
 
     void TearDown() override {
+        m_allocatedImages.clear();
         m_YcbcrSamplerPool.destroy();
         k_vk->vkDestroyCommandPool(m_vkDevice, m_vkCommandPool, nullptr);
         k_vk->vkDestroyDevice(m_vkDevice, nullptr);
@@ -283,22 +284,24 @@ class CompositorVkTest : public ::testing::Test {
     }
 
     template <typename SourceOrTargetImage>
-    std::unique_ptr<BorrowedImageInfoVk> createBorrowedImageInfo(const SourceOrTargetImage* image) {
+    const ColorBufferVkImageInfo* createImageTransitionInfo(const SourceOrTargetImage* image) {
         static int sImageId = 0;
 
-        auto ret = std::make_unique<BorrowedImageInfoVk>();
+        auto ret = std::make_unique<ColorBufferVkImageInfo>();
         ret->id = sImageId++;
         ret->width = image->m_width;
         ret->height = image->m_height;
         ret->image = image->m_vkImage;
-        ret->imageCreateInfo = image->m_vkImageCreateInfo;
+        ret->imageCreateInfoShallow = image->m_vkImageCreateInfo;
         ret->imageView = image->m_vkImageView;
         ret->imageFormat = SourceOrTargetImage::k_format;
         ret->preBorrowLayout = SourceOrTargetImage::k_vkImageLayout;
         ret->preBorrowQueueFamilyIndex = m_compositorQueueFamilyIndex;
         ret->postBorrowLayout = SourceOrTargetImage::k_vkImageLayout;
         ret->postBorrowQueueFamilyIndex = m_compositorQueueFamilyIndex;
-        return ret;
+        const auto* ptr = ret.get();
+        m_allocatedImages.push_back(std::move(ret));
+        return ptr;
     }
 
     void checkImageFilledWith(const TargetImage* image, uint32_t expectedColor) {
@@ -327,6 +330,9 @@ class CompositorVkTest : public ::testing::Test {
     VkQueue m_compositorVkQueue = VK_NULL_HANDLE;
     std::shared_ptr<gfxstream::base::Lock> m_compositorVkQueueLock;
     vk_util::YcbcrSamplerPool m_YcbcrSamplerPool;
+
+   protected:
+    std::vector<std::unique_ptr<ColorBufferVkImageInfo>> m_allocatedImages;
 
    private:
     void createInstance() {
@@ -448,8 +454,8 @@ TEST_F(CompositorVkTest, EmptyCompositionShouldDrawABlackFrame) {
     }
 
     for (uint32_t i = 0; i < kNumImages; i++) {
-        const Compositor::CompositionRequest compositionRequest = {
-            .target = createBorrowedImageInfo(targets[i].get()),
+        const CompositionRequestVk compositionRequest = {
+            .target = createImageTransitionInfo(targets[i].get()),
             .layers = {},  // Note: this is empty!
         };
 
@@ -474,11 +480,11 @@ TEST_F(CompositorVkTest, SimpleComposition) {
     ASSERT_NE(target, nullptr);
     fillImageWith(target.get(), kColorBlack);
 
-    Compositor::CompositionRequest compositionRequest = {
-        .target = createBorrowedImageInfo(target.get()),
+    CompositionRequestVk compositionRequest = {
+        .target = createImageTransitionInfo(target.get()),
     };
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -530,11 +536,11 @@ TEST_F(CompositorVkTest, BlendPremultiplied) {
     ASSERT_NE(target, nullptr);
     fillImageWith(target.get(), kColorBlack);
 
-    Compositor::CompositionRequest compositionRequest = {
-        .target = createBorrowedImageInfo(target.get()),
+    CompositionRequestVk compositionRequest = {
+        .target = createImageTransitionInfo(target.get()),
     };
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -585,11 +591,11 @@ TEST_F(CompositorVkTest, Crop) {
     ASSERT_NE(target, nullptr);
     fillImageWith(target.get(), kColorBlack);
 
-    Compositor::CompositionRequest compositionRequest = {
-        .target = createBorrowedImageInfo(target.get()),
+    CompositionRequestVk compositionRequest = {
+        .target = createImageTransitionInfo(target.get()),
     };
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -636,10 +642,10 @@ TEST_F(CompositorVkTest, SolidColor) {
     ASSERT_NE(target, nullptr);
     fillImageWith(target.get(), kColorBlack);
 
-    Compositor::CompositionRequest compositionRequest = {
-        .target = createBorrowedImageInfo(target.get()),
+    CompositionRequestVk compositionRequest = {
+        .target = createImageTransitionInfo(target.get()),
     };
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
         .source = nullptr,
         .props =
             {
@@ -682,10 +688,10 @@ TEST_F(CompositorVkTest, SolidColorBelow) {
     ASSERT_NE(target, nullptr);
     fillImageWith(target.get(), kColorBlack);
 
-    Compositor::CompositionRequest compositionRequest = {
-        .target = createBorrowedImageInfo(target.get()),
+    CompositionRequestVk compositionRequest = {
+        .target = createImageTransitionInfo(target.get()),
     };
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
         .source = nullptr,
         .props =
             {
@@ -707,8 +713,8 @@ TEST_F(CompositorVkTest, SolidColorBelow) {
                     },
             },
     });
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -758,11 +764,11 @@ TEST_F(CompositorVkTest, SolidColorAbove) {
     ASSERT_NE(target, nullptr);
     fillImageWith(target.get(), kColorBlack);
 
-    Compositor::CompositionRequest compositionRequest = {
-        .target = createBorrowedImageInfo(target.get()),
+    CompositionRequestVk compositionRequest = {
+        .target = createImageTransitionInfo(target.get()),
     };
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -792,7 +798,7 @@ TEST_F(CompositorVkTest, SolidColorAbove) {
                 .transform = HWC_TRANSFORM_NONE,
             },
     });
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
         .source = nullptr,
         .props =
             {
@@ -829,8 +835,8 @@ TEST_F(CompositorVkTest, Transformations) {
     auto source = createSourceImageFromPng(GetTestDataPath("256x256_android.png"));
     ASSERT_NE(source, nullptr);
 
-    Compositor::CompositionRequest compositionRequest;
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
+    CompositionRequestVk compositionRequest;
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -878,9 +884,9 @@ TEST_F(CompositorVkTest, Transformations) {
         ASSERT_NE(target, nullptr);
         fillImageWith(target.get(), kColorBlack);
 
-        compositionRequest.target = createBorrowedImageInfo(target.get());
+        compositionRequest.target = createImageTransitionInfo(target.get());
         compositionRequest.layers[0].props.transform = transform;
-        compositionRequest.layers[0].source = createBorrowedImageInfo(source.get());
+        compositionRequest.layers[0].source = createImageTransitionInfo(source.get());
 
         auto compositionCompleteWaitable = compositor->compose(compositionRequest);
         compositionCompleteWaitable.wait();
@@ -906,8 +912,8 @@ TEST_F(CompositorVkTest, MultipleTargetsComposition) {
         targets.emplace_back(std::move(target));
     }
 
-    Compositor::CompositionRequest compositionRequest = {};
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
+    CompositionRequestVk compositionRequest = {};
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -942,8 +948,8 @@ TEST_F(CompositorVkTest, MultipleTargetsComposition) {
     for (uint32_t i = 0; i < kNumCompostions; i++) {
         const auto& target = targets[i];
 
-        compositionRequest.target = createBorrowedImageInfo(target.get());
-        compositionRequest.layers[0].source = createBorrowedImageInfo(source.get()),
+        compositionRequest.target = createImageTransitionInfo(target.get());
+        compositionRequest.layers[0].source = createImageTransitionInfo(source.get()),
         compositionRequest.layers[0].props.displayFrame.left = (i + 0) * displayFrameWidth;
         compositionRequest.layers[0].props.displayFrame.right = (i + 1) * displayFrameWidth;
 
@@ -973,11 +979,11 @@ TEST_F(CompositorVkTest, MultipleLayers) {
     ASSERT_NE(target, nullptr);
     fillImageWith(target.get(), kColorBlack);
 
-    Compositor::CompositionRequest compositionRequest = {
-        .target = createBorrowedImageInfo(target.get()),
+    CompositionRequestVk compositionRequest = {
+        .target = createImageTransitionInfo(target.get()),
     };
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source1.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source1.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -1007,8 +1013,8 @@ TEST_F(CompositorVkTest, MultipleLayers) {
                 .transform = HWC_TRANSFORM_NONE,
             },
     });
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source2.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source2.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -1038,8 +1044,8 @@ TEST_F(CompositorVkTest, MultipleLayers) {
                 .transform = HWC_TRANSFORM_ROT_90,
             },
     });
-    compositionRequest.layers.emplace_back(Compositor::CompositionRequestLayer{
-        .source = createBorrowedImageInfo(source2.get()),
+    compositionRequest.layers.emplace_back(CompositionRequestLayerVk{
+        .source = createImageTransitionInfo(source2.get()),
         .props =
             {
                 .composeMode = HWC2_COMPOSITION_DEVICE,

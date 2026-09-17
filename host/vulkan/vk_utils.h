@@ -407,6 +407,16 @@ class YcbcrSamplerPool {
     std::unordered_map<GfxstreamFormat, YCbCrSamplerInfo> m_ycbcrSamplers GUARDED_BY(mMutex);
 };
 
+void addNeededBarriersToUseImage(VkImage image, uint32_t preQueueFamilyIndex,
+                                 VkImageLayout preLayout, uint32_t postQueueFamilyIndex,
+                                 VkImageLayout postLayout, uint32_t usedQueueFamilyIndex,
+                                 VkImageLayout usedInitialImageLayout,
+                                 VkImageLayout usedFinalImageLayout, VkAccessFlags usedAccessMask,
+                                 std::vector<VkImageMemoryBarrier>* preUseQueueTransferBarriers,
+                                 std::vector<VkImageMemoryBarrier>* preUseLayoutTransitionBarriers,
+                                 std::vector<VkImageMemoryBarrier>* postUseLayoutTransitionBarriers,
+                                 std::vector<VkImageMemoryBarrier>* postUseQueueTransferBarriers);
+
 }  // namespace vk_util
 }  // namespace vk
 }  // namespace host

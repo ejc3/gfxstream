@@ -13,15 +13,6 @@
 // limitations under the License.
 #include "vk_decoder_global_state.h"
 
-#include <algorithm>
-#include <climits>
-#include <functional>
-#include <list>
-#include <memory>
-#include <mutex>
-#include <unordered_map>
-#include <vector>
-
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -35,43 +26,51 @@
 #include <vulkan/vulkan_beta.h> // for MoltenVK portability extensions
 #endif
 
+#include <vulkan/vk_enum_string_helper.h>
+#include <vulkan/vulkan_core.h>
+
+#include <algorithm>
+#include <climits>
+#include <functional>
+#include <list>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
+
 #include "common/goldfish_vk_deepcopy.h"
 #include "common/goldfish_vk_dispatch.h"
 #include "common/goldfish_vk_marshaling.h"
 #include "common/goldfish_vk_reserved_marshaling.h"
+#include "emulated_textures/astc_texture.h"
+#include "emulated_textures/compressed_image_info.h"
+#include "emulated_textures/gpu_decompression_pipeline.h"
+#include "gfxstream/Macros.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/containers/Lookup.h"
+#include "gfxstream/host/RenderDoc.h"
 #include "gfxstream/host/address_space_operations.h"
 #include "gfxstream/host/astc_cpu_decompressor.h"
 #include "gfxstream/host/graphics_driver_lock.h"
-#include "gfxstream/host/RenderDoc.h"
 #include "gfxstream/host/tracing.h"
 #include "gfxstream/host/vm_operations.h"
-#include "gfxstream/Macros.h"
 #include "gfxstream/strings.h"
-#include "host/frame_buffer.h"
-#include "render_thread_info_vk.h"
 #include "render-utils/stream.h"
+#include "render_thread_info_vk.h"
 #include "trivial_stream.h"
 #include "vk_android_native_buffer_operations.h"
 #include "vk_common_operations.h"
 #include "vk_decoder_context.h"
 #include "vk_decoder_internal_structs.h"
-#include "vk_decoder_snapshot_utils.h"
 #include "vk_decoder_snapshot.h"
+#include "vk_decoder_snapshot_utils.h"
 #include "vk_emulated_physical_device_memory.h"
 #include "vk_emulated_physical_device_queue.h"
+#include "vk_format_utils.h"
 #include "vk_utils.h"
 #include "vulkan_boxed_handles.h"
 #include "vulkan_dispatch.h"
 #include "vulkan_stream.h"
-#include "vulkan/emulated_textures/astc_texture.h"
-#include "vulkan/emulated_textures/compressed_image_info.h"
-#include "vulkan/emulated_textures/gpu_decompression_pipeline.h"
-#include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vk_format_utils.h"
-#include "vulkan/vulkan_core.h"
-
 
 // Verbose logging only when ANDROID_EMU_VK_LOG_CALLS is set
 #define LOG_CALLS_VERBOSE(fmt, ...)          \
@@ -765,6 +764,11 @@ class VkDecoderGlobalState::Impl {
 
         mSnapshotState = SnapshotState::Normal;
         GFXSTREAM_DEBUG("VulkanSnapshots save (end)");
+        if (stream && stream->hasErrors()) {
+            GFXSTREAM_ERROR("VulkanSnapshots save failed due to stream errors: %s",
+                            stream->getErrors().value_or("unknown error").c_str());
+            return false;
+        }
         return true;
     }
 
@@ -1141,6 +1145,11 @@ class VkDecoderGlobalState::Impl {
             mSnapshotState = SnapshotState::Normal;
         }
         GFXSTREAM_DEBUG("VulkanSnapshots load (end)");
+        if (stream && stream->hasErrors()) {
+            GFXSTREAM_ERROR("VulkanSnapshots load failed due to stream errors: %s",
+                            stream->getErrors().value_or("unknown error").c_str());
+            return false;
+        }
         return true;
     }
 
@@ -1303,8 +1312,8 @@ class VkDecoderGlobalState::Impl {
                        info.applicationName.c_str(), info.engineName.c_str());
 
 #ifdef CONFIG_AEMU
-        m_vkEmulation->getCallbacks().registerVulkanInstance((uint64_t)*pInstance,
-                                                             info.applicationName.c_str());
+        m_vkEmulation->getGlobalState()->registerVulkanInstance((uint64_t)*pInstance,
+                                                                info.applicationName.c_str());
 #endif
         // Box it up
         VkInstance boxed = new_boxed_VkInstance(*pInstance, nullptr);
@@ -1343,7 +1352,7 @@ class VkDecoderGlobalState::Impl {
         *pInstance = (VkInstance)boxed;
 
         if (vkCleanupEnabled()) {
-            m_vkEmulation->getCallbacks().registerProcessCleanupCallback(
+            m_vkEmulation->getGlobalState()->registerProcessCleanupCallback(
                 unbox_VkInstance(boxed), contextId, [this, boxed] {
                     if (snapshotsEnabled()) {
                         snapshot()->vkDestroyInstance(nullptr, kInvalidSnapshotApiCallHandle, nullptr, 0, boxed, nullptr);
@@ -1402,7 +1411,7 @@ class VkDecoderGlobalState::Impl {
         }
         // The instance should not be used after vkDestroyInstanceImpl is called,
         // remove it from the cleanup callback mapping.
-        m_vkEmulation->getCallbacks().unregisterProcessCleanupCallback(instance);
+        m_vkEmulation->getGlobalState()->unregisterProcessCleanupCallback(instance);
 
         vkDestroyInstanceImpl(instance);
     }
@@ -6396,7 +6405,7 @@ class VkDecoderGlobalState::Impl {
                 shouldUseDedicatedAllocInfo &= colorBufferMemoryUsesDedicatedAlloc;
 
                 if (!m_vkEmulation->getFeatures().GuestVulkanOnly.enabled()) {
-                    m_vkEmulation->getCallbacks().invalidateColorBuffer(
+                    m_vkEmulation->getGlobalState()->invalidateColorBuffer(
                         importCbInfoPtr->colorBuffer);
                 }
 
@@ -7868,7 +7877,7 @@ class VkDecoderGlobalState::Impl {
         }
 
         for (HandleType cb : acquiredColorBuffers) {
-            m_vkEmulation->getCallbacks().invalidateColorBuffer(cb);
+            m_vkEmulation->getGlobalState()->invalidateColorBuffer(cb);
         }
 
         if (m_vkEmulation->getFeatures().VulkanDisableCoherentMemoryAndEmulate.enabled()) {
@@ -8037,7 +8046,7 @@ class VkDecoderGlobalState::Impl {
                                     string_VkResult(result), result);
                 } else {
                     for (HandleType cb : releasedColorBuffers) {
-                        m_vkEmulation->getCallbacks().flushColorBuffer(cb);
+                        m_vkEmulation->getGlobalState()->flushColorBuffer(cb);
                     }
                 }
             } else {
@@ -10894,7 +10903,7 @@ class VkDecoderGlobalState::Impl {
                        instanceInfo.applicationName.c_str(), instanceInfo.engineName.c_str());
 
 #ifdef CONFIG_AEMU
-        m_vkEmulation->getCallbacks().unregisterVulkanInstance((uint64_t)instance);
+        m_vkEmulation->getGlobalState()->unregisterVulkanInstance((uint64_t)instance);
 #endif
         delete_VkInstance(instanceInfo.boxed);
         LOG_CALLS_VERBOSE("destroyInstanceObjects: finished.");

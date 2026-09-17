@@ -30,18 +30,17 @@
 #include <vulkan/vulkan.h>
 
 #include "buffer.h"
-#include "color_buffer.h"
-#include "framework_formats.h"
 #include "gfxstream/AsyncResult.h"
 #include "gfxstream/EventNotificationSupport.h"
-#include "gfxstream/host/borrowed_image.h"
+#include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/external_object_manager.h"
+#include "gfxstream/host/framework_formats.h"
 #include "gfxstream/host/gfxstream_format.h"
 #include "gfxstream/host/gl_enums.h"
+#include "gfxstream/host/handle.h"
+#include "gfxstream/host/post_commands.h"
 #include "gfxstream/host/process_resources.h"
 #include "gfxstream/host/vk_enums.h"
-#include "handle.h"
-#include "post_commands.h"
 #include "render-utils/Renderer.h"
 #include "render-utils/render_api.h"
 #include "render-utils/stream.h"
@@ -58,7 +57,10 @@
 #define FB_MAX_SWAP_INTERVAL 7
 
 namespace gfxstream {
+struct RenderOpt;
 namespace host {
+
+class GlobalState;
 
 // The FrameBuffer class holds the global state of the emulation library on
 // top of the underlying EGL/GLES implementation. It should probably be
@@ -112,6 +114,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     // Return a pointer to the global instance. initialize() must be called
     // previously, or this will return NULL.
     static FrameBuffer* getFB();
+
+    gfxstream::host::GlobalState* getGlobalState();
 
     // Wait for a FrameBuffer instance to be initialized and ready to use.
     // This function blocks the caller until there is a valid initialized
@@ -362,13 +366,13 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
 
     // Saves a screenshot from a color buffer, applies post processing like color transform,
     // display layout and background blending.
-    int getColorBufferScreenshot(ColorBuffer* cb, int screenwidth, int screenheight,
+    int getColorBufferScreenshot(IColorBuffer* cb, int screenwidth, int screenheight,
                                  int skinRotation, GfxstreamFormat pixelsFormat, void* outPixels,
                                  const Rect& rect,
                                  const std::optional<std::array<float, 16>>& colorTransform);
 
     void onLastColorBufferRef(uint32_t handle);
-    ColorBufferPtr findColorBuffer(HandleType p_colorbuffer);
+    IColorBufferRef findColorBuffer(HandleType p_colorbuffer);
     BufferPtr findBuffer(HandleType p_buffer);
 
     void registerProcessCleanupCallback(void* key, uint64_t contextId,
@@ -414,10 +418,6 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
 
     void setGuestManagedColorBufferLifetime(bool guestManaged);
 
-    std::unique_ptr<BorrowedImageInfo> borrowColorBufferForComposition(uint32_t colorBufferHandle,
-                                                                       bool colorBufferIsTarget);
-    std::unique_ptr<BorrowedImageInfo> borrowColorBufferForDisplay(uint32_t colorBufferHandle);
-
     void logVulkanDeviceLost();
 
     void setVsyncHz(int vsyncHz);
@@ -443,6 +443,7 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size = 0);
 
 #if GFXSTREAM_ENABLE_HOST_GLES
+    gl::EmulationGl* getEmulationGl();
     // Retrieves the color buffer handle associated with |p_surface|.
     // Returns 0 if there is no such handle.
     HandleType getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface);
@@ -515,13 +516,8 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     // host buffers when a guest application crashes, for example.
     void drainGlRenderThreadSurfaces();
 
-    void postLoadRenderThreadContextSurfacePtrs();
-
     // Return the host EGLDisplay used by this instance.
-    EGLDisplay getDisplay() const;
-    EGLSurface getWindowSurface() const;
-    EGLContext getContext() const;
-    EGLConfig getConfig() const;
+    bool getRenderOpt(RenderOpt* opt) const;
 
     EGLContext getGlobalEGLContext() const;
 

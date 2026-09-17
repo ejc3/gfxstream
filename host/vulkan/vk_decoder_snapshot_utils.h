@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include "vulkan/vk_decoder_internal_structs.h"
+#include "vk_decoder_internal_structs.h"
 
 namespace gfxstream {
 namespace host {

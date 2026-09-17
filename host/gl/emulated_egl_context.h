@@ -22,7 +22,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 #include "gfxstream/host/GLDecoderContextData.h"
 #include "gfxstream/host/gl_enums.h"
 #include "render-utils/stream.h"

@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "render-utils/stream.h"
-#include "snapshot/LazySnapshotObj.h"
+#include "gfxstream/host/lazy_snapshot_object.h"
 #include "common/named_object.h"
 #include "common/texture_data.h"
 #include "common/translator_ifaces.h"

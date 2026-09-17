@@ -24,14 +24,13 @@
 
 #include "OpenGLESDispatch/DispatchTables.h"
 #include "OpenGLESDispatch/EGLDispatch.h"
-#include "borrowed_image_gl.h"
 #include "common/gl_utils.h"
 #include "debug_gl.h"
 #include "gfxstream/host/renderer_operations.h"
-#include "gl/yuv_converter.h"
 #include "render_thread_info_gl.h"
 #include "texture_draw.h"
 #include "texture_resize.h"
+#include "yuv_converter.h"
 
 namespace gfxstream {
 namespace host {
@@ -1133,7 +1132,7 @@ bool ColorBufferGl::readbackAsync(GLuint buffer, bool readbackBgra) {
 
 HandleType ColorBufferGl::getHndl() const { return mHndl; }
 
-void ColorBufferGl::onSave(gfxstream::Stream* stream) {
+bool ColorBufferGl::onSave(gfxstream::Stream* stream) {
     stream->putBe32(getHndl());
     stream->putBe32(static_cast<uint32_t>(m_width));
     stream->putBe32(static_cast<uint32_t>(m_height));
@@ -1143,6 +1142,13 @@ void ColorBufferGl::onSave(gfxstream::Stream* stream) {
     stream->putBe32(reinterpret_cast<uintptr_t>(m_eglImage));
     stream->putBe32(reinterpret_cast<uintptr_t>(m_blitEGLImage));
     stream->putBe32(m_needFormatCheck);
+
+    if (stream->hasErrors()) {
+        GFXSTREAM_ERROR("ColorBufferGl::onSave failed with errors: %s",
+                        stream->getErrors().value_or("unknown error").c_str());
+        return false;
+    }
+    return true;
 }
 
 std::unique_ptr<ColorBufferGl> ColorBufferGl::onLoad(gfxstream::Stream* stream,
@@ -1352,16 +1358,6 @@ bool ColorBufferGl::importEglNativePixmap(void* pixmap, bool preserveContent) {
     }
 
     return true;
-}
-
-std::unique_ptr<BorrowedImageInfo> ColorBufferGl::getBorrowedImageInfo() {
-    auto info = std::make_unique<BorrowedImageInfoGl>();
-    info->id = mHndl;
-    info->width = m_width;
-    info->height = m_height;
-    info->texture = m_tex;
-    info->onCommandsIssued = [this]() { setSync(); };
-    return info;
 }
 
 }  // namespace gl

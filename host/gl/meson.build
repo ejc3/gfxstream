@@ -35,6 +35,7 @@ files_lib_gl_server = files(
   'emulation_gl.cpp',
   'gles_version_detector.cpp',
   'pixel_read_formats.cpp',
+  'post_worker_gl.cpp',
   'readback_worker_gl.cpp',
   'render_thread_info_gl.cpp',
   'texture_draw.cpp',
@@ -62,7 +63,6 @@ lib_gl_server = static_library(
     inc_host_iostream,
     inc_host_library,
     inc_host_renderdoc,
-    inc_host_snapshot,
     inc_include,
     inc_opengl_headers,
     inc_renderdoc_external,
@@ -81,6 +81,5 @@ lib_gl_server = static_library(
     lib_host_features,
     lib_host_iostream,
     lib_host_library,
-    lib_host_snapshot,
   ],
 )

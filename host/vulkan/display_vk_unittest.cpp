@@ -18,11 +18,11 @@
 
 #include "display_vk.h"
 
-#include "borrowed_image_vk.h"
-#include "gfxstream/synchronization/Lock.h"
-#include "gfxstream/host/testing/SampleApplication.h"
+#include "color_buffer_vk.h"
 #include "gfxstream/host/testing/OSWindow.h"
+#include "gfxstream/host/testing/SampleApplication.h"
 #include "gfxstream/host/testing/VkTestUtils.h"
+#include "gfxstream/synchronization/Lock.h"
 #include "vulkan/vulkan_dispatch.h"
 
 namespace gfxstream {
@@ -82,16 +82,16 @@ class DisplayVkTest : public ::testing::Test {
         }
     }
 
-    std::unique_ptr<BorrowedImageInfoVk> createBorrowedImageInfo(
+    std::unique_ptr<ColorBufferVkImageInfo> createImageTransitionInfo(
         const std::unique_ptr<const RenderTexture>& texture) {
         static uint32_t sTextureId = 0;
 
-        auto info = std::make_unique<BorrowedImageInfoVk>();
+        auto info = std::make_unique<ColorBufferVkImageInfo>();
         info->id = sTextureId++;
         info->width = texture->m_vkImageCreateInfo.extent.width;
         info->height = texture->m_vkImageCreateInfo.extent.height;
         info->image = texture->m_vkImage;
-        info->imageCreateInfo = texture->m_vkImageCreateInfo;
+        info->imageCreateInfoShallow = texture->m_vkImageCreateInfo;
         info->preBorrowLayout = RenderTexture::k_vkImageLayout;
         info->preBorrowQueueFamilyIndex = m_compositorQueueFamilyIndex;
         info->postBorrowLayout = RenderTexture::k_vkImageLayout;
@@ -238,7 +238,7 @@ TEST_F(DisplayVkTest, PostWithoutSurfaceShouldntCrash) {
                                          m_vkCommandPool, textureWidth, textureHeight);
     std::vector<uint32_t> pixels(textureWidth * textureHeight, 0);
     ASSERT_TRUE(texture->write(pixels));
-    const auto imageInfo = createBorrowedImageInfo(texture);
+    const auto imageInfo = createImageTransitionInfo(texture);
     DisplayVk::Post postCmd;
     DisplayVk::PostLayer layer;
     layer.info = imageInfo.get();
@@ -266,7 +266,7 @@ TEST_F(DisplayVkTest, SimplePost) {
     ASSERT_TRUE(texture->write(pixels));
     std::vector<std::shared_future<void>> waitForGpuFutures;
     for (uint32_t i = 0; i < 10; i++) {
-        const auto imageInfo = createBorrowedImageInfo(texture);
+        const auto imageInfo = createImageTransitionInfo(texture);
         DisplayVk::Post postCmd;
         DisplayVk::PostLayer layer;
         layer.info = imageInfo.get();
@@ -299,8 +299,8 @@ TEST_F(DisplayVkTest, PostTwoColorBuffers) {
     ASSERT_TRUE(greenTexture->write(greenPixels));
     std::vector<std::shared_future<void>> waitForGpuFutures;
     for (uint32_t i = 0; i < 10; i++) {
-        const auto redImageInfo = createBorrowedImageInfo(redTexture);
-        const auto greenImageInfo = createBorrowedImageInfo(greenTexture);
+        const auto redImageInfo = createImageTransitionInfo(redTexture);
+        const auto greenImageInfo = createImageTransitionInfo(greenTexture);
         DisplayVk::Post redPostCmd;
         DisplayVk::PostLayer redLayer;
         redLayer.info = redImageInfo.get();
@@ -344,7 +344,7 @@ TEST_F(DisplayVkTest, PostWithRotation) {
     ASSERT_TRUE(texture->write(pixels));
     std::vector<std::shared_future<void>> waitForGpuFutures;
     for (uint32_t i = 0; i < 10; i++) {
-        const auto imageInfo = createBorrowedImageInfo(texture);
+        const auto imageInfo = createImageTransitionInfo(texture);
         DisplayVk::Post postCmd;
         DisplayVk::PostLayer layer;
         layer.info = imageInfo.get();
@@ -379,7 +379,7 @@ TEST_F(DisplayVkTest, PostWithColorTransform) {
     ASSERT_TRUE(texture->write(pixels));
     std::vector<std::shared_future<void>> waitForGpuFutures;
     for (uint32_t i = 0; i < 10; i++) {
-        const auto imageInfo = createBorrowedImageInfo(texture);
+        const auto imageInfo = createImageTransitionInfo(texture);
         DisplayVk::Post postCmd;
         DisplayVk::PostLayer layer;
         layer.info = imageInfo.get();
@@ -414,8 +414,8 @@ TEST_F(DisplayVkTest, PostMultiDisplayComposition) {
 
     std::vector<std::shared_future<void>> waitForGpuFutures;
     for (uint32_t i = 0; i < 10; i++) {
-        const auto redImageInfo = createBorrowedImageInfo(redTexture);
-        const auto greenImageInfo = createBorrowedImageInfo(greenTexture);
+        const auto redImageInfo = createImageTransitionInfo(redTexture);
+        const auto greenImageInfo = createImageTransitionInfo(greenTexture);
 
         DisplayVk::Post postCmd;
         // Combined frame size (side-by-side)

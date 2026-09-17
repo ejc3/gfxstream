@@ -9,7 +9,6 @@ subdir('cereal')
 subdir('emulated_textures')
 
 files_lib_vulkan_server = files(
-  'borrowed_image_vk.cpp',
   'buffer_vk.cpp',
   'color_buffer_vk.cpp',
   'compositor_vk.cpp',
@@ -75,6 +74,7 @@ lib_vulkan_server = static_library(
     inc_cereal_common,
     inc_cereal,
     inc_common_base,
+    inc_common_logging,
     inc_common_utils,
     inc_gl_openglesdispatch,
     inc_gl_server,
@@ -86,9 +86,8 @@ lib_vulkan_server = static_library(
     inc_host_include,
     inc_host_iostream,
     inc_host_library,
-    inc_common_logging,
+    inc_host_native_window,
     inc_host_renderdoc,
-    inc_host_snapshot,
     inc_host_tracing,
     inc_include,
     inc_opengl_headers,
@@ -107,7 +106,7 @@ lib_vulkan_server = static_library(
     lib_host_features,
     lib_host_iostream,
     lib_host_library,
-    lib_host_snapshot,
+    lib_host_native_window,
     lib_host_tracing,
     lib_vulkan_cereal,
   ],

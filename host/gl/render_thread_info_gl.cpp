@@ -16,13 +16,13 @@
 
 #include <unordered_set>
 
-#include "frame_buffer.h"
 #include "OpenGLESDispatch/EGLDispatch.h"
 #include "OpenGLESDispatch/GLESv1Dispatch.h"
 #include "OpenGLESDispatch/GLESv2Dispatch.h"
-#include "gfxstream/synchronization/Lock.h"
+#include "emulation_gl.h"
 #include "gfxstream/containers/Lookup.h"
 #include "gfxstream/host/stream_utils.h"
+#include "gfxstream/synchronization/Lock.h"
 
 namespace gfxstream {
 namespace host {
@@ -34,7 +34,7 @@ using gfxstream::Stream;
 
 static thread_local RenderThreadInfoGl* tlThreadInfo = nullptr;
 
-RenderThreadInfoGl::RenderThreadInfoGl() {
+RenderThreadInfoGl::RenderThreadInfoGl(EmulationGl* emulationGl) : m_emulationGl(emulationGl) {
     m_glDec.initGL(gles1_dispatch_get_proc_func, nullptr);
     m_gl2Dec.initGL(gles2_dispatch_get_proc_func, nullptr);
 
@@ -83,9 +83,8 @@ void RenderThreadInfoGl::onSave(Stream* stream) {
     stream->putBe64(0);
 }
 
-bool RenderThreadInfoGl::onLoad(Stream* stream) {
-    FrameBuffer* fb = FrameBuffer::getFB();
-    assert(fb);
+bool RenderThreadInfoGl::onLoad(Stream* stream) NO_THREAD_SAFETY_ANALYSIS {
+    assert(m_emulationGl);
 
     HandleType ctxHndl = stream->getBe32();
     HandleType drawSurf = stream->getBe32();
@@ -95,7 +94,9 @@ bool RenderThreadInfoGl::onLoad(Stream* stream) {
     currDrawSurfHandleFromLoad = drawSurf;
     currReadSurfHandleFromLoad = readSurf;
 
-    fb->postLoadRenderThreadContextSurfacePtrs();
+    currContext = m_emulationGl->getContext(ctxHndl);
+    currDrawSurf = m_emulationGl->getWindowSurface(drawSurf);
+    currReadSurf = m_emulationGl->getWindowSurface(readSurf);
 
     loadCollection(stream, &m_contextSet, [](Stream* stream) {
         return stream->getBe32();
@@ -112,16 +113,17 @@ bool RenderThreadInfoGl::onLoad(Stream* stream) {
     return true;
 }
 
-void RenderThreadInfoGl::postLoadRefreshCurrentContextSurfacePtrs() {
-    FrameBuffer* fb = FrameBuffer::getFB();
-    assert(fb);
+void RenderThreadInfoGl::postLoadRefreshCurrentContextSurfacePtrs() NO_THREAD_SAFETY_ANALYSIS {
+    assert(m_emulationGl);
 
-    fb->postLoadRenderThreadContextSurfacePtrs();
+    currContext = m_emulationGl->getContext(currContextHandleFromLoad);
+    currDrawSurf = m_emulationGl->getWindowSurface(currDrawSurfHandleFromLoad);
+    currReadSurf = m_emulationGl->getWindowSurface(currReadSurfHandleFromLoad);
 
     const HandleType ctx = currContext ? currContext->getHndl() : 0;
     const HandleType draw = currDrawSurf ? currDrawSurf->getHndl() : 0;
     const HandleType read = currReadSurf ? currReadSurf->getHndl() : 0;
-    fb->bindContext(ctx, draw, read);
+    m_emulationGl->bindContext(ctx, draw, read);
 }
 
 }  // namespace gl

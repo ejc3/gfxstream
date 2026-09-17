@@ -24,7 +24,7 @@
 
 #include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/display.h"
-#include "hwc2.h"
+#include "gfxstream/host/hwc2.h"
 #include "texture_draw.h"
 
 namespace gfxstream {

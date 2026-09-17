@@ -17,7 +17,7 @@
 
 #include <errno.h>
 
-#include "native_sub_window.h"
+#include "gfxstream/host/native_sub_window.h"
 #include "platform_helper_qnx.h"
 
 EGLNativeWindowType createSubWindow(FBNativeWindowType p_window, int x, int y, int width,

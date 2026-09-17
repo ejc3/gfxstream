@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "vulkan/vk_decoder_snapshot_utils.h"
+#include "vk_decoder_snapshot_utils.h"
 
+#include "gfxstream/common/logging.h"
 #include "vk_common_operations.h"
 #include "vk_utils.h"
 #include "vulkan_boxed_handles.h"
-#include "gfxstream/common/logging.h"
 
 namespace gfxstream {
 namespace host {

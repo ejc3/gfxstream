@@ -29,11 +29,10 @@
 
 #include "context_helper.h"
 #include "gfxstream/ManagedDescriptor.h"
-#include "gfxstream/host/borrowed_image.h"
 #include "gfxstream/host/features.h"
 #include "gfxstream/host/gfxstream_format.h"
-#include "handle.h"
-#include "hwc2.h"
+#include "gfxstream/host/hwc2.h"
+#include "gfxstream/host/handle.h"
 #include "pixel_read_formats.h"
 #include "render-utils/Renderer.h"
 #include "render-utils/stream.h"
@@ -189,7 +188,7 @@ class ColorBufferGl {
     // readback() but async (to the specified |buffer|)
     bool readbackAsync(GLuint buffer, bool readbackBgra = false);
 
-    void onSave(gfxstream::Stream* stream);
+    bool onSave(gfxstream::Stream* stream);
     static std::unique_ptr<ColorBufferGl> onLoad(gfxstream::Stream* stream, EGLDisplay p_display,
                                                  ContextHelper* helper, TextureDraw* textureDraw,
                                                  bool fastBlitSupported,
@@ -197,12 +196,11 @@ class ColorBufferGl {
                                                  PixelReadFormats& pixelReadFormats);
 
     HandleType getHndl() const;
+    GLuint getTexture() const { return m_tex; }
 
     bool isFastBlitSupported() const { return m_fastBlitSupported; }
     void postLayer(const ComposeLayer& l, int frameWidth, int frameHeight,
                    const std::optional<std::array<float, 16>>& colorTransform);
-
-    std::unique_ptr<BorrowedImageInfo> getBorrowedImageInfo();
 
     // ColorBufferGl backing change methods
     //

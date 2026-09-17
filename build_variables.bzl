@@ -1,6 +1,7 @@
 """
 Common build configuration definitions.
 """
+
 GFXSTREAM_COMMON_COPTS = [
     "-Wall",
     "-Wextra",
@@ -26,6 +27,7 @@ GFXSTREAM_COMMON_COPTS = [
     ],
     "//conditions:default": [],
 })
+
 GFXSTREAM_HOST_COPTS = GFXSTREAM_COMMON_COPTS + [
 ] + select({
     "@platforms//os:windows": [
@@ -35,6 +37,7 @@ GFXSTREAM_HOST_COPTS = GFXSTREAM_COMMON_COPTS + [
         "-fno-exceptions",
     ],
 })
+
 GFXSTREAM_HOST_VK_DEFINES = [
     "VK_GFXSTREAM_STRUCTURE_TYPE_EXT",
     "VK_GOOGLE_gfxstream",
@@ -51,6 +54,7 @@ GFXSTREAM_HOST_VK_DEFINES = [
     ],
     "//conditions:default": [],
 })
+
 GFXSTREAM_HOST_DEFINES = GFXSTREAM_HOST_VK_DEFINES + [
     "BUILDING_EMUGL_COMMON_SHARED",
     "EMUGL_BUILD",
@@ -75,6 +79,15 @@ GFXSTREAM_HOST_DEFINES = GFXSTREAM_HOST_VK_DEFINES + [
 ] + select({
     "@platforms//os:windows": [
         "WIN32_LEAN_AND_MEAN",
+    ],
+    "//conditions:default": [],
+})
+
+GFXSTREAM_HOST_LINKOPTS = select({
+    "@platforms//os:linux": [
+        "-Wl,--warn-backrefs",
+        "-Wl,--warn-backrefs-exclude=*llvm*",
+        "-Wl,--fatal-warnings",
     ],
     "//conditions:default": [],
 })

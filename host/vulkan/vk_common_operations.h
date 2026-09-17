@@ -23,29 +23,28 @@
 #include <unordered_set>
 #include <vector>
 
-#include "vulkan/vk_vvl_configuration.h"
-
-#include "borrowed_image_vk.h"
+#include "color_buffer_vk.h"
 #include "compositor_vk.h"
 #include "debug_utils_helper.h"
 #include "device_lost_helper.h"
 #include "display_vk.h"
 #include "external_memory.h"
-#include "gfxstream/host/backend_callbacks.h"
-#include "gfxstream/host/external_object_manager.h"
-#include "gfxstream/host/features.h"
-#include "gfxstream/host/gfxstream_format.h"
-#include "gfxstream/host/GfxApiLogger.h"
-#include "gfxstream/host/RenderDoc.h"
-#include "gfxstream/host/vk_enums.h"
-#include "gfxstream/memory/UdmabufCreator.h"
 #include "gfxstream/Optional.h"
 #include "gfxstream/ThreadAnnotations.h"
+#include "gfxstream/host/GfxApiLogger.h"
+#include "gfxstream/host/RenderDoc.h"
+#include "gfxstream/host/external_object_manager.h"
+#include "gfxstream/host/features.h"
+#include "gfxstream/host/framework_formats.h"
+#include "gfxstream/host/gfxstream_format.h"
+#include "gfxstream/host/global_state.h"
+#include "gfxstream/host/vk_enums.h"
+#include "gfxstream/memory/UdmabufCreator.h"
 #include "goldfish_vk_private_defs.h"
-#include "host/framework_formats.h"
 #include "render-utils/Renderer.h"
 #include "vk_format_support.h"
 #include "vk_utils.h"
+#include "vk_vvl_configuration.h"
 
 #if defined(_WIN32)
 typedef void* HANDLE;
@@ -98,7 +97,7 @@ class VkEmulation {
     ~VkEmulation();
 
     static std::unique_ptr<VkEmulation> create(VulkanDispatch* vk,
-                                               gfxstream::host::BackendCallbacks callbacks,
+                                               gfxstream::host::GlobalState* globalState,
                                                const gfxstream::host::FeatureSet& features);
 
     struct Features {
@@ -177,7 +176,7 @@ class VkEmulation {
 
     const gfxstream::host::FeatureSet& getFeatures() const;
 
-    const gfxstream::host::BackendCallbacks& getCallbacks() const;
+    gfxstream::host::GlobalState* getGlobalState() const;
 
     AstcEmulationMode getAstcLdrEmulationMode() const;
 
@@ -415,6 +414,7 @@ class VkEmulation {
     bool updateColorBufferFromBytes(uint32_t colorBufferHandle, const std::vector<uint8_t>& bytes);
     bool updateColorBufferFromBytes(uint32_t colorBufferHandle, uint32_t x, uint32_t y, uint32_t w,
                                     uint32_t h, const void* pixels);
+    bool clearColorBuffer(uint32_t colorBufferHandle);
 
     // Data buffer operations
     bool getBufferAllocationInfo(uint32_t bufferHandle, VkDeviceSize* outSize,
@@ -457,9 +457,12 @@ class VkEmulation {
 
     void releaseColorBufferForGuestUse(uint32_t colorBufferHandle);
 
-    std::unique_ptr<BorrowedImageInfoVk> borrowColorBufferForComposition(uint32_t colorBufferHandle,
-                                                                         bool colorBufferIsTarget);
-    std::unique_ptr<BorrowedImageInfoVk> borrowColorBufferForDisplay(uint32_t colorBufferHandle);
+    std::unique_ptr<ColorBufferVkImageInfo> prepareColorBufferForComposition(
+        uint32_t colorBufferHandle, bool colorBufferIsTarget);
+    std::unique_ptr<ColorBufferVkImageInfo> prepareColorBufferForDisplay(
+        uint32_t colorBufferHandle);
+    void updateColorBufferLayoutAndQueue(uint32_t colorBufferHandle, VkImageLayout layout,
+                                         uint32_t queueFamilyIndex);
 
     void applyApiVersionLimits(uint32_t& apiVersion) const {
         if (apiVersion > mGuestVulkanMaxApiVersion) {
@@ -575,7 +578,7 @@ class VkEmulation {
 
     std::mutex mMutex;
 
-    gfxstream::host::BackendCallbacks mCallbacks;
+    gfxstream::host::GlobalState* m_globalState = nullptr;
 
     gfxstream::host::FeatureSet mFeatures;
 
@@ -735,6 +738,7 @@ class VkEmulation {
     std::vector<std::tuple<VkCommandBuffer, VkFence>> mTransferQueueCommandBufferPool GUARDED_BY(mMutex);
 
     std::unique_ptr<CompositorVk> mCompositorVk;
+    std::atomic<bool> mGpuScaledReadbackFailed = false;
 
     // The implementation for Vulkan native swapchain. Only initialized in initVkEmulationFeatures
     // if useVulkanNativeSwapchain is set.

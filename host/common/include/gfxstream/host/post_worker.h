@@ -21,23 +21,20 @@
 #include <unordered_map>
 #include <vector>
 
-#include "compositor.h"
-#include "hwc2.h"
-#include "post_commands.h"
 #include "gfxstream/Compiler.h"
+#include "gfxstream/host/color_buffer_interface.h"
+#include "gfxstream/host/compositor.h"
 #include "gfxstream/host/gfxstream_format.h"
-
+#include "gfxstream/host/global_state.h"
+#include "gfxstream/host/hwc2.h"
+#include "post_commands.h"
 
 namespace gfxstream {
 namespace host {
-class IColorBuffer;
-class ColorBuffer;
-class FrameBuffer;
-struct RenderThreadInfo;
 
 class PostWorker {
    public:
-    PostWorker(bool mainThreadPostingOnly, FrameBuffer* fb, Compositor* compositor);
+    PostWorker(bool mainThreadPostingOnly, GlobalState* globalState, Compositor* compositor);
     virtual ~PostWorker();
 
     // post: posts the next color buffer.
@@ -62,7 +59,7 @@ class PostWorker {
     void clear();
 
     // screenshot: readbacks emulator display image to a buffer
-    void screenshot(ColorBuffer* cb, int screenwidth, int screenheight, int skinRotation,
+    void screenshot(IColorBuffer* cb, int screenwidth, int screenheight, int skinRotation,
                     GfxstreamFormat pixelsFormat, void* outPixels, const Rect& rect,
                     const std::optional<std::array<float, 16>>& colorTransform);
 
@@ -84,7 +81,7 @@ class PostWorker {
     virtual std::shared_future<void> composeImpl(const FlatComposeRequest& composeRequest);
 
    protected:
-    FrameBuffer* mFb;
+    GlobalState* m_globalState;
     Compositor* m_compositor = nullptr;
 
    protected:

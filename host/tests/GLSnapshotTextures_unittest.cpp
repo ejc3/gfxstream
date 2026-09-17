@@ -201,7 +201,7 @@ public:
                           &maxTextureUnits);
         EXPECT_EQ(GL_NO_ERROR, gl->glGetError());
 
-        if (unit < maxTextureUnits) {
+        if (unit < static_cast<GLuint>(maxTextureUnits)) {
             m_active_texture_unit = unit;
         } else {
             fprintf(stderr,
@@ -269,12 +269,12 @@ protected:
         GLint maxTextureUnits;
         gl->glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS,
                           &maxTextureUnits);
-        if (unit >= maxTextureUnits) {
+        if (unit >= static_cast<GLuint>(maxTextureUnits)) {
             fprintf(stderr,
                     "Cannot bind to unit %d: max units is %d. Binding to %d "
                     "instead.\n",
                     unit, maxTextureUnits, maxTextureUnits - 1);
-            unit = maxTextureUnits - 1;
+            unit = static_cast<GLuint>(maxTextureUnits) - 1;
         }
 
         GLuint testTexture;
@@ -330,9 +330,8 @@ public:
         EXPECT_TRUE(compareParameter(GL_TEXTURE_WRAP_S, m_state.wrapS));
         EXPECT_TRUE(compareParameter(GL_TEXTURE_WRAP_T, m_state.wrapT));
 
-        auto compareImageFunc = [this](GLenum imageTarget,
-                                       GlMipmapArray& levels) {
-            for (int i = 0; i < levels.size(); i++) {
+        auto compareImageFunc = [this](GLenum imageTarget, GlMipmapArray& levels) {
+            for (size_t i = 0; i < levels.size(); i++) {
                 EXPECT_TRUE(compareVector<GLubyte>(
                         levels[i].bytes,
                         getTextureImageData(gl, m_object_name, imageTarget, i,
@@ -354,7 +353,7 @@ public:
                                   << " 'sides' of data.";
                     break;
                 }
-                for (int j = 0; j < m_state.imagesCubeMap.size(); j++) {
+                for (size_t j = 0; j < m_state.imagesCubeMap.size(); j++) {
                     compareImageFunc(kGLES2TextureCubeMapSides[j],
                                      m_state.imagesCubeMap[j]);
                 }
@@ -382,7 +381,7 @@ public:
         gl->glTexParameteri(m_state.target, GL_TEXTURE_WRAP_T, m_state.wrapT);
 
         auto initImageFunc = [this](GLenum imageTarget, GlMipmapArray& levels) {
-            for (int i = 0; i < levels.size(); i++) {
+            for (size_t i = 0; i < levels.size(); i++) {
                 levels[i].bytes.resize(
                         levels[i].width * levels[i].height *
                         glUtilsPixelBitSize(
@@ -407,7 +406,7 @@ public:
                                   << " 'sides' of data.";
                     break;
                 }
-                for (int j = 0; j < m_state.imagesCubeMap.size(); j++) {
+                for (size_t j = 0; j < m_state.imagesCubeMap.size(); j++) {
                     GLenum side = kGLES2TextureCubeMapSides[j];
                     initImageFunc(side, m_state.imagesCubeMap[j]);
                 }

@@ -18,10 +18,12 @@
 #include <future>
 #include <optional>
 
+#include "display_gl.h"
+#include "emulation_gl.h"
+#include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/display_surface_user.h"
-#include "post_worker.h"
-#include "host/gl/display_gl.h"
-#include "host/gl/emulation_gl.h"
+#include "gfxstream/host/global_state.h"
+#include "gfxstream/host/post_worker.h"
 
 namespace gfxstream {
 namespace host {
@@ -33,7 +35,7 @@ class RecursiveScopedContextBind;
 
 class PostWorkerGl : public PostWorker, public DisplaySurfaceUser {
    public:
-    PostWorkerGl(bool mainThreadPostingOnly, FrameBuffer* fb, Compositor* compositor,
+    PostWorkerGl(bool mainThreadPostingOnly, GlobalState* globalState, Compositor* compositor,
                  gl::DisplayGl* displayGl, gl::EmulationGl* emulationGl);
 
    protected:

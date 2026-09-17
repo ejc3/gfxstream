@@ -13,7 +13,7 @@
 # limitations under the License.
 
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
 
 package(
     default_applicable_licenses = ["//:gfxstream_license"],
@@ -36,12 +36,12 @@ cc_library(
     hdrs = glob(["include/**/*.h"]),
     copts = GFXSTREAM_HOST_COPTS,
     defines = GFXSTREAM_HOST_DEFINES,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     strip_include_prefix = "include",
     deps = [
         "//common/base:gfxstream_common_base",
         "//host:gfxstream_backend_headers",
         "//host:gfxstream_backend_static",
-        "//host:gfxstream_host_headers",
         "//host/common:gfxstream_host_common",
         "//host/decoder_common:gfxstream_host_decoder_common",
         "//host/features:gfxstream_host_features",

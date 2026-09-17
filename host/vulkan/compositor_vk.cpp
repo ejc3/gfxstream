@@ -15,18 +15,19 @@
 #include "compositor_vk.h"
 
 #include <string.h>
+#include <vulkan/vk_enum_string_helper.h>
 
 #include <cinttypes>
 #include <glm/gtc/matrix_transform.hpp>
 #include <optional>
 
+#include "color_buffer_vk.h"
+#include "compositor_fragment_shader.h"
+#include "compositor_vertex_shader.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/tracing.h"
-#include "vulkan/compositor_fragment_shader.h"
-#include "vulkan/compositor_vertex_shader.h"
-#include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vk_format_utils.h"
-#include "vulkan/vk_utils.h"
+#include "vk_format_utils.h"
+#include "vk_utils.h"
 
 namespace gfxstream {
 namespace host {
@@ -45,16 +46,6 @@ static const GfxstreamFormat kRenderTargetFormats[2] = {
     GfxstreamFormat::R8G8B8A8_UNORM,
     GfxstreamFormat::B8G8R8A8_UNORM,
 };
-
-const BorrowedImageInfoVk* getInfoOrAbort(const std::unique_ptr<BorrowedImageInfo>& info) {
-    auto imageVk = static_cast<const BorrowedImageInfoVk*>(info.get());
-    if (imageVk != nullptr) {
-        return imageVk;
-    }
-
-    GFXSTREAM_FATAL("CompositorVk did not find BorrowedImageInfoVk");
-    return nullptr;
-}
 
 struct Vertex {
     alignas(8) glm::vec2 pos;
@@ -700,7 +691,6 @@ bool CompositorVk::createImage(CompositorVkBase::Image& imageOut, uint32_t width
     };
     VkImage image = VK_NULL_HANDLE;
     VK_CHECK_RETURN(m_vk.vkCreateImage(m_vkDevice, &imageCreateInfo, nullptr, &image));
-    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk:image:%s", debugName.c_str());
 
     VkMemoryRequirements imageMemoryRequirements;
     m_vk.vkGetImageMemoryRequirements(m_vkDevice, image, &imageMemoryRequirements);
@@ -749,7 +739,6 @@ bool CompositorVk::createImage(CompositorVkBase::Image& imageOut, uint32_t width
     };
     VkImageView imageView = VK_NULL_HANDLE;
     VK_CHECK_RETURN(m_vk.vkCreateImageView(m_vkDevice, &imageViewCreateInfo, nullptr, &imageView));
-    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk:imageView:%s", debugName.c_str());
 
     VkBuffer stagingBuffer = VK_NULL_HANDLE;
     VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
@@ -845,9 +834,9 @@ bool CompositorVk::createImage(CompositorVkBase::Image& imageOut, uint32_t width
     m_vk.vkDestroyBuffer(m_vkDevice, stagingBuffer, nullptr);
     m_vk.vkFreeMemory(m_vkDevice, stagingBufferMemory, nullptr);
 
-    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk::image %s", debugName.c_str());
-    m_debugUtilsHelper.addDebugLabel(imageView, "CompositorVk::imageView %s", debugName.c_str());
-    m_debugUtilsHelper.addDebugLabel(imageMemory, "CompositorVk::imageMemory %s",
+    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk:image:%s", debugName.c_str());
+    m_debugUtilsHelper.addDebugLabel(imageView, "CompositorVk:imageView:%s", debugName.c_str());
+    m_debugUtilsHelper.addDebugLabel(imageMemory, "CompositorVk::imageMemory:%s",
                                      debugName.c_str());
 
     // Encapsulate the created vulkan objects into an Image instance
@@ -1159,7 +1148,7 @@ VkFormatFeatureFlags CompositorVk::getFormatFeatures(VkFormat format, VkImageTil
 }
 
 CompositorVk::RenderTarget* CompositorVk::getOrCreateRenderTargetInfo(
-    const BorrowedImageInfoVk& imageInfo) {
+    const ColorBufferVkImageInfo& imageInfo) {
     std::lock_guard<std::mutex> lock(m_renderTargetCacheMutex);
     auto* renderTargetPtr = m_renderTargetCache.get(imageInfo.id);
     if (renderTargetPtr != nullptr) {
@@ -1174,9 +1163,10 @@ CompositorVk::RenderTarget* CompositorVk::getOrCreateRenderTargetInfo(
     }
     VkRenderPass renderPass = renderPassIt->second;
 
-    auto* renderTarget = new RenderTarget(m_vk, m_vkDevice, imageInfo.image, imageInfo.imageView,
-                                          imageInfo.imageCreateInfo.extent.width,
-                                          imageInfo.imageCreateInfo.extent.height, renderPass);
+    auto* renderTarget =
+        new RenderTarget(m_vk, m_vkDevice, imageInfo.image, imageInfo.imageView,
+                         imageInfo.imageCreateInfoShallow.extent.width,
+                         imageInfo.imageCreateInfoShallow.extent.height, renderPass);
 
     m_renderTargetCache.set(imageInfo.id, std::unique_ptr<RenderTarget>(renderTarget));
 
@@ -1196,13 +1186,13 @@ bool CompositorVk::canCompositeFrom(const VkImageCreateInfo& imageCi) {
     return true;
 }
 
-void CompositorVk::buildCompositionVk(const CompositionRequest& compositionRequest,
+void CompositorVk::buildCompositionVk(const CompositionRequestVk& compositionRequest,
                                       CompositionVk* compositionVk) {
-    if (compositionRequest.target.get() == nullptr) {
+    if (compositionRequest.target == nullptr) {
         GFXSTREAM_ERROR("invalid target!");
         return;
     }
-    const BorrowedImageInfoVk* targetImage = getInfoOrAbort(compositionRequest.target);
+    const ColorBufferVkImageInfo* targetImage = compositionRequest.target;
 
     auto renderPassIt = m_vkRenderPasses.find(targetImage->imageFormat);
     if (renderPassIt == m_vkRenderPasses.end()) {
@@ -1220,17 +1210,17 @@ void CompositorVk::buildCompositionVk(const CompositionRequest& compositionReque
     compositionVk->targetRenderPass = renderPassIt->second;
     compositionVk->targetFramebuffer = targetImageRenderTarget->m_vkFramebuffer;
 
-    for (const CompositionRequestLayer& layer : compositionRequest.layers) {
+    for (const CompositionRequestLayerVk& layer : compositionRequest.layers) {
         uint32_t sourceImageWidth = 0;
         uint32_t sourceImageHeight = 0;
-        const BorrowedImageInfoVk* sourceImage = nullptr;
+        const ColorBufferVkImageInfo* sourceImage = nullptr;
 
         if (layer.props.composeMode == HWC2_COMPOSITION_SOLID_COLOR) {
             sourceImageWidth = targetWidth;
             sourceImageHeight = targetHeight;
         } else if (layer.source) {
-            sourceImage = getInfoOrAbort(layer.source);
-            if (!canCompositeFrom(sourceImage->imageCreateInfo)) {
+            sourceImage = layer.source;
+            if (!canCompositeFrom(sourceImage->imageCreateInfoShallow)) {
                 continue;
             }
 
@@ -1391,8 +1381,55 @@ void CompositorVk::buildCompositionVk(const CompositionRequest& compositionReque
     }
 }
 
+static Compositor::CompositionFinishedWaitable getCompletedFuture() {
+    std::promise<void> promise;
+    promise.set_value();
+    return promise.get_future().share();
+}
+
 CompositorVk::CompositionFinishedWaitable CompositorVk::compose(
     const CompositionRequest& compositionRequest) {
+    auto targetCb = compositionRequest.target;
+    if (!targetCb) {
+        GFXSTREAM_ERROR("invalid target!");
+        return getCompletedFuture();
+    }
+    targetCb->invalidateForBackend(Backend::VK);
+    auto targetCbVk = targetCb->getColorBufferVk();
+    auto targetImageInfo = targetCbVk ? targetCbVk->prepareForComposition(true) : nullptr;
+    if (!targetImageInfo) {
+        GFXSTREAM_ERROR("failed to prepare target!");
+        return getCompletedFuture();
+    }
+
+    CompositionRequestVk compositionRequestVk;
+    compositionRequestVk.target = targetImageInfo.get();
+
+    std::vector<std::unique_ptr<ColorBufferVkImageInfo>> keepAliveImages;
+    keepAliveImages.push_back(std::move(targetImageInfo));
+
+    for (const CompositionRequestLayer& layer : compositionRequest.layers) {
+        CompositionRequestLayerVk layerVk;
+        layerVk.props = layer.props;
+
+        if (layer.props.composeMode == HWC2_COMPOSITION_DEVICE && layer.source) {
+            auto sourceCb = layer.source;
+            sourceCb->invalidateForBackend(Backend::VK);
+            auto sourceCbVk = sourceCb->getColorBufferVk();
+            auto sourceImageInfo = sourceCbVk ? sourceCbVk->prepareForComposition(false) : nullptr;
+            if (sourceImageInfo) {
+                layerVk.source = sourceImageInfo.get();
+                keepAliveImages.push_back(std::move(sourceImageInfo));
+            }
+        }
+        compositionRequestVk.layers.push_back(layerVk);
+    }
+
+    return compose(compositionRequestVk);
+}
+
+CompositorVk::CompositionFinishedWaitable CompositorVk::compose(
+    const CompositionRequestVk& compositionRequest) {
     static uint32_t sCompositionNumber = 0;
     const uint32_t thisCompositionNumber = sCompositionNumber++;
 
@@ -1418,14 +1455,21 @@ CompositorVk::CompositionFinishedWaitable CompositorVk::compose(
     std::vector<VkImageMemoryBarrier> preCompositionLayoutTransitionBarriers;
     std::vector<VkImageMemoryBarrier> postCompositionLayoutTransitionBarriers;
     std::vector<VkImageMemoryBarrier> postCompositionQueueTransferBarriers;
-    addNeededBarriersToUseBorrowedImage(
-        *compositionVk.targetImage, m_queueFamilyIndex, kTargetImageInitialLayoutUsed,
-        kTargetImageFinalLayoutUsed, VK_ACCESS_MEMORY_WRITE_BIT,
-        &preCompositionQueueTransferBarriers, &preCompositionLayoutTransitionBarriers,
-        &postCompositionLayoutTransitionBarriers, &postCompositionQueueTransferBarriers);
-    for (const BorrowedImageInfoVk* sourceImage : compositionVk.layersSourceImages) {
-        addNeededBarriersToUseBorrowedImage(
-            *sourceImage, m_queueFamilyIndex, kSourceImageInitialLayoutUsed,
+    {
+        const auto* targetImage = compositionVk.targetImage;
+        vk_util::addNeededBarriersToUseImage(
+            targetImage->image, targetImage->preBorrowQueueFamilyIndex,
+            targetImage->preBorrowLayout, targetImage->postBorrowQueueFamilyIndex,
+            targetImage->postBorrowLayout, m_queueFamilyIndex, kTargetImageInitialLayoutUsed,
+            kTargetImageFinalLayoutUsed, VK_ACCESS_MEMORY_WRITE_BIT,
+            &preCompositionQueueTransferBarriers, &preCompositionLayoutTransitionBarriers,
+            &postCompositionLayoutTransitionBarriers, &postCompositionQueueTransferBarriers);
+    }
+    for (const ColorBufferVkImageInfo* sourceImage : compositionVk.layersSourceImages) {
+        vk_util::addNeededBarriersToUseImage(
+            sourceImage->image, sourceImage->preBorrowQueueFamilyIndex,
+            sourceImage->preBorrowLayout, sourceImage->postBorrowQueueFamilyIndex,
+            sourceImage->postBorrowLayout, m_queueFamilyIndex, kSourceImageInitialLayoutUsed,
             kSourceImageFinalLayoutUsed, VK_ACCESS_SHADER_READ_BIT,
             &preCompositionQueueTransferBarriers, &preCompositionLayoutTransitionBarriers,
             &postCompositionLayoutTransitionBarriers, &postCompositionQueueTransferBarriers);
@@ -1490,8 +1534,8 @@ CompositorVk::CompositionFinishedWaitable CompositorVk::compose(
                     },
                 .extent =
                     {
-                        .width = compositionVk.targetImage->imageCreateInfo.extent.width,
-                        .height = compositionVk.targetImage->imageCreateInfo.extent.height,
+                        .width = compositionVk.targetImage->imageCreateInfoShallow.extent.width,
+                        .height = compositionVk.targetImage->imageCreateInfoShallow.extent.height,
                     },
             },
         .clearValueCount = 1,
@@ -1512,15 +1556,16 @@ CompositorVk::CompositionFinishedWaitable CompositorVk::compose(
             },
         .extent =
             {
-                .width = compositionVk.targetImage->imageCreateInfo.extent.width,
-                .height = compositionVk.targetImage->imageCreateInfo.extent.height,
+                .width = compositionVk.targetImage->imageCreateInfoShallow.extent.width,
+                .height = compositionVk.targetImage->imageCreateInfoShallow.extent.height,
             },
     };
     const VkViewport viewport = {
         .x = 0.0f,
         .y = 0.0f,
-        .width = static_cast<float>(compositionVk.targetImage->imageCreateInfo.extent.width),
-        .height = static_cast<float>(compositionVk.targetImage->imageCreateInfo.extent.height),
+        .width = static_cast<float>(compositionVk.targetImage->imageCreateInfoShallow.extent.width),
+        .height =
+            static_cast<float>(compositionVk.targetImage->imageCreateInfoShallow.extent.height),
         .minDepth = 0.0f,
         .maxDepth = 1.0f,
     };

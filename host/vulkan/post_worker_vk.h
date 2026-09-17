@@ -16,11 +16,11 @@
 #pragma once
 
 #include <array>
-#include <optional>
 #include <future>
+#include <optional>
 
 #include "gfxstream/host/display_surface_user.h"
-#include "host/post_worker.h"
+#include "gfxstream/host/post_worker.h"
 
 namespace gfxstream {
 namespace host {
@@ -30,7 +30,8 @@ class DisplayVk;
 
 class PostWorkerVk : public PostWorker {
    public:
-    PostWorkerVk(FrameBuffer* fb, Compositor* compositor, vk::DisplayVk* displayGl);
+    PostWorkerVk(gfxstream::host::GlobalState* globalState, Compositor* compositor,
+                 vk::DisplayVk* displayGl);
 
    protected:
     std::shared_future<void> postImpl(

@@ -1,43 +1,41 @@
 /*
-* Copyright (C) 2017 The Android Open Source Project
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-#include "post_worker.h"
+ * Copyright (C) 2017 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "gfxstream/host/post_worker.h"
 
 #include <string.h>
 
 #include <chrono>
 
-#include "color_buffer.h"
-#include "frame_buffer.h"
 #include "gfxstream/Tracing.h"
 #include "gfxstream/common/logging.h"
+#include "gfxstream/host/color_buffer_interface.h"
+#include "gfxstream/host/global_state.h"
 #include "gfxstream/host/window_operations.h"
-#include "render_thread_info.h"
-#include "vulkan/vk_common_operations.h"
 
 namespace gfxstream {
 namespace host {
 
-PostWorker::PostWorker(bool mainThreadPostingOnly, FrameBuffer* fb, Compositor* compositor)
-    : mFb(fb),
+PostWorker::PostWorker(bool mainThreadPostingOnly, gfxstream::host::GlobalState* globalState,
+                       Compositor* compositor)
+    : m_globalState(globalState),
       m_compositor(compositor),
       m_mainThreadPostingOnly(mainThreadPostingOnly) {}
 
 std::shared_future<void> PostWorker::composeImpl(const FlatComposeRequest& composeRequest) {
-    std::shared_future<void> completedFuture =
-        std::async(std::launch::deferred, [] {}).share();
+    std::shared_future<void> completedFuture = std::async(std::launch::deferred, [] {}).share();
     completedFuture.wait();
 
     if (!isComposeTargetReady(composeRequest.targetHandle)) {
@@ -45,8 +43,7 @@ std::shared_future<void> PostWorker::composeImpl(const FlatComposeRequest& compo
     }
 
     Compositor::CompositionRequest compositorRequest = {};
-    compositorRequest.target = mFb->borrowColorBufferForComposition(composeRequest.targetHandle,
-                                                                    /*colorBufferIsTarget=*/true);
+    compositorRequest.target = m_globalState->findColorBuffer(composeRequest.targetHandle);
     if (!compositorRequest.target) {
         GFXSTREAM_ERROR("Compose target is null (cb=0x%x).", composeRequest.targetHandle);
         return completedFuture;
@@ -58,8 +55,7 @@ std::shared_future<void> PostWorker::composeImpl(const FlatComposeRequest& compo
             auto& compositorLayer = compositorRequest.layers.emplace_back();
             compositorLayer.props = guestLayer;
         } else {
-            auto source = mFb->borrowColorBufferForComposition(guestLayer.cbHandle,
-                                                            /*colorBufferIsTarget=*/false);
+            auto source = m_globalState->findColorBuffer(guestLayer.cbHandle);
             if (!source) {
                 continue;
             }
@@ -95,11 +91,10 @@ PostWorker::~PostWorker() {}
 void PostWorker::post(IColorBuffer* cb, std::unique_ptr<Post::CompletionCallback> postCallback,
                       const std::optional<std::array<float, 16>>& colorTransform) {
     auto packagedPostCallback = std::shared_ptr<Post::CompletionCallback>(std::move(postCallback));
-    runTask(
-        std::packaged_task<void()>([cb, packagedPostCallback, this, colorTransform] {
-            auto completedFuture = postImpl(cb, colorTransform);
-            (*packagedPostCallback)(completedFuture);
-        }));
+    runTask(std::packaged_task<void()>([cb, packagedPostCallback, this, colorTransform] {
+        auto completedFuture = postImpl(cb, colorTransform);
+        (*packagedPostCallback)(completedFuture);
+    }));
 }
 
 void PostWorker::exit() {
@@ -107,8 +102,7 @@ void PostWorker::exit() {
 }
 
 void PostWorker::viewport(int width, int height) {
-    runTask(std::packaged_task<void()>(
-        [width, height, this] { viewportImpl(width, height); }));
+    runTask(std::packaged_task<void()>([width, height, this] { viewportImpl(width, height); }));
 }
 
 void PostWorker::compose(std::unique_ptr<FlatComposeRequest> composeRequest,
@@ -118,29 +112,28 @@ void PostWorker::compose(std::unique_ptr<FlatComposeRequest> composeRequest,
     auto packagedComposeCallback =
         std::shared_ptr<Post::CompletionCallback>(std::move(composeCallback));
     auto packagedComposeRequest = std::shared_ptr<FlatComposeRequest>(std::move(composeRequest));
-    runTask(
-        std::packaged_task<void()>([packagedComposeCallback, packagedComposeRequest, this] {
+    runTask(std::packaged_task<void()>([packagedComposeCallback, packagedComposeRequest, this] {
         auto completedFuture = composeImpl(*packagedComposeRequest);
         m_composeTargetToComposeFuture.emplace(packagedComposeRequest->targetHandle,
                                                completedFuture);
         (*packagedComposeCallback)(completedFuture);
-        }));
+    }));
 }
 
 void PostWorker::clear() {
     runTask(std::packaged_task<void()>([this] { clearImpl(); }));
 }
 
-void PostWorker::screenshot(ColorBuffer* cb, int screenwidth, int screenheight, int skinRotation,
+void PostWorker::screenshot(IColorBuffer* cb, int screenwidth, int screenheight, int skinRotation,
                             GfxstreamFormat pixelsFormat, void* outPixels, const Rect& rect,
                             const std::optional<std::array<float, 16>>& colorTransform) {
     // See b/292237104.
-    mFb->lock();
+    m_globalState->lockGlobalState();
 
-    mFb->getColorBufferScreenshot(cb, screenwidth, screenheight, skinRotation, pixelsFormat,
-                                  outPixels, rect, colorTransform);
+    m_globalState->getColorBufferScreenshot(cb, screenwidth, screenheight, skinRotation,
+                                            pixelsFormat, outPixels, rect, colorTransform);
 
-    mFb->unlock();
+    m_globalState->unlockGlobalState();
 }
 
 namespace {
@@ -160,8 +153,8 @@ void PostWorker::runTask(std::packaged_task<void()> task) {
         if (!get_gfxstream_window_operations().run_on_ui_thread) {
             GFXSTREAM_ERROR("m_runOnUiThread function ptr is NULL, going to crash");
         }
-        get_gfxstream_window_operations()
-            .run_on_ui_thread(RunOnUiThreadTrampoline, taskPtr.release(), false);
+        get_gfxstream_window_operations().run_on_ui_thread(RunOnUiThreadTrampoline,
+                                                           taskPtr.release(), false);
     } else {
         (*taskPtr)();
     }

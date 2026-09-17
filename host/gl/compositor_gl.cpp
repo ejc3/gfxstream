@@ -14,27 +14,17 @@
 
 #include "compositor_gl.h"
 
-#include "borrowed_image_gl.h"
+#include "OpenGLESDispatch/DispatchTables.h"
+#include "color_buffer_gl.h"
 #include "debug_gl.h"
 #include "display_surface_gl.h"
-#include "OpenGLESDispatch/DispatchTables.h"
-#include "texture_draw.h"
 #include "gfxstream/common/logging.h"
+#include "texture_draw.h"
 
 namespace gfxstream {
 namespace host {
 namespace gl {
 namespace {
-
-const BorrowedImageInfoGl* getInfoOrAbort(const std::unique_ptr<BorrowedImageInfo>& info) {
-    auto imageGl = static_cast<const BorrowedImageInfoGl*>(info.get());
-    if (imageGl != nullptr) {
-        return imageGl;
-    }
-
-    GFXSTREAM_FATAL("CompositorGl did not find BorrowedImageInfoGl");
-    return nullptr;
-}
 
 std::shared_future<void> getCompletedFuture() {
     std::shared_future<void> completedFuture = std::async(std::launch::deferred, [] {}).share();
@@ -54,10 +44,21 @@ CompositorGl::~CompositorGl() {}
 
 Compositor::CompositionFinishedWaitable CompositorGl::compose(
         const CompositionRequest& composeRequest) {
-    const auto* targetImage = getInfoOrAbort(composeRequest.target);
-    const uint32_t targetWidth = targetImage->width;
-    const uint32_t targetHeight = targetImage->height;
-    const GLuint targetTexture = targetImage->texture;
+    auto targetCb = composeRequest.target;
+    if (!targetCb) {
+        GFXSTREAM_ERROR("CompositorGl::compose: target is null");
+        return getCompletedFuture();
+    }
+    targetCb->invalidateForBackend(Backend::GL);
+    auto targetCbGl = targetCb->getColorBufferGl();
+    if (!targetCbGl) {
+        GFXSTREAM_ERROR("CompositorGl::compose: target is not GL ColorBuffer");
+        return getCompletedFuture();
+    }
+
+    const uint32_t targetWidth = targetCbGl->getWidth();
+    const uint32_t targetHeight = targetCbGl->getHeight();
+    const GLuint targetTexture = targetCbGl->getTexture();
     GL_SCOPED_DEBUG_GROUP("CompositorGl::compose() into texture:%d", targetTexture);
 
     GLint restoredViewport[4] = {0, 0, 0, 0};
@@ -76,11 +77,20 @@ Compositor::CompositionFinishedWaitable CompositorGl::compose(
 
     for (const CompositionRequestLayer& layer : composeRequest.layers) {
         if (layer.props.composeMode == HWC2_COMPOSITION_DEVICE) {
-            const BorrowedImageInfoGl* layerImage = getInfoOrAbort(layer.source);
-            const GLuint layerTexture = layerImage->texture;
+            auto layerCb = layer.source;
+            if (!layerCb) {
+                continue;
+            }
+            layerCb->invalidateForBackend(Backend::GL);
+            auto layerCbGl = layerCb->getColorBufferGl();
+            if (!layerCbGl) {
+                continue;
+            }
+
+            const GLuint layerTexture = layerCbGl->getTexture();
             GL_SCOPED_DEBUG_GROUP("CompositorGl::compose() from layer texture:%d", layerTexture);
-            m_textureDraw->drawLayer(layer.props, targetWidth, targetHeight, layerImage->width,
-                                     layerImage->height, layerTexture);
+            m_textureDraw->drawLayer(layer.props, targetWidth, targetHeight, layerCbGl->getWidth(),
+                                     layerCbGl->getHeight(), layerTexture);
         } else {
             m_textureDraw->drawLayer(layer.props, targetWidth, targetHeight, 1, 1, 0);
         }
@@ -92,7 +102,7 @@ Compositor::CompositionFinishedWaitable CompositorGl::compose(
 
     m_textureDraw->cleanupForDrawLayer();
 
-    targetImage->onCommandsIssued();
+    targetCbGl->setSync();
 
     // Note: This should be returning a future when all work, both CPU and GPU, is
     // complete but is currently only returning a future when all CPU work is completed.

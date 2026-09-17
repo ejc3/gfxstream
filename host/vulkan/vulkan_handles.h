@@ -101,6 +101,7 @@
     f(VkDescriptorSet)                            \
     f(VkSampler)                                  \
     f(VkSamplerYcbcrConversion)                   \
+    f(VkSamplerYcbcrConversionKHR)                \
     f(VkDescriptorUpdateTemplate)                 \
     f(VkRenderPass)                               \
     f(VkFramebuffer)                              \

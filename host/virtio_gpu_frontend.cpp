@@ -24,15 +24,15 @@
 #include <google/protobuf/text_format.h>
 #endif  // ifdef GFXSTREAM_BUILD_WITH_SNAPSHOT_FRONTEND_SUPPORT
 
+#include <vulkan/vulkan.h>
+
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
 
-#include <vulkan/vulkan.h>
-
 #include "frame_buffer.h"
-#include "framework_formats.h"
 #include "gfxstream/host/address_space_operations.h"
+#include "gfxstream/host/framework_formats.h"
 #include "vulkan/vk_common_operations.h"
 // TODO: remove after moving save/load interface to ops.
 #include "gfxstream/common/logging.h"

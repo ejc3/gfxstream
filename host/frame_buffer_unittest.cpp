@@ -12,32 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include "frame_buffer.h"
 
 #include <memory>
-
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
 #include <thread>
-#include <chrono>
-#include <future>
-#include "render_channel_impl.h"
 
-#include "render_thread_info.h"
 #include "gfxstream/common/testing/graphics_test_environment.h"
 #include "gfxstream/files/PathUtils.h"
+#include "gfxstream/host/color_buffer_interface.h"
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/host/features.h"
 #include "gfxstream/host/file_stream.h"
 #include "gfxstream/host/gfxstream_format.h"
 #include "gfxstream/host/mem_stream.h"
-#include "gfxstream/host/window_operations.h"
-#include "gfxstream/system/System.h"
 #include "gfxstream/host/testing/GLSnapshotTesting.h"
 #include "gfxstream/host/testing/GLTestUtils.h"
 #include "gfxstream/host/testing/OSWindow.h"
 #include "gfxstream/host/testing/SampleApplication.h"
 #include "gfxstream/host/testing/ShaderUtils.h"
+#include "gfxstream/host/window_operations.h"
+#include "gfxstream/system/System.h"
+#include "host/gl/emulation_gl.h"
+#include "render_channel_impl.h"
+#include "render_thread_info.h"
 
 #ifdef _MSC_VER
 #include "gfxstream/msvc.h"
@@ -103,7 +103,7 @@ class FrameBufferTest : public ::testing::Test {
         EXPECT_EQ(EGL_SUCCESS, egl->eglGetError());
 
         mRenderThreadInfo = new RenderThreadInfo();
-        mRenderThreadInfo->initGl();
+        mRenderThreadInfo->initGl(mFb->getEmulationGl());
     }
 
     virtual void TearDown() override {
@@ -538,27 +538,6 @@ TEST_F(FrameBufferTest, SnapshotColorBufferSubUpdateRestore) {
     mFb->closeColorBuffer(handle);
 }
 
-// bug: 111558407
-// Tests that ColorBuffer's blit path is retained on save/restore.
-TEST_F(FrameBufferTest, SnapshotFastBlitRestore) {
-    HandleType handle = mFb->createColorBuffer(mWidth, mHeight, GfxstreamFormat::R8G8B8A8_UNORM);
-
-    EXPECT_TRUE(mFb->isFastBlitSupported());
-
-    mFb->lock();
-    EXPECT_EQ(mFb->isFastBlitSupported(), mFb->findColorBuffer(handle)->glOpIsFastBlitSupported());
-    mFb->unlock();
-
-    saveSnapshot();
-    loadSnapshot();
-
-    mFb->lock();
-    EXPECT_EQ(mFb->isFastBlitSupported(), mFb->findColorBuffer(handle)->glOpIsFastBlitSupported());
-    mFb->unlock();
-
-    mFb->closeColorBuffer(handle);
-}
-
 // Tests rate of draw calls with no guest/host communication, but with translator.
 static constexpr uint32_t kDrawCallLimit = 50000;
 
@@ -972,6 +951,37 @@ TEST_F(RenderThreadDeadlockTest, ReproDeadlockOnTeardown) {
     }
 
     fb->removeGraphicsProcessResources(contextId);
+}
+
+TEST_F(FrameBufferTest, CleanupProcGLObjects) {
+    if (!mFb->hasEmulationGl()) {
+        GTEST_SKIP() << "GL emulation not enabled.";
+    }
+
+    const uint64_t testPuid = 42;
+    mRenderThreadInfo->setPuid(testPuid);
+    EXPECT_EQ(testPuid, mRenderThreadInfo->m_glInfo->m_puid);
+
+    HandleType context = mFb->createEmulatedEglContext(0, 0, gl::GLESApi_2);
+    EXPECT_NE((HandleType)0, context);
+    HandleType surface = mFb->createEmulatedEglWindowSurface(0, mWidth, mHeight);
+    EXPECT_NE((HandleType)0, surface);
+    EXPECT_TRUE(mFb->getEmulationGl()->hasContextsOrWindowSurfaces());
+    EXPECT_TRUE(mFb->getEmulationGl()->hasProcOwnedResources());
+
+    // Simulate render thread exit for this process before cleanupProcGLObjects
+    mRenderThreadInfo->setPuid(0);
+    mFb->cleanupProcGLObjects(testPuid);
+
+    EXPECT_FALSE(mFb->getEmulationGl()->hasProcOwnedResources());
+    EXPECT_FALSE(mFb->getEmulationGl()->hasContextsOrWindowSurfaces());
+
+    // Verify fallback thread context tracking when puid == 0
+    HandleType threadContext = mFb->createEmulatedEglContext(0, 0, gl::GLESApi_2);
+    EXPECT_NE((HandleType)0, threadContext);
+    EXPECT_TRUE(mFb->getEmulationGl()->hasContextsOrWindowSurfaces());
+    mFb->getEmulationGl()->drainRenderThreadContexts();
+    EXPECT_FALSE(mFb->getEmulationGl()->hasContextsOrWindowSurfaces());
 }
 
 }  // namespace

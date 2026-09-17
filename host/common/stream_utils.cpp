@@ -14,25 +14,41 @@
 
 #include "gfxstream/host/stream_utils.h"
 
+#include <limits>
+#include <stdio.h>
+
 namespace gfxstream {
 namespace host {
 
-void saveBufferRaw(Stream* stream, char* buffer, uint32_t len) {
+bool saveBufferRaw(Stream* stream, char* buffer, uint32_t len) {
     stream->putBe32(len);
-    stream->write(buffer, len);
+    ssize_t written = stream->write(buffer, len);
+    if (written < 0 || static_cast<size_t>(written) != static_cast<size_t>(len)) {
+        fprintf(stderr, "%s: saveBufferRaw failed to write %u bytes from stream, got %zd\n",
+                __FUNCTION__, len, written);
+        return false;
+    }
+    return true;
 }
 
 bool loadBufferRaw(Stream* stream, char* buffer) {
-    auto len = stream->getBe32();
-    int ret = (int)stream->read(buffer, len);
-    return ret == (int)len;
+    const uint32_t len = stream->getBe32();
+    const size_t bytesToRead = size_t(len);
+    ssize_t ret = stream->read(buffer, bytesToRead);
+    if (ret < 0 || static_cast<size_t>(ret) != bytesToRead) {
+        fprintf(stderr, "%s: loadBufferRaw failed to read %zu bytes from stream, got %zd\n",
+                __FUNCTION__, bytesToRead, ret);
+        return false;
+    }
+    return true;
 }
 
-void saveStringArray(Stream* stream, const char* const* strings, uint32_t count) {
+bool saveStringArray(Stream* stream, const char* const* strings, uint32_t count) {
     stream->putBe32(count);
     for (uint32_t i = 0; i < count; ++i) {
         stream->putString(strings[i]);
     }
+    return true;
 }
 
 std::vector<std::string> loadStringArray(Stream* stream) {

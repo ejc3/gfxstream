@@ -21,7 +21,6 @@ if(CONFIG_AEMU)
 endif()
 
 add_library(gfxstream-vulkan-server
-            borrowed_image_vk.cpp
             buffer_vk.cpp
             color_buffer_vk.cpp
             compositor_vk.cpp
@@ -68,12 +67,12 @@ target_link_libraries(gfxstream-vulkan-server PUBLIC
         gfxstream_host_iostream
         gfxstream_host_library
         gfxstream_host_renderdoc
-        gfxstream_host_snapshot.headers
         gfxstream_host_tracing
         gfxstream_openglesdispatch.headers
         gfxstream_vulkan_headers
         gfxstream_xcb_headers
         OpenglRender_vulkan_cereal
+        gfxstream_host_native_window
         PRIVATE
         gfxstream_opengl_headers
         )

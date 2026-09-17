@@ -404,6 +404,106 @@ bool YcbcrSamplerPool::getOrCreateSamplerInfo(GfxstreamFormat format, YCbCrSampl
     return true;
 }
 
+void addNeededBarriersToUseImage(VkImage image, uint32_t preQueueFamilyIndex,
+                                 VkImageLayout preLayout, uint32_t postQueueFamilyIndex,
+                                 VkImageLayout postLayout, uint32_t usedQueueFamilyIndex,
+                                 VkImageLayout usedInitialImageLayout,
+                                 VkImageLayout usedFinalImageLayout, VkAccessFlags usedAccessMask,
+                                 std::vector<VkImageMemoryBarrier>* preUseQueueTransferBarriers,
+                                 std::vector<VkImageMemoryBarrier>* preUseLayoutTransitionBarriers,
+                                 std::vector<VkImageMemoryBarrier>* postUseLayoutTransitionBarriers,
+                                 std::vector<VkImageMemoryBarrier>* postUseQueueTransferBarriers) {
+    if (preQueueFamilyIndex != usedQueueFamilyIndex) {
+        const VkImageMemoryBarrier queueTransferBarrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            .oldLayout = preLayout,
+            .newLayout = preLayout,
+            .srcQueueFamilyIndex = preQueueFamilyIndex,
+            .dstQueueFamilyIndex = usedQueueFamilyIndex,
+            .image = image,
+            .subresourceRange =
+                {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+        };
+        preUseQueueTransferBarriers->emplace_back(queueTransferBarrier);
+    }
+    if (preLayout != usedInitialImageLayout &&
+        usedInitialImageLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+        const VkImageMemoryBarrier layoutTransitionBarrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            .dstAccessMask = usedAccessMask,
+            .oldLayout = preLayout,
+            .newLayout = usedInitialImageLayout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange =
+                {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+        };
+        preUseLayoutTransitionBarriers->emplace_back(layoutTransitionBarrier);
+    }
+    if (postLayout != usedFinalImageLayout) {
+        const VkImageMemoryBarrier layoutTransitionBarrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = usedAccessMask,
+            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            .oldLayout = usedFinalImageLayout,
+            .newLayout = postLayout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange =
+                {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+        };
+        postUseLayoutTransitionBarriers->emplace_back(layoutTransitionBarrier);
+    }
+    if (postQueueFamilyIndex != usedQueueFamilyIndex) {
+        const VkImageMemoryBarrier queueTransferBarrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT,
+            .oldLayout = postLayout,
+            .newLayout = postLayout,
+            .srcQueueFamilyIndex = usedQueueFamilyIndex,
+            .dstQueueFamilyIndex = postQueueFamilyIndex,
+            .image = image,
+            .subresourceRange =
+                {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+        };
+        postUseQueueTransferBarriers->emplace_back(queueTransferBarrier);
+    }
+}
+
 }  // namespace vk_util
 }  // namespace vk
 }  // namespace host

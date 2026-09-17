@@ -47,11 +47,11 @@ add_subdirectory(common)
 add_subdirectory(features)
 add_subdirectory(iostream)
 add_subdirectory(library)
-add_subdirectory(snapshot)
 add_subdirectory(tracing)
 add_subdirectory(decoder_common)
 add_subdirectory(compressed_textures)
 add_subdirectory(renderdoc)
+add_subdirectory(native_window)
 
 add_library(
     gfxstream_backend.headers
@@ -62,7 +62,6 @@ target_link_libraries(
     INTERFACE
     gfxstream_features.headers
     gfxstream_host_decoder_common
-    gfxstream_host_snapshot.headers
     gfxstream_host_renderdoc
     )
 target_include_directories(
@@ -82,9 +81,6 @@ set(stream-server-core-sources
     channel_stream.cpp
     color_buffer.cpp
     frame_buffer.cpp
-    hwc2.cpp
-    post_worker.cpp
-    post_worker_gl.cpp
     read_buffer.cpp
     render_channel_impl.cpp
     render_control.cpp
@@ -102,15 +98,7 @@ set(stream-server-core-sources
     virtio_gpu_ring_blob.cpp
     virtio_gpu_timelines.cpp
     vsync_thread.cpp)
-if (APPLE)
-    set(stream-server-core-platform-sources native_sub_window_cocoa.mm)
-elseif (WIN32)
-    set(stream-server-core-platform-sources native_sub_window_win32.cpp)
-elseif (QNX)
-    set(stream-server-core-platform-sources native_sub_window_qnx.cpp)
-else()
-    set(stream-server-core-platform-sources native_sub_window_x11.cpp)
-endif()
+
 
 
 
@@ -120,7 +108,6 @@ add_library(
         gfxstream_backend_static
         STATIC
         ${stream-server-core-sources}
-        ${stream-server-core-platform-sources}
 )
 target_link_libraries(
         gfxstream_backend_static
@@ -138,7 +125,6 @@ target_link_libraries(
         gfxstream_host_iostream
         gfxstream_host_library
         gfxstream_host_renderdoc
-        gfxstream_host_snapshot.headers
         gfxstream_host_tracing
         gfxstream_opengl_headers
         gfxstream_openglesdispatch
@@ -147,6 +133,7 @@ target_link_libraries(
         gfxstream_xcb_headers
         GLES_CM_translator_static
         renderControl_dec
+        gfxstream_host_native_window
         )
 
 target_include_directories(

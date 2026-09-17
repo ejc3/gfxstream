@@ -132,9 +132,7 @@ bool RenderLibImpl::getOpt(RenderOpt* opt) {
     }
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-    opt->display = fb->getDisplay();
-    opt->surface = fb->getWindowSurface();
-    opt->config = fb->getConfig();
+    fb->getRenderOpt(opt);
 #endif
     return (opt->display && opt->surface  && opt->config);
 }

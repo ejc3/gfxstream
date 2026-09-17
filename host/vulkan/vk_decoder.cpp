@@ -38,7 +38,6 @@
 #include "common/goldfish_vk_marshaling.h"
 #include "common/goldfish_vk_reserved_marshaling.h"
 #include "common/goldfish_vk_transform.h"
-#include "frame_buffer.h"
 #include "gfxstream/BumpPool.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/iostream.h"
@@ -1867,8 +1866,17 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                             return ptr - (unsigned char*)buf;
                         }
                         sizeLeft -= readStream;
-                        uint8_t* targetRange = hostPtr + offset;
-                        memcpy(targetRange, *readStreamPtrPtr, readStream);
+                        auto memorySize = m_state->getDeviceMemorySize(memory);
+                        if (offset > memorySize || readStream > memorySize - offset) {
+                            GFXSTREAM_ERROR(
+                                "vkFlushMappedMemoryRanges: dropping out-of-bounds guest range "
+                                "[offset %llu, size %llu] for memory size %llu",
+                                (unsigned long long)offset, (unsigned long long)readStream,
+                                (unsigned long long)memorySize);
+                        } else {
+                            uint8_t* targetRange = hostPtr + offset;
+                            memcpy(targetRange, *readStreamPtrPtr, readStream);
+                        }
                         *readStreamPtrPtr += readStream;
                         packetLen += 8 + readStream;
                     }
@@ -1947,13 +1955,25 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                         auto size = range.size;
                         auto offset = range.offset;
                         auto hostPtr = m_state->getMappedHostPointer(memory);
-                        auto actualSize =
-                            size == VK_WHOLE_SIZE ? m_state->getDeviceMemorySize(memory) : size;
+                        auto memorySize = m_state->getDeviceMemorySize(memory);
+                        auto actualSize = size == VK_WHOLE_SIZE
+                                              ? (offset <= memorySize ? memorySize - offset : 0)
+                                              : size;
                         uint64_t writeStream = 0;
                         if (!hostPtr) {
                             vkStream->write(&writeStream, sizeof(uint64_t));
                             continue;
                         };
+                        if (offset > memorySize || actualSize > memorySize - offset) {
+                            GFXSTREAM_ERROR(
+                                "vkInvalidateMappedMemoryRanges: dropping out-of-bounds guest "
+                                "range "
+                                "[offset %llu, size %llu] for memory size %llu",
+                                (unsigned long long)offset, (unsigned long long)actualSize,
+                                (unsigned long long)memorySize);
+                            vkStream->write(&writeStream, sizeof(uint64_t));
+                            continue;
+                        }
                         uint8_t* targetRange = hostPtr + offset;
                         writeStream = actualSize;
                         vkStream->write(&writeStream, sizeof(uint64_t));
@@ -5396,12 +5416,14 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                 VkDevice device;
                 VkPipelineCache pipelineCache;
                 const VkAllocationCallbacks* pAllocator;
-                // Begin global wrapped dispatchable handle unboxing for device;
+                // Begin non wrapped dispatchable handle unboxing for device;
                 uint64_t cgen_var_0;
                 memcpy((uint64_t*)&cgen_var_0, *readStreamPtrPtr, 1 * 8);
                 *readStreamPtrPtr += 1 * 8;
                 *(VkDevice*)&device = (VkDevice)(VkDevice)((VkDevice)(*&cgen_var_0));
+                auto unboxed_device = unbox_VkDevice(device);
                 auto vk = dispatch_VkDevice(device);
+                // End manual dispatchable handle unboxing for device;
                 // Begin manual non dispatchable handle destroy unboxing for pipelineCache;
                 VkPipelineCache boxed_pipelineCache_preserve;
                 uint64_t cgen_var_1;
@@ -5441,7 +5463,8 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                         &m_pool, snapshotApiCallHandle, packet, packetLen, device,
                         boxed_pipelineCache_preserve, pAllocator);
                 }
-                delete_VkPipelineCache(boxed_pipelineCache_preserve);
+                delayed_delete_VkPipelineCache(boxed_pipelineCache_preserve, unboxed_device,
+                                               nullptr);
                 vkReadStream->clearPool();
                 if (m_queueSubmitWithCommandsEnabled)
                     seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
@@ -5982,12 +6005,14 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                 VkDevice device;
                 VkSampler sampler;
                 const VkAllocationCallbacks* pAllocator;
-                // Begin global wrapped dispatchable handle unboxing for device;
+                // Begin non wrapped dispatchable handle unboxing for device;
                 uint64_t cgen_var_0;
                 memcpy((uint64_t*)&cgen_var_0, *readStreamPtrPtr, 1 * 8);
                 *readStreamPtrPtr += 1 * 8;
                 *(VkDevice*)&device = (VkDevice)(VkDevice)((VkDevice)(*&cgen_var_0));
+                auto unboxed_device = unbox_VkDevice(device);
                 auto vk = dispatch_VkDevice(device);
+                // End manual dispatchable handle unboxing for device;
                 // Begin manual non dispatchable handle destroy unboxing for sampler;
                 VkSampler boxed_sampler_preserve;
                 uint64_t cgen_var_1;
@@ -6025,7 +6050,7 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                                                           packetLen, device, boxed_sampler_preserve,
                                                           pAllocator);
                 }
-                delete_VkSampler(boxed_sampler_preserve);
+                delayed_delete_VkSampler(boxed_sampler_preserve, unboxed_device, nullptr);
                 vkReadStream->clearPool();
                 if (m_queueSubmitWithCommandsEnabled)
                     seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
@@ -6122,12 +6147,14 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                 VkDevice device;
                 VkDescriptorSetLayout descriptorSetLayout;
                 const VkAllocationCallbacks* pAllocator;
-                // Begin global wrapped dispatchable handle unboxing for device;
+                // Begin non wrapped dispatchable handle unboxing for device;
                 uint64_t cgen_var_0;
                 memcpy((uint64_t*)&cgen_var_0, *readStreamPtrPtr, 1 * 8);
                 *readStreamPtrPtr += 1 * 8;
                 *(VkDevice*)&device = (VkDevice)(VkDevice)((VkDevice)(*&cgen_var_0));
+                auto unboxed_device = unbox_VkDevice(device);
                 auto vk = dispatch_VkDevice(device);
+                // End manual dispatchable handle unboxing for device;
                 // Begin manual non dispatchable handle destroy unboxing for descriptorSetLayout;
                 VkDescriptorSetLayout boxed_descriptorSetLayout_preserve;
                 uint64_t cgen_var_1;
@@ -6168,7 +6195,8 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                         &m_pool, snapshotApiCallHandle, packet, packetLen, device,
                         boxed_descriptorSetLayout_preserve, pAllocator);
                 }
-                delete_VkDescriptorSetLayout(boxed_descriptorSetLayout_preserve);
+                delayed_delete_VkDescriptorSetLayout(boxed_descriptorSetLayout_preserve,
+                                                     unboxed_device, nullptr);
                 vkReadStream->clearPool();
                 if (m_queueSubmitWithCommandsEnabled)
                     seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
@@ -7441,12 +7469,14 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                 VkDevice device;
                 VkRenderPass renderPass;
                 const VkAllocationCallbacks* pAllocator;
-                // Begin global wrapped dispatchable handle unboxing for device;
+                // Begin non wrapped dispatchable handle unboxing for device;
                 uint64_t cgen_var_0;
                 memcpy((uint64_t*)&cgen_var_0, *readStreamPtrPtr, 1 * 8);
                 *readStreamPtrPtr += 1 * 8;
                 *(VkDevice*)&device = (VkDevice)(VkDevice)((VkDevice)(*&cgen_var_0));
+                auto unboxed_device = unbox_VkDevice(device);
                 auto vk = dispatch_VkDevice(device);
+                // End manual dispatchable handle unboxing for device;
                 // Begin manual non dispatchable handle destroy unboxing for renderPass;
                 VkRenderPass boxed_renderPass_preserve;
                 uint64_t cgen_var_1;
@@ -7485,7 +7515,7 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                                                              packetLen, device,
                                                              boxed_renderPass_preserve, pAllocator);
                 }
-                delete_VkRenderPass(boxed_renderPass_preserve);
+                delayed_delete_VkRenderPass(boxed_renderPass_preserve, unboxed_device, nullptr);
                 vkReadStream->clearPool();
                 if (m_queueSubmitWithCommandsEnabled)
                     seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
@@ -10370,12 +10400,14 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                 VkDevice device;
                 VkSamplerYcbcrConversion ycbcrConversion;
                 const VkAllocationCallbacks* pAllocator;
-                // Begin global wrapped dispatchable handle unboxing for device;
+                // Begin non wrapped dispatchable handle unboxing for device;
                 uint64_t cgen_var_0;
                 memcpy((uint64_t*)&cgen_var_0, *readStreamPtrPtr, 1 * 8);
                 *readStreamPtrPtr += 1 * 8;
                 *(VkDevice*)&device = (VkDevice)(VkDevice)((VkDevice)(*&cgen_var_0));
+                auto unboxed_device = unbox_VkDevice(device);
                 auto vk = dispatch_VkDevice(device);
+                // End manual dispatchable handle unboxing for device;
                 // Begin manual non dispatchable handle destroy unboxing for ycbcrConversion;
                 VkSamplerYcbcrConversion boxed_ycbcrConversion_preserve;
                 uint64_t cgen_var_1;
@@ -10416,7 +10448,8 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                         &m_pool, snapshotApiCallHandle, packet, packetLen, device,
                         boxed_ycbcrConversion_preserve, pAllocator);
                 }
-                delete_VkSamplerYcbcrConversion(boxed_ycbcrConversion_preserve);
+                delayed_delete_VkSamplerYcbcrConversion(boxed_ycbcrConversion_preserve,
+                                                        unboxed_device, nullptr);
                 vkReadStream->clearPool();
                 if (m_queueSubmitWithCommandsEnabled)
                     seqnoPtr->fetch_add(1, std::memory_order_seq_cst);
@@ -16364,12 +16397,14 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                 VkDevice device;
                 VkSamplerYcbcrConversion ycbcrConversion;
                 const VkAllocationCallbacks* pAllocator;
-                // Begin global wrapped dispatchable handle unboxing for device;
+                // Begin non wrapped dispatchable handle unboxing for device;
                 uint64_t cgen_var_0;
                 memcpy((uint64_t*)&cgen_var_0, *readStreamPtrPtr, 1 * 8);
                 *readStreamPtrPtr += 1 * 8;
                 *(VkDevice*)&device = (VkDevice)(VkDevice)((VkDevice)(*&cgen_var_0));
+                auto unboxed_device = unbox_VkDevice(device);
                 auto vk = dispatch_VkDevice(device);
+                // End manual dispatchable handle unboxing for device;
                 // Begin manual non dispatchable handle destroy unboxing for ycbcrConversion;
                 VkSamplerYcbcrConversion boxed_ycbcrConversion_preserve;
                 uint64_t cgen_var_1;
@@ -16410,7 +16445,8 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
                         &m_pool, snapshotApiCallHandle, packet, packetLen, device,
                         boxed_ycbcrConversion_preserve, pAllocator);
                 }
-                delete_VkSamplerYcbcrConversion(boxed_ycbcrConversion_preserve);
+                delayed_delete_VkSamplerYcbcrConversion(boxed_ycbcrConversion_preserve,
+                                                        unboxed_device, nullptr);
                 vkReadStream->clearPool();
                 if (m_queueSubmitWithCommandsEnabled)
                     seqnoPtr->fetch_add(1, std::memory_order_seq_cst);

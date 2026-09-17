@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
 
 package(
     default_applicable_licenses = ["//:gfxstream_license"],
@@ -19,6 +19,7 @@ cc_library(
         "-Wno-extern-c-compat",
     ],
     defines = GFXSTREAM_HOST_DEFINES,
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
     deps = [
         "//common/base:gfxstream_common_base",
         "//common/logging:gfxstream_common_logging",

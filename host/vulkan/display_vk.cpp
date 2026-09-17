@@ -14,16 +14,18 @@
 
 #include "display_vk.h"
 
+#include <vulkan/vk_enum_string_helper.h>
+
 #include <algorithm>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include "color_buffer_vk.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/display_operations.h"
 #include "gfxstream/system/System.h"
-#include "vulkan/vk_enum_string_helper.h"
-#include "vulkan/vk_format_utils.h"
+#include "vk_format_utils.h"
 
 namespace gfxstream {
 namespace host {
@@ -268,7 +270,7 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
     struct ImageBorrower {
         ImageBorrower(const VulkanDispatch& vk, VkQueue queue,
                       std::shared_ptr<gfxstream::base::Lock> queueLock,
-                      uint32_t usedQueueFamilyIndex, const BorrowedImageInfoVk& image,
+                      uint32_t usedQueueFamilyIndex, const ColorBufferVkImageInfo& image,
                       const ImageBorrowResource& acquireResource,
                       const ImageBorrowResource& releaseResource, VkImageLayout layout)
             : m_vk(vk),
@@ -284,8 +286,9 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
                 accessMask = VK_ACCESS_SHADER_READ_BIT;
             }
 
-            addNeededBarriersToUseBorrowedImage(
-                image, usedQueueFamilyIndex,
+            vk_util::addNeededBarriersToUseImage(
+                image.image, image.preBorrowQueueFamilyIndex, image.preBorrowLayout,
+                image.postBorrowQueueFamilyIndex, image.postBorrowLayout, usedQueueFamilyIndex,
                 /*usedInitialImageLayout=*/layout,
                 /*usedFinalImageLayout=*/layout, accessMask, &acquireQueueTransferBarriers,
                 &acquireLayoutTransitionBarriers, &releaseLayoutTransitionBarriers,
@@ -407,8 +410,8 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
         const auto& layer = postCmd.layers[0];
         if (layer.rotationDegrees == 0 && !layer.colorTransform.has_value() &&
             hwc_rect_get_width(&layer.displayFrame) == 0 && !postCmd.colorTransform.has_value()) {
-            const auto* sourceImageInfoVk = static_cast<const BorrowedImageInfoVk*>(layer.info);
-            if (canPost(sourceImageInfoVk->imageCreateInfo)) {
+            const auto* sourceImageInfoVk = layer.info;
+            if (canPost(sourceImageInfoVk->imageCreateInfoShallow)) {
                 useBlit = true;
             }
         }
@@ -419,7 +422,7 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
 
     for (size_t i = 0; i < postCmd.layers.size(); ++i) {
         const auto& layer = postCmd.layers[i];
-        const auto* sourceImageInfoVk = static_cast<const BorrowedImageInfoVk*>(layer.info);
+        const auto* sourceImageInfoVk = layer.info;
         VkImageLayout layout = useBlit ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
                                        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -560,7 +563,7 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
     if (useBlit) {
         // Use vkCmdBlitImage to post the image (single image optimized path)
         const auto& layer = postCmd.layers[0];
-        const auto* sourceImageInfoVk = static_cast<const BorrowedImageInfoVk*>(layer.info);
+        const auto* sourceImageInfoVk = layer.info;
         VkImageMemoryBarrier acquireSwapchainImageBarrier = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .srcAccessMask = curSrcAccessMask,
@@ -583,10 +586,11 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
                                .mipLevel = 0,
                                .baseArrayLayer = 0,
                                .layerCount = 1},
-            .srcOffsets = {{0, 0, 0},
-                           {static_cast<int32_t>(sourceImageInfoVk->imageCreateInfo.extent.width),
-                            static_cast<int32_t>(sourceImageInfoVk->imageCreateInfo.extent.height),
-                            1}},
+            .srcOffsets =
+                {{0, 0, 0},
+                 {static_cast<int32_t>(sourceImageInfoVk->imageCreateInfoShallow.extent.width),
+                  static_cast<int32_t>(sourceImageInfoVk->imageCreateInfoShallow.extent.height),
+                  1}},
             .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                .mipLevel = 0,
                                .baseArrayLayer = 0,
@@ -595,8 +599,8 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
                            {static_cast<int32_t>(swapchainImageExtent.width),
                             static_cast<int32_t>(swapchainImageExtent.height), 1}},
         };
-        VkFormat displayBufferFormat = sourceImageInfoVk->imageCreateInfo.format;
-        VkImageTiling displayBufferTiling = sourceImageInfoVk->imageCreateInfo.tiling;
+        VkFormat displayBufferFormat = sourceImageInfoVk->imageCreateInfoShallow.format;
+        VkImageTiling displayBufferTiling = sourceImageInfoVk->imageCreateInfoShallow.tiling;
 
         VkFilter filter = VK_FILTER_NEAREST;
         VkFormatFeatureFlags displayBufferFormatFeatures =
@@ -663,7 +667,7 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
 
         for (size_t i = 0; i < postCmd.layers.size(); ++i) {
             const auto& layer = postCmd.layers[i];
-            const auto* sourceImageInfoVk = static_cast<const BorrowedImageInfoVk*>(layer.info);
+            const auto* sourceImageInfoVk = layer.info;
             // Strictly disable skin/mask if multi-display mode is active, regardless of image count
             bool isMultiDisplay = postCmd.layers.size() > 1;
             bool disableMask = isMultiDisplay;

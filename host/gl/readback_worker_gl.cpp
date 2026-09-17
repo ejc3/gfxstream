@@ -20,10 +20,10 @@
 #include "OpenGLESDispatch/DispatchTables.h"
 #include "OpenGLESDispatch/EGLDispatch.h"
 #include "OpenGLESDispatch/GLESv2Dispatch.h"
-#include "color_buffer.h"
+#include "color_buffer_gl.h"
 #include "context_helper.h"
 #include "gfxstream/common/logging.h"
-#include "gl/color_buffer_gl.h"
+#include "gfxstream/host/color_buffer_interface.h"
 
 namespace gfxstream {
 namespace host {
@@ -176,6 +176,23 @@ ReadbackWorkerGl::DoNextReadbackResult ReadbackWorkerGl::doNextReadback(uint32_t
     }
 
     return ret;
+}
+
+void ReadbackWorkerGl::doNextReadbackSync(IColorBuffer* colorBuffer, void* fbImage,
+                                          bool readbackBgra) {
+    if (!colorBuffer) {
+        return;
+    }
+
+    ColorBufferGl* colorBufferGl = colorBuffer->getColorBufferGl();
+    if (!colorBufferGl) {
+        GFXSTREAM_ERROR("Failed to get ColorBufferGl");
+        return;
+    }
+
+    colorBuffer->touch();
+
+    colorBufferGl->readback(static_cast<unsigned char*>(fbImage), readbackBgra);
 }
 
 ReadbackWorkerGl::FlushResult ReadbackWorkerGl::flushPipeline(uint32_t displayId) {

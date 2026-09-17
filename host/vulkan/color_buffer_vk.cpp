@@ -33,44 +33,90 @@ std::unique_ptr<ColorBufferVk> ColorBufferVk::create(VkEmulation& vkEmulation, u
     return std::unique_ptr<ColorBufferVk>(new ColorBufferVk(vkEmulation, handle));
 }
 
-void ColorBufferVk::onLoad(gfxstream::Stream* stream, LoadImageBehavior behavior) {
+bool ColorBufferVk::onLoad(gfxstream::Stream* stream, LoadImageBehavior behavior) {
     if (!mVkEmulation.getFeatures().VulkanSnapshots.enabled() || !stream) {
-        return;
+        return true;
     }
     VkImageLayout currentLayout = static_cast<VkImageLayout>(stream->getBe32());
     mVkEmulation.setColorBufferCurrentLayout(mHandle, currentLayout);
 
     if (behavior == LoadImageBehavior::SkipImageContent) {
-        return;
+        return true;
     }
 
     uint64_t size = stream->getBe64();
     if (size > 0) {
         GFXSTREAM_DEBUG("snapshot load: color buffer %u size=%" PRIu64, mHandle, size);
         std::vector<uint8_t> pixels(size);
-        stream->read(pixels.data(), size);
-        mVkEmulation.updateColorBufferFromBytes(mHandle, pixels);
+        ssize_t ret = stream->read(pixels.data(), size);
+        if (ret > 0 && static_cast<uint64_t>(ret) == size) {
+            mVkEmulation.updateColorBufferFromBytes(mHandle, pixels);
+        } else {
+            GFXSTREAM_ERROR(
+                "ColorBufferVk::onLoad failed to read %" PRIu64 " pixel bytes from stream, got %zd",
+                size, ret);
+            return false;
+        }
+    } else {
+        // Clear pixels as this path is also used for color buffers with all-zero values
+        mVkEmulation.clearColorBuffer(mHandle);
     }
+
+    if (stream->hasErrors()) {
+        GFXSTREAM_ERROR("ColorBufferVk::onLoad failed with errors: %s",
+                        stream->getErrors().value_or("unknown error").c_str());
+        return false;
+    }
+    return true;
 }
 
-void ColorBufferVk::onSave(gfxstream::Stream* stream, SaveImageBehavior behavior) {
+bool ColorBufferVk::onSave(gfxstream::Stream* stream, SaveImageBehavior behavior) {
     if (!mVkEmulation.getFeatures().VulkanSnapshots.enabled()) {
-        return;
+        return true;
     }
     stream->putBe32(static_cast<uint32_t>(mVkEmulation.getColorBufferCurrentLayout(mHandle)));
 
     if (behavior == SaveImageBehavior::SkipImageContent) {
-        return;
+        return true;
     }
 
     std::vector<uint8_t> pixels;
-    if (readToBytes(&pixels)) {
+    bool writePixels = readToBytes(&pixels);
+
+    // To save storage and optimize for faster a load, check the pixel values
+    // and don't write them into the snapshot if they are all zeros.
+    if (writePixels) {
+        const bool all_zero =
+            std::all_of(pixels.begin(), pixels.end(), [](uint8_t pixel) { return pixel == 0; });
+        if (all_zero) {
+            GFXSTREAM_DEBUG(
+                "snapshot save: skipping %zu pixel bytes for color buffer %u - zero color save",
+                pixels.size(), mHandle);
+            writePixels = false;
+        }
+    }
+
+    if (writePixels) {
         GFXSTREAM_DEBUG("snapshot save: color buffer %u size=%zu", mHandle, pixels.size());
-        stream->putBe64(pixels.size());
-        stream->write(pixels.data(), pixels.size());
+        uint64_t size = pixels.size();
+        stream->putBe64(size);
+        ssize_t written = stream->write(pixels.data(), size);
+        if (written < 0 || static_cast<uint64_t>(written) != size) {
+            GFXSTREAM_ERROR(
+                "ColorBufferVk::onSave failed to write %" PRIu64 " pixel bytes from stream, got %zd",
+                size, written);
+            return false;
+        }
     } else {
         stream->putBe64(0);
     }
+
+    if (stream->hasErrors()) {
+        GFXSTREAM_ERROR("ColorBufferVk::onSave failed with errors: %s",
+                        stream->getErrors().value_or("unknown error").c_str());
+        return false;
+    }
+    return true;
 }
 
 ColorBufferVk::ColorBufferVk(VkEmulation& vkEmulation, uint32_t handle)
@@ -109,12 +155,13 @@ bool ColorBufferVk::updateFromBytes(uint32_t x, uint32_t y, uint32_t w, uint32_t
     return mVkEmulation.updateColorBufferFromBytes(mHandle, x, y, w, h, bytes);
 }
 
-std::unique_ptr<BorrowedImageInfo> ColorBufferVk::borrowForComposition(bool colorBufferIsTarget) {
-    return mVkEmulation.borrowColorBufferForComposition(mHandle, colorBufferIsTarget);
+std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForComposition(
+    bool colorBufferIsTarget) {
+    return mVkEmulation.prepareColorBufferForComposition(mHandle, colorBufferIsTarget);
 }
 
-std::unique_ptr<BorrowedImageInfo> ColorBufferVk::borrowForDisplay() {
-    return mVkEmulation.borrowColorBufferForDisplay(mHandle);
+std::unique_ptr<ColorBufferVkImageInfo> ColorBufferVk::prepareForDisplay() {
+    return mVkEmulation.prepareColorBufferForDisplay(mHandle);
 }
 
 std::optional<BlobDescriptorInfo> ColorBufferVk::exportBlob() {

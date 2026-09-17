@@ -39,7 +39,7 @@ namespace gfxstream {
 namespace host {
 namespace vk {
 
-class VulkanStream : public gfxstream::Stream {
+class VulkanStream : public gfxstream::StreamWithErrorLogger {
    public:
     VulkanStream(IOStream* stream, const gfxstream::host::FeatureSet& features);
     ~VulkanStream();

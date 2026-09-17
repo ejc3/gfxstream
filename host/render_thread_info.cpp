@@ -63,10 +63,23 @@ void RenderThreadInfo::forAllRenderThreadInfos(std::function<void(RenderThreadIn
 }
 
 #if GFXSTREAM_ENABLE_HOST_GLES
-void RenderThreadInfo::initGl() {
-    m_glInfo.emplace();
+void RenderThreadInfo::initGl(gl::EmulationGl* emulationGl) {
+    m_glInfo.emplace(emulationGl);
+    m_glInfo->m_puid = m_puid;
 }
 #endif
+
+void RenderThreadInfo::setPuid(uint64_t puid) {
+    m_puid = puid;
+#if GFXSTREAM_ENABLE_HOST_GLES
+    if (m_glInfo) {
+        m_glInfo->m_puid = puid;
+    }
+#endif
+    if (m_vkInfo) {
+        m_vkInfo->ctx_id = puid;
+    }
+}
 
 void RenderThreadInfo::onSave(Stream* stream) {
     // TODO(b/309858017): remove if when ready to bump snapshot version
@@ -101,7 +114,7 @@ bool RenderThreadInfo::onLoad(Stream* stream) {
     const bool loadGlInfo = stream->getBe32() == 1;
     if (loadGlInfo) {
         if (!m_glInfo) {
-            m_glInfo.emplace();
+            m_glInfo.emplace(FrameBuffer::getFB()->getEmulationGl());
         }
         if (!m_glInfo->onLoad(stream)) {
             return false;

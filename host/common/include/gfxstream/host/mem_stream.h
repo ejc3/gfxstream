@@ -22,12 +22,12 @@ namespace gfxstream {
 namespace host {
 
 // An implementation of the Stream interface on top of a vector.
-class MemStream : public Stream {
+class MemStream : public StreamWithErrorLogger {
   public:
     using Buffer = std::vector<char>;
 
-    MemStream(int reserveSize = 512);
-    MemStream(Buffer&& data);
+    explicit MemStream(size_t reserveSize = 512);
+    explicit MemStream(Buffer&& data);
 
     MemStream(const MemStream&) = delete;
     MemStream& operator=(const MemStream&) = delete;
@@ -35,9 +35,9 @@ class MemStream : public Stream {
     MemStream(MemStream&& other) = default;
     MemStream& operator=(MemStream&& other) = default;
 
-    int writtenSize() const;
-    int readPos() const;
-    int readSize() const;
+    size_t writtenSize() const;
+    size_t readPos() const;
+    size_t readSize() const;
 
     // Stream interface implementation.
     ssize_t read(void* buffer, size_t size) override;
@@ -53,7 +53,7 @@ class MemStream : public Stream {
 
   private:
     Buffer mData;
-    int mReadPos = 0;
+    size_t mReadPos = 0;
     void* mPb = nullptr;
 };
 

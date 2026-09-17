@@ -14,15 +14,16 @@
 
 #pragma once
 
+#include <vulkan/vulkan.h>
+
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "vulkan/emulated_textures/astc_texture.h"
-#include "vulkan/emulated_textures/gpu_decompression_pipeline.h"
+#include "emulated_textures/astc_texture.h"
+#include "emulated_textures/gpu_decompression_pipeline.h"
 #include "goldfish_vk_dispatch.h"
-#include "vulkan/vulkan.h"
 
 namespace gfxstream {
 namespace host {

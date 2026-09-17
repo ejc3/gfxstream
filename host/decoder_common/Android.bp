@@ -33,6 +33,9 @@ cc_library_static {
         "libgfxstream_host_library",
         "libgfxstream_common_logging",
     ],
+    export_static_lib_headers: [
+        "libgfxstream_common_base",
+    ],
     cflags: ["-fvisibility=hidden"],
     export_include_dirs: [
         "include",

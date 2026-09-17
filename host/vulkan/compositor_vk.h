@@ -26,17 +26,16 @@
 #include <unordered_map>
 #include <vector>
 
-#include "borrowed_image_vk.h"
-#include "compositor.h"
+#include "color_buffer_vk.h"
 #include "debug_utils_helper.h"
 #include "gfxstream/LruCache.h"
-#include "gfxstream/host/borrowed_image.h"
+#include "gfxstream/host/compositor.h"
 #include "gfxstream/host/gfxstream_format.h"
+#include "gfxstream/host/hwc2.h"
 #include "gfxstream/synchronization/Lock.h"
 #include "goldfish_vk_dispatch.h"
-#include "host/hwc2.h"
-#include "vulkan/vk_format_support.h"
-#include "vulkan/vk_utils.h"
+#include "vk_format_support.h"
+#include "vk_utils.h"
 
 namespace gfxstream {
 namespace host {
@@ -267,6 +266,16 @@ struct CompositorVkBase : public vk_util::MultiCrtp<CompositorVkBase,         //
           m_immediateFrameResources(maxFramesInFlight) {}
 };
 
+struct CompositionRequestLayerVk {
+    const ColorBufferVkImageInfo* source = nullptr;
+    ComposeLayer props;
+};
+
+struct CompositionRequestVk {
+    const ColorBufferVkImageInfo* target = nullptr;
+    std::vector<CompositionRequestLayerVk> layers;
+};
+
 class CompositorVk : protected CompositorVkBase, public Compositor {
    public:
     static std::unique_ptr<CompositorVk> create(
@@ -279,6 +288,8 @@ class CompositorVk : protected CompositorVkBase, public Compositor {
     ~CompositorVk();
 
     CompositionFinishedWaitable compose(const CompositionRequest& compositionRequest) override;
+
+    CompositionFinishedWaitable compose(const CompositionRequestVk& compositionRequestVk);
 
     void setScreenMask(int width, int height, const uint8_t* rgbaData) override;
     void setScreenBackground(int width, int height, const uint8_t* rgbaData) override;
@@ -370,15 +381,15 @@ class CompositorVk : protected CompositorVkBase, public Compositor {
     // A consolidated view of a `Compositor::CompositionRequest` with only
     // the Vulkan components needed for command recording and submission.
     struct CompositionVk {
-        const BorrowedImageInfoVk* targetImage = nullptr;
+        const ColorBufferVkImageInfo* targetImage = nullptr;
         VkRenderPass targetRenderPass = VK_NULL_HANDLE;
         VkFramebuffer targetFramebuffer = VK_NULL_HANDLE;
         std::vector<VkPipeline> layersPipelines;
         std::vector<YuvOrDefaultGfxstreamFormat> layerSourceSamplerFormats;
-        std::vector<const BorrowedImageInfoVk*> layersSourceImages;
+        std::vector<const ColorBufferVkImageInfo*> layersSourceImages;
         FrameDescriptorSetsContents layersDescriptorSets;
     };
-    void buildCompositionVk(const CompositionRequest& compositionRequest,
+    void buildCompositionVk(const CompositionRequestVk& compositionRequest,
                             CompositionVk* compositionVk);
 
     void updateDescriptorSetsIfChanged(const FrameDescriptorSetsContents& contents,
@@ -406,7 +417,7 @@ class CompositorVk : protected CompositorVkBase, public Compositor {
 
     // Gets the RenderTarget used for composing into the given image if it already exists,
     // otherwise creates it.
-    RenderTarget* getOrCreateRenderTargetInfo(const BorrowedImageInfoVk& info);
+    RenderTarget* getOrCreateRenderTargetInfo(const ColorBufferVkImageInfo& info);
 
     // Cached format properties used for checking if composition is supported with a given
     // format.

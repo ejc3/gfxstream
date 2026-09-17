@@ -17,23 +17,25 @@
 #include <optional>
 #include <string>
 
-#include "handle.h"
-#include "stale_ptr_registry.h"
+#include "emulated_egl_context.h"
+#include "emulated_egl_window_surface.h"
+#include "gfxstream/host/handle.h"
+#include "gles1_dec/gles_v1_decoder.h"
+#include "gles2_dec/gles_v2_decoder.h"
 #include "render-utils/stream.h"
-#include "gl/emulated_egl_context.h"
-#include "gl/emulated_egl_window_surface.h"
-#include "gl/gles1_dec/gles_v1_decoder.h"
-#include "gl/gles2_dec/gles_v2_decoder.h"
+#include "stale_ptr_registry.h"
 
 namespace gfxstream {
 namespace host {
+class GlobalState;
 namespace gl {
+class EmulationGl;
 
 struct RenderThreadInfoGl {
     // Create new instance. Only call this once per thread.
     // Future calls to get() will return this instance until
     // it is destroyed.
-    RenderThreadInfoGl();
+    RenderThreadInfoGl(EmulationGl* emulationGl);
 
     // Destructor.
     ~RenderThreadInfoGl();
@@ -73,6 +75,8 @@ struct RenderThreadInfoGl {
     // Decoder states.
     GLESv1Decoder                   m_glDec;
     GLESv2Decoder                   m_gl2Dec;
+
+    EmulationGl* m_emulationGl = nullptr;
 };
 
 }  // namespace gl

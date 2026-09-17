@@ -22,8 +22,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "common/goldfish_vk_dispatch.h"
 #include "gfxstream/ThreadAnnotations.h"
-#include "vulkan/cereal/common/goldfish_vk_dispatch.h"
 
 namespace gfxstream {
 namespace host {

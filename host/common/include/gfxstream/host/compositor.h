@@ -18,8 +18,8 @@
 #include <optional>
 #include <vector>
 
-#include "gfxstream/host/borrowed_image.h"
-#include "hwc2.h"
+#include "gfxstream/host/color_buffer_interface.h"
+#include "gfxstream/host/hwc2.h"
 #include "render-utils/Renderer.h"
 
 namespace gfxstream {
@@ -31,12 +31,12 @@ class Compositor {
     virtual ~Compositor() {}
 
     struct CompositionRequestLayer {
-        std::unique_ptr<BorrowedImageInfo> source;
+        IColorBufferRef source;
         ComposeLayer props;
     };
 
     struct CompositionRequest {
-        std::unique_ptr<BorrowedImageInfo> target;
+        IColorBufferRef target;
         std::vector<CompositionRequestLayer> layers;
     };
 
@@ -54,9 +54,7 @@ class Compositor {
         int screenWidth;
         int screenHeight;
     };
-    std::optional<DisplayLayout> getDisplayLayout() const {
-        return m_displayLayout;
-    }
+    std::optional<DisplayLayout> getDisplayLayout() const { return m_displayLayout; }
     void setDisplayLayout(int screenWidth, int screenHeight, const Rect& displayRect) {
         if (displayRect.size.w > 0 && displayRect.size.h > 0) {
             DisplayLayout layout;

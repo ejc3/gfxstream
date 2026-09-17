@@ -47,9 +47,9 @@ cc_library_static {
         "libgfxstream_host_library",
         "libgfxstream_host_openglesdispatch",
         "libgfxstream_host_renderdoc",
-        "libgfxstream_host_snapshot",
         "libgfxstream_host_vulkan_cereal",
         "libgfxstream_host_vulkan_emulatedtextures",
+        "libgfxstream_host_native_window",
     ],
     export_static_lib_headers: [
         "libgfxstream_host_decoder_common",
@@ -67,7 +67,6 @@ cc_library_static {
         "-Wno-unreachable-code-loop-increment",
     ],
     srcs: [
-        "borrowed_image_vk.cpp",
         "buffer_vk.cpp",
         "color_buffer_vk.cpp",
         "compositor_vk.cpp",

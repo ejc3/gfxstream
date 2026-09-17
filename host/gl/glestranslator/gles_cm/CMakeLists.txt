@@ -36,7 +36,6 @@ target_link_libraries(
     gfxstream_common_logging
     gfxstream_host_common
     gfxstream_host_decoder_common
-    gfxstream_host_snapshot.headers
     gfxstream_opengl_headers
     )
 target_include_directories(

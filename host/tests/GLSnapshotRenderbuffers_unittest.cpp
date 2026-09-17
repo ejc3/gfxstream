@@ -137,13 +137,14 @@ TEST_P(SnapshotGlRenderbufferFormatTest, SetFormat) {
         GLint maxSize;
         gl->glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &maxSize);
         m_state = GetParam();
-        if (maxSize < m_state.width || maxSize < m_state.height) {
+        if (static_cast<GLuint>(maxSize) < m_state.width ||
+            static_cast<GLuint>(maxSize) < m_state.height) {
             fprintf(stderr,
                     "test dimensions exceed max renderbuffer size %d; "
                     "using max size instead\n",
                     maxSize);
-            m_state.width = maxSize;
-            m_state.height = maxSize;
+            m_state.width = static_cast<GLuint>(maxSize);
+            m_state.height = static_cast<GLuint>(maxSize);
         }
         gl->glRenderbufferStorage(GL_RENDERBUFFER, m_state.format.name,
                                   m_state.width, m_state.height);

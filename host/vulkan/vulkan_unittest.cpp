@@ -14,20 +14,20 @@
 
 #include <gtest/gtest.h>
 
+#include <vulkan/vulkan.h>
+
 #include <sstream>
 #include <string>
 
-#include <vulkan/vulkan.h>
-
-#include "frame_buffer.h"
 #include "OpenGLESDispatch/OpenGLDispatchLoader.h"
+#include "gfxstream/ArraySize.h"
+#include "gfxstream/files/PathUtils.h"
+#include "gfxstream/host/handle.h"
+#include "gfxstream/host/testing/VkTestUtils.h"
+#include "gfxstream/system/System.h"
 #include "vk_common_operations.h"
 #include "vk_vvl_configuration.h"
 #include "vulkan_dispatch.h"
-#include "gfxstream/ArraySize.h"
-#include "gfxstream/files/PathUtils.h"
-#include "gfxstream/system/System.h"
-#include "gfxstream/host/testing/VkTestUtils.h"
 
 #ifdef _WIN32
 #include <windows.h>

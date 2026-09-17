@@ -1,5 +1,4 @@
-#include "vulkan/vk_vvl_configuration.h"
-#include "vulkan/vulkan_dispatch.h"
+#include "vk_vvl_configuration.h"
 
 #include <algorithm>
 #include <cctype>
@@ -9,6 +8,7 @@
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/features.h"
 #include "gfxstream/strings.h"
+#include "vulkan_dispatch.h"
 
 namespace gfxstream {
 namespace host {

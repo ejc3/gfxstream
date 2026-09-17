@@ -24,10 +24,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "color_buffer_gl.h"
+#include "emulated_egl_context.h"
 #include "gfxstream/host/color_buffer_interface.h"
-#include "gl/color_buffer_gl.h"
-#include "gl/emulated_egl_context.h"
-#include "handle.h"
+#include "gfxstream/host/handle.h"
 
 namespace gfxstream {
 namespace host {
