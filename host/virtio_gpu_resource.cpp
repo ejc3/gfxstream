@@ -238,6 +238,9 @@ std::optional<VirtioGpuResource> VirtioGpuResource::Create(
 
     resource.mId = resourceId;
     resource.mCreateBlobArgs = *createBlobArgs;
+    if (contextId != 0) {
+        resource.mCreateContextId = contextId;
+    }
 
     if (createBlobArgs->blob_id == 0) {
         RingBlobMemory memory;
@@ -891,8 +894,9 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
                 return std::nullopt;
             }
             auto snapshotDescriptorInfo = resourceSnapshot.mutable_external_memory_descriptor();
-            if (mLatestAttachedContext) {
-                snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
+            auto contextId = mCreateContextId ? mCreateContextId : mLatestAttachedContext;
+            if (contextId) {
+                snapshotDescriptorInfo->set_context_id(*contextId);
             }
             snapshotDescriptorInfo->set_blob_id(mCreateBlobArgs->blob_id);
         } else if (std::holds_alternative<ExternalMemoryMapping>(*mBlobMemory)) {
@@ -901,8 +905,9 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
                 return std::nullopt;
             }
             auto snapshotDescriptorInfo = resourceSnapshot.mutable_external_memory_mapping();
-            if (mLatestAttachedContext) {
-                snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
+            auto contextId = mCreateContextId ? mCreateContextId : mLatestAttachedContext;
+            if (contextId) {
+                snapshotDescriptorInfo->set_context_id(*contextId);
             }
             snapshotDescriptorInfo->set_blob_id(mCreateBlobArgs->blob_id);
         }
@@ -961,6 +966,7 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
     } else if (resourceSnapshot.has_external_memory_descriptor()) {
         const auto& snapshotDescriptorInfo = resourceSnapshot.external_memory_descriptor();
         if (snapshotDescriptorInfo.has_context_id()) {
+            resource.mCreateContextId = snapshotDescriptorInfo.context_id();
             auto descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
                 snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
             if (!descriptorInfoOpt) {
@@ -974,10 +980,30 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
     } else if (resourceSnapshot.has_external_memory_mapping()) {
         const auto& snapshotDescriptorInfo = resourceSnapshot.external_memory_mapping();
         if (snapshotDescriptorInfo.has_context_id()) {
+            resource.mCreateContextId = snapshotDescriptorInfo.context_id();
             auto memoryMappingOpt = ExternalObjectManager::get()->removeMapping(
                 snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
             if (memoryMappingOpt) {
                 resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
+            }
+        }
+        if (!resource.mBlobMemory && resource.mCreateBlobArgs && resource.mCreateBlobArgs->size > 0) {
+            GFXSTREAM_WARNING(
+                "Restoring fallback host memory (size=%llu) for orphaned blob resource %d "
+                "(ctx=%d, blob=%llu)",
+                static_cast<unsigned long long>(resource.mCreateBlobArgs->size), resource.mId,
+                snapshotDescriptorInfo.has_context_id()
+                    ? static_cast<int>(snapshotDescriptorInfo.context_id())
+                    : -1,
+                static_cast<unsigned long long>(snapshotDescriptorInfo.blob_id()));
+            resource.mOrphanedBlobMemory =
+                std::make_shared<AlignedMemory>(65536, resource.mCreateBlobArgs->size);
+            if (resource.mOrphanedBlobMemory->addr) {
+                std::memset(resource.mOrphanedBlobMemory->addr, 0, resource.mCreateBlobArgs->size);
+                resource.mBlobMemory.emplace(HostMemInfo{
+                    .addr = resource.mOrphanedBlobMemory->addr,
+                    .caching = STREAM_RENDERER_MAP_CACHE_CACHED,
+                });
             }
         }
     }

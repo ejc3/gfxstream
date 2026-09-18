@@ -485,17 +485,24 @@ class VkDecoderGlobalState::Impl {
 
         snapshot()->saveReplayBuffers(stream);
 
-        // Save mapped memory and host blob ids
+        // Save mapped memory and host/guest blob ids.
+        // Note: only memories that have a host mapping (ptr) or an explicitly assigned hostmemId
+        // can be restored on load. A memory that only carries a guest-assigned blobId (e.g. a
+        // guest-handle / external blob that the host never mapped) has nothing to restore, so
+        // skip it here to keep save() and load() in sync.
+        const auto shouldSaveMemoryInfo = [](const MemoryInfo& memoryInfo) {
+            return memoryInfo.ptr != nullptr || memoryInfo.hostmemId != 0;
+        };
         uint32_t memoryCount = 0;
         for (const auto& it : mMemoryInfo) {
-            if (it.second.ptr || it.second.hostmemId) {
+            if (shouldSaveMemoryInfo(it.second)) {
                 memoryCount++;
             }
         }
         GFXSTREAM_DEBUG("snapshot save: mapped memory and host blob ids");
         stream->putBe32(memoryCount);
         for (const auto& it : mMemoryInfo) {
-            if (!it.second.ptr && !it.second.hostmemId) {
+            if (!shouldSaveMemoryInfo(it.second)) {
                 continue;
             }
             stream->putBe64(reinterpret_cast<uint64_t>(
@@ -508,11 +515,8 @@ class VkDecoderGlobalState::Impl {
                 stream->write(it.second.ptr, it.second.size);
             }
 
-            bool hasHostmemId = it.second.hostmemId != 0;
-            stream->putByte(hasHostmemId ? 1 : 0);
-            if (hasHostmemId) {
-                stream->putBe64(it.second.hostmemId);
-            }
+            stream->putBe64(it.second.hostmemId);
+            stream->putBe64(it.second.blobId);
         }
 
         // Set up VK structs to snapshot other Vulkan objects
@@ -871,30 +875,39 @@ class VkDecoderGlobalState::Impl {
                     stream->read(it->second.ptr, size);
                 }
 
-                bool hasHostmemId = stream->getByte() != 0;
-                if (hasHostmemId) {
-                    uint64_t hostBlobId = stream->getBe64();
+                uint64_t hostmemId = stream->getBe64();
+                uint64_t blobId = stream->getBe64();
+                uint64_t blobIdToRestore = hostmemId ? hostmemId : blobId;
+                if (blobIdToRestore) {
                     if (!it->second.ptr) {
-                        GFXSTREAM_ERROR(
-                            "Snapshot load failure: cannot find mapped memory for host blob "
-                            "id %" PRIu64,
-                            hostBlobId);
-                        return false;
+                        // Nothing to remap: this memory has a blob id but was never mapped on
+                        // the host (e.g. a guest-handle blob). Keep the ids so that a later
+                        // vkGetBlobGOOGLE() still sees consistent state, but do not fail the
+                        // whole snapshot load.
+                        GFXSTREAM_WARNING(
+                            "Snapshot load: no host mapping for blob id %" PRIu64
+                            ", skipping external object remapping.",
+                            blobIdToRestore);
+                        it->second.hostmemId = hostmemId;
+                        it->second.blobId = blobId;
+                        continue;
                     }
                     auto ctxIdOpt = getContextIdForDeviceLocked(it->second.device);
                     if (!ctxIdOpt) {
                         GFXSTREAM_ERROR(
-                            "Snapshot load failure: missing context id for host blob id %" PRIu64,
-                            hostBlobId);
+                            "Snapshot load failure: missing context id for blob id %" PRIu64,
+                            blobIdToRestore);
                         return false;
                     }
-                    if (it->second.hostmemId) {
-                        ExternalObjectManager::get()->removeMapping(*ctxIdOpt,
-                                                                    it->second.hostmemId);
+                    uint64_t existingBlobId =
+                        it->second.hostmemId ? it->second.hostmemId : it->second.blobId;
+                    if (existingBlobId) {
+                        ExternalObjectManager::get()->removeMapping(*ctxIdOpt, existingBlobId);
                     }
-                    it->second.hostmemId = hostBlobId;
-                    ExternalObjectManager::get()->addMapping(*ctxIdOpt, hostBlobId, it->second.ptr,
-                                                             it->second.caching);
+                    it->second.hostmemId = hostmemId;
+                    it->second.blobId = blobId;
+                    ExternalObjectManager::get()->addMapping(*ctxIdOpt, blobIdToRestore,
+                                                             it->second.ptr, it->second.caching);
                 }
             }
 
@@ -7324,7 +7337,11 @@ class VkDecoderGlobalState::Impl {
         auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
         if (!deviceInfo) return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-        hostBlobId = (info->blobId && !hostBlobId) ? info->blobId : hostBlobId;
+        if (hostBlobId) {
+            info->hostmemId = hostBlobId;
+        } else {
+            hostBlobId = info->blobId;
+        }
 
         if ((m_vkEmulation->getFeatures().SystemBlob.enabled() ||
              m_vkEmulation->getFeatures().VulkanAllocateHostVisibleAsUdmabuf.enabled()) &&
@@ -7355,7 +7372,7 @@ class VkDecoderGlobalState::Impl {
                 memcpy(vulkanInfo.driverUUID, driverUuidOpt->data(), sizeof(vulkanInfo.driverUUID));
             }
 
-            if (snapshotsEnabled()) {
+            if (snapshotsEnabled() && !info->needUnmap) {
                 VkResult mapResult = vk->vkMapMemory(device, memory, 0, info->size, 0, &info->ptr);
                 if (mapResult != VK_SUCCESS) {
                     return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -7406,7 +7423,6 @@ class VkDecoderGlobalState::Impl {
             ExternalObjectManager::get()->addMapping(virtioGpuContextId, hostBlobId,
                                                      (void*)(uintptr_t)alignedHva, info->caching);
             info->virtioGpuMapped = true;
-            info->hostmemId = hostBlobId;
         }
 
         return VK_SUCCESS;

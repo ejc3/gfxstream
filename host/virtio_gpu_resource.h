@@ -136,6 +136,9 @@ class VirtioGpuResource {
     int TransferWithIov(uint64_t offset, const stream_renderer_box* box,
                         const std::vector<struct iovec>& iovs, TransferDirection direction);
 
+    std::optional<VirtioGpuContextId> mCreateContextId;
+    std::shared_ptr<AlignedMemory> mOrphanedBlobMemory;
+
     // LINT.IfChange(virtio_gpu_resource)
     VirtioGpuResourceId mId = -1;
     VirtioGpuResourceType mResourceType = VirtioGpuResourceType::UNKNOWN;

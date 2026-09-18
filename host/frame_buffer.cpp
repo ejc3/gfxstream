@@ -3597,8 +3597,15 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         GFXSTREAM_DEBUG("snapshot load: load decoder global state");
         lock.unlock();
         GfxApiLogger gfxLogger;
-        vk::VkDecoderGlobalState::get()->load(stream, gfxLogger);
+        const bool vkLoaded = vk::VkDecoderGlobalState::get()->load(stream, gfxLogger);
         lock.lock();
+        if (!vkLoaded) {
+            // The stream position is undefined after a failed load, so any further reads
+            // (including the trailing magic number check) would be meaningless.
+            GFXSTREAM_ERROR("%s:%d - failed to load Vulkan decoder global state.", __func__,
+                            __LINE__);
+            return false;
+        }
     }
 
     repost(false);
