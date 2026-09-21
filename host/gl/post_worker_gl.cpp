@@ -63,6 +63,7 @@ std::shared_future<void> PostWorkerGl::postImpl(
         setupContext();
     }
     DisplayGl::Post post = {};
+    std::vector<IColorBufferRef> colorBufferRefs;
 
     ComposeLayer postLayerOptions = {
         .composeMode = HWC2_COMPOSITION_DEVICE,
@@ -131,10 +132,13 @@ std::shared_future<void> PostWorkerGl::postImpl(
                     continue;
                 }
 
-                IColorBuffer* currentCb =
-                    currentDisplayId == 0
-                        ? cb
-                        : m_globalState->findColorBuffer(currentDisplayColorBufferHandle).get();
+                IColorBuffer* currentCb = nullptr;
+                if (currentDisplayId == 0) {
+                    currentCb = cb;
+                } else if (auto ref = m_globalState->findColorBuffer(currentDisplayColorBufferHandle)) {
+                    currentCb = ref.get();
+                    colorBufferRefs.push_back(std::move(ref));
+                }
                 if (!currentCb) {
                     continue;
                 }
