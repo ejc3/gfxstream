@@ -486,25 +486,9 @@ class VkDecoderGlobalState::Impl {
         snapshot()->saveReplayBuffers(stream);
 
         // Save mapped memory and host/guest blob ids.
-        // Note: only memories that have a host mapping (ptr) or an explicitly assigned hostmemId
-        // can be restored on load. A memory that only carries a guest-assigned blobId (e.g. a
-        // guest-handle / external blob that the host never mapped) has nothing to restore, so
-        // skip it here to keep save() and load() in sync.
-        const auto shouldSaveMemoryInfo = [](const MemoryInfo& memoryInfo) {
-            return memoryInfo.ptr != nullptr || memoryInfo.hostmemId != 0;
-        };
-        uint32_t memoryCount = 0;
-        for (const auto& it : mMemoryInfo) {
-            if (shouldSaveMemoryInfo(it.second)) {
-                memoryCount++;
-            }
-        }
         GFXSTREAM_DEBUG("snapshot save: mapped memory and host blob ids");
-        stream->putBe32(memoryCount);
+        stream->putBe32(static_cast<uint32_t>(mMemoryInfo.size()));
         for (const auto& it : mMemoryInfo) {
-            if (!shouldSaveMemoryInfo(it.second)) {
-                continue;
-            }
             stream->putBe64(reinterpret_cast<uint64_t>(
                 unboxed_to_boxed_non_dispatchable_VkDeviceMemory(it.first)));
 
@@ -855,11 +839,23 @@ class VkDecoderGlobalState::Impl {
             uint32_t memoryCount = stream->getBe32();
             for (uint32_t i = 0; i < memoryCount; i++) {
                 VkDeviceMemory boxedMemory = reinterpret_cast<VkDeviceMemory>(stream->getBe64());
-                VkDeviceMemory unboxedMemory = unbox_VkDeviceMemory(boxedMemory);
-                auto it = mMemoryInfo.find(unboxedMemory);
+                VkDeviceMemory unboxedMemory = try_unbox_VkDeviceMemory(boxedMemory);
+                auto it = (unboxedMemory != VK_NULL_HANDLE) ? mMemoryInfo.find(unboxedMemory)
+                                                            : mMemoryInfo.end();
                 if (it == mMemoryInfo.end()) {
-                    GFXSTREAM_ERROR("Snapshot load failure: cannot find memory handle for VkDeviceMemory:%p", boxedMemory);
-                    return false;
+                    GFXSTREAM_WARNING(
+                        "Snapshot load: cannot find memory handle for VkDeviceMemory:%p, "
+                        "skipping memory info restore.",
+                        boxedMemory);
+                    bool hasPtr = stream->getByte() != 0;
+                    if (hasPtr) {
+                        VkDeviceSize size = stream->getBe64();
+                        std::vector<uint8_t> discard(size);
+                        stream->read(discard.data(), size);
+                    }
+                    stream->getBe64();  // hostmemId
+                    stream->getBe64();  // blobId
+                    continue;
                 }
 
                 bool hasPtr = stream->getByte() != 0;
@@ -877,6 +873,10 @@ class VkDecoderGlobalState::Impl {
 
                 uint64_t hostmemId = stream->getBe64();
                 uint64_t blobId = stream->getBe64();
+                uint64_t existingBlobId =
+                    it->second.hostmemId ? it->second.hostmemId : it->second.blobId;
+                it->second.hostmemId = hostmemId;
+                it->second.blobId = blobId;
                 uint64_t blobIdToRestore = hostmemId ? hostmemId : blobId;
                 if (blobIdToRestore) {
                     if (!it->second.ptr) {
@@ -888,8 +888,6 @@ class VkDecoderGlobalState::Impl {
                             "Snapshot load: no host mapping for blob id %" PRIu64
                             ", skipping external object remapping.",
                             blobIdToRestore);
-                        it->second.hostmemId = hostmemId;
-                        it->second.blobId = blobId;
                         continue;
                     }
                     auto ctxIdOpt = getContextIdForDeviceLocked(it->second.device);
@@ -899,13 +897,9 @@ class VkDecoderGlobalState::Impl {
                             blobIdToRestore);
                         return false;
                     }
-                    uint64_t existingBlobId =
-                        it->second.hostmemId ? it->second.hostmemId : it->second.blobId;
                     if (existingBlobId) {
                         ExternalObjectManager::get()->removeMapping(*ctxIdOpt, existingBlobId);
                     }
-                    it->second.hostmemId = hostmemId;
-                    it->second.blobId = blobId;
                     ExternalObjectManager::get()->addMapping(*ctxIdOpt, blobIdToRestore,
                                                              it->second.ptr, it->second.caching);
                 }
