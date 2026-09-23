@@ -1249,26 +1249,43 @@ void EmulationGl::saveProcOwnedImages(Stream* stream) {
 }
 
 bool EmulationGl::loadContexts(Stream* stream) {
-    loadCollection(stream, &mContexts, [this](Stream* stream) -> EmulatedEglContextMap::value_type {
+    bool loadOk = true;
+    loadCollection(stream, &mContexts, [this, &loadOk](Stream* stream) -> EmulatedEglContextMap::value_type {
         auto context = loadEmulatedEglContext(stream);
         auto contextHandle = context ? context->getHndl() : 0;
+        if (!context) {
+            // Do not return, keep reading the stream
+            loadOk = false;
+        }
         return {contextHandle, std::move(context)};
     });
-    assert(!gfxstream::base::find(mContexts, 0));
+    if (!loadOk) {
+        GFXSTREAM_ERROR("Could not load contexts");
+        return false;
+    }
     return true;
 }
 
 bool EmulationGl::loadWindowSurfaces(
     Stream* stream, const std::function<IColorBufferRef(uint32_t)>& colorBufferLookup) {
+    bool loadOk = true;
     loadCollection(
         stream, &mWindows,
-        [this, &colorBufferLookup](Stream* stream) -> EmulatedEglWindowSurfaceMap::value_type {
+        [this, &colorBufferLookup, &loadOk](Stream* stream) -> EmulatedEglWindowSurfaceMap::value_type {
             auto window = loadEmulatedEglWindowSurface(stream, colorBufferLookup, mContexts);
-
-            HandleType handle = window->getHndl();
             HandleType colorBufferHandle = stream->getBe32();
+            if (!window) {
+                // Do not return, keep reading the stream
+                loadOk = false;
+            }
+
+            HandleType handle = window ? window->getHndl() : 0;
             return {handle, {std::move(window), colorBufferHandle}};
         });
+    if (!loadOk) {
+        GFXSTREAM_ERROR("Could not load window surfaces");
+        return false;
+    }
     return true;
 }
 
