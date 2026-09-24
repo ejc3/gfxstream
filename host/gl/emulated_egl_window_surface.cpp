@@ -244,11 +244,17 @@ std::unique_ptr<EmulatedEglWindowSurface> EmulatedEglWindowSurface::onLoad(
     }
 
     auto surface = create(display, config, width, height, hndl);
-    assert(surface);
+    if (!surface) {
+        GFXSTREAM_ERROR("Could not create Egl window surface for handle: %u", hndl);
+        return nullptr;
+    }
     // fb is already locked by its caller
     if (colorBufferHndl) {
         surface->mAttachedColorBuffer = colorBufferLookup(colorBufferHndl);
-        assert(surface->mAttachedColorBuffer);
+        if (!surface->mAttachedColorBuffer) {
+            GFXSTREAM_ERROR("Could not find color buffer for handle: %u", colorBufferHndl);
+            return nullptr;
+        }
     }
     surface->mReadContext = gfxstream::base::findOrDefault(contexts, readCtx);
     surface->mDrawContext = gfxstream::base::findOrDefault(contexts, drawCtx);

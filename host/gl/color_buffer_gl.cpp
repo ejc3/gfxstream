@@ -620,6 +620,10 @@ bool ColorBufferGl::readPixelsScaled(int width, int height, int rotation, const 
     const GLenum pixelDataType = *pixelDataTypeOpt;
 
     waitSync();
+    if (!m_resizer) {
+        GFXSTREAM_ERROR("Failed to readPixelsScaled: m_resizer is null.");
+        return false;
+    }
     GLuint tex = m_resizer->update(m_tex, width, height, rotation);
     if (bindFbo(&m_scaleRotationFbo, tex, m_needFboReattach)) {
         m_needFboReattach = false;
@@ -1059,7 +1063,12 @@ bool ColorBufferGl::bindToRenderbuffer() {
     return true;
 }
 
-GLuint ColorBufferGl::getViewportScaledTexture() { return m_resizer->update(m_tex); }
+GLuint ColorBufferGl::getViewportScaledTexture() {
+    if (!m_resizer) {
+        return m_tex;
+    }
+    return m_resizer->update(m_tex);
+}
 
 void ColorBufferGl::setSync(bool debug) {
     m_sync = (GLsync)s_egl.eglSetImageFenceANDROID(m_display, m_eglImage);
@@ -1194,6 +1203,10 @@ std::unique_ptr<ColorBufferGl> ColorBufferGl::onLoad(gfxstream::Stream* stream,
 
 void ColorBufferGl::restore() {
     RecursiveScopedContextBind context(m_helper);
+    if (!context.isOk()) {
+        GFXSTREAM_ERROR("Failed to bind context in ColorBufferGl::restore()");
+        return;
+    }
     s_gles2.glGenTextures(1, &m_tex);
     s_gles2.glBindTexture(GL_TEXTURE_2D, m_tex);
     s_gles2.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
@@ -1218,6 +1231,10 @@ void ColorBufferGl::postLayer(const ComposeLayer& l, int frameWidth, int frameHe
 bool ColorBufferGl::importMemory(ManagedDescriptor externalDescriptor, uint64_t size,
                                  bool dedicated, bool linearTiling) {
     RecursiveScopedContextBind context(m_helper);
+    if (!context.isOk()) {
+        GFXSTREAM_ERROR("Failed to bind context in ColorBufferGl::importMemory()");
+        return false;
+    }
     s_gles2.glCreateMemoryObjectsEXT(1, &m_memoryObject);
     if (dedicated) {
         static const GLint DEDICATED_FLAG = GL_TRUE;
