@@ -167,6 +167,25 @@ namespace vk {
     f(VK_FORMAT_A8_UNORM_KHR, 1)                       \
     f(VK_FORMAT_R12X4G12X4B12X4A12X4_UNORM_4PACK16, 8)
 
+// Block-compressed (BC) formats: f(format, blockWidth, blockHeight, bytesPerBlock)
+#define LIST_VK_FORMATS_BC(f)                     \
+    f(VK_FORMAT_BC1_RGB_UNORM_BLOCK, 4, 4, 8)     \
+    f(VK_FORMAT_BC1_RGB_SRGB_BLOCK, 4, 4, 8)      \
+    f(VK_FORMAT_BC1_RGBA_UNORM_BLOCK, 4, 4, 8)    \
+    f(VK_FORMAT_BC1_RGBA_SRGB_BLOCK, 4, 4, 8)     \
+    f(VK_FORMAT_BC2_UNORM_BLOCK, 4, 4, 16)        \
+    f(VK_FORMAT_BC2_SRGB_BLOCK, 4, 4, 16)         \
+    f(VK_FORMAT_BC3_UNORM_BLOCK, 4, 4, 16)        \
+    f(VK_FORMAT_BC3_SRGB_BLOCK, 4, 4, 16)         \
+    f(VK_FORMAT_BC4_UNORM_BLOCK, 4, 4, 8)         \
+    f(VK_FORMAT_BC4_SNORM_BLOCK, 4, 4, 8)         \
+    f(VK_FORMAT_BC5_UNORM_BLOCK, 4, 4, 16)        \
+    f(VK_FORMAT_BC5_SNORM_BLOCK, 4, 4, 16)        \
+    f(VK_FORMAT_BC6H_UFLOAT_BLOCK, 4, 4, 16)      \
+    f(VK_FORMAT_BC6H_SFLOAT_BLOCK, 4, 4, 16)      \
+    f(VK_FORMAT_BC7_UNORM_BLOCK, 4, 4, 16)        \
+    f(VK_FORMAT_BC7_SRGB_BLOCK, 4, 4, 16)
+
 constexpr uint32_t getBytesPerPixel(VkFormat format) {
 #define VK_FORMAT_BPP(format, bpp) case (format): return (bpp);
     switch(format) {
