@@ -1485,6 +1485,14 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
     const uint64_t kOneSecondNs = 1000000000ULL;
     impl->m_vsyncThread.reset(new VsyncThread((uint64_t)kOneSecondNs / (uint64_t)impl->m_vsyncHz));
 
+    if (width == 0 && height == 0) {
+        impl->m_lastPostedColorBuffer =
+            impl->createColorBuffer(1, 1, GfxstreamFormat::R8G8B8A8_UNORM);
+        if (impl->m_lastPostedColorBuffer) {
+            impl->openColorBuffer(impl->m_lastPostedColorBuffer);
+        }
+    }
+
     // Nothing else to do - we're ready to rock!
     return impl;
 }
@@ -1776,7 +1784,7 @@ bool FrameBuffer::Impl::setupSubWindow(FBNativeWindowType p_window, int wx, int 
     // emulator.
     const bool shouldMoveSubWindow =
         !shouldCreateSubWindow &&
-        !(m_x == wx && m_y == wy && m_windowWidth == ww && m_windowHeight == wh
+        !(m_x == wx && m_y == wy && m_windowWidth == ww && m_windowHeight == wh && m_dpr == dpr
 #if defined(__APPLE__)
           && m_zRot == zRot
 #endif
@@ -2798,20 +2806,19 @@ Renderer::FlushReadPixelPipeline FrameBuffer::Impl::getFlushReadPixelPipeline() 
 
 bool FrameBuffer::Impl::repost(bool needLockAndBind) {
     GFXSTREAM_DEBUG("Reposting framebuffer.");
-    if (m_displayVk) {
-        setGuestPostedAFrame();
-        return true;
-    }
     if (m_lastPostedColorBuffer && sInitialized.load(std::memory_order_relaxed)) {
         GFXSTREAM_DEBUG("Has last posted colorbuffer and is initialized; post.");
         auto res = postImplSync(m_lastPostedColorBuffer, needLockAndBind, true);
         if (res) setGuestPostedAFrame();
         return res;
-    } else {
-        GFXSTREAM_DEBUG("No repost: no last posted color buffer");
-        if (!sInitialized.load(std::memory_order_relaxed)) {
-            GFXSTREAM_DEBUG("No repost: initialization is not finished.");
-        }
+    }
+    if (m_displayVk) {
+        setGuestPostedAFrame();
+        return true;
+    }
+    GFXSTREAM_DEBUG("No repost: no last posted color buffer");
+    if (!sInitialized.load(std::memory_order_relaxed)) {
+        GFXSTREAM_DEBUG("No repost: initialization is not finished.");
     }
     return false;
 }
@@ -4037,10 +4044,11 @@ void FrameBuffer::Impl::setScreenBackground(int width, int height, const uint8_t
 
     //  Try to update the display at least 30 times a second, in case the guest is not
     //  updating the display
-    if (m_guestPostedAFrameTime && m_lastPostedColorBuffer) {
+    if (m_lastPostedColorBuffer) {
         const std::chrono::milliseconds maxUpdateLatency(1000 / 30);
         const auto nowTime = std::chrono::steady_clock::now();
-        bool shouldRepost = (nowTime - m_guestPostedAFrameTime.value()) > maxUpdateLatency;
+        bool shouldRepost = !m_guestPostedAFrameTime ||
+                            (nowTime - m_guestPostedAFrameTime.value()) > maxUpdateLatency;
         if (prevImageSize != mScreenBackgroundImage.m_rgbaData.size()) {
             // Always repost if the image size has changed, e.g. disabling background image
             shouldRepost = true;
