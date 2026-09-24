@@ -1638,6 +1638,8 @@ class VkDecoderGlobalState::Impl {
                 vk_find_struct<VkPhysicalDeviceVulkan11Features>(pFeatures);
             VkPhysicalDeviceVulkan13Features* vulkan13Features =
                 vk_find_struct<VkPhysicalDeviceVulkan13Features>(pFeatures);
+            VkPhysicalDeviceVulkan14Features* vulkan14Features =
+                vk_find_struct<VkPhysicalDeviceVulkan14Features>(pFeatures);
             VkPhysicalDeviceProtectedMemoryFeatures* protectedMemoryFeatures =
                 vk_find_struct<VkPhysicalDeviceProtectedMemoryFeatures>(pFeatures);
             VkPhysicalDevicePipelineProtectedAccessFeatures* pipelineAccessFeatures =
@@ -1653,6 +1655,9 @@ class VkDecoderGlobalState::Impl {
                 if (pipelineAccessFeatures) {
                     pipelineAccessFeatures->pipelineProtectedAccess = VK_TRUE;
                 }
+                if (vulkan14Features) {
+                    vulkan14Features->pipelineProtectedAccess = VK_TRUE;
+                }
             } else {
                 if (protectedMemoryFeatures) {
                     protectedMemoryFeatures->protectedMemory = VK_FALSE;
@@ -1660,9 +1665,8 @@ class VkDecoderGlobalState::Impl {
                 if (vk11Features) {
                     vk11Features->protectedMemory = VK_FALSE;
                 }
-                if (pipelineAccessFeatures) {
-                    pipelineAccessFeatures->pipelineProtectedAccess = VK_FALSE;
-                }
+                // No need to change pipelineProtectedAccess features as they
+                // can be enabled without enabling 'protectedMemory'
             }
 
             if (m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
@@ -2105,7 +2109,8 @@ class VkDecoderGlobalState::Impl {
         auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
 
-        bool shouldPassthrough = !m_vkEmulation->isYcbcrEmulationEnabled();
+        bool shouldPassthrough = !m_vkEmulation->isYcbcrEmulationEnabled() &&
+                                 !enableProtectedMemoryEmulation();
 #if defined(__APPLE__)
         shouldPassthrough = shouldPassthrough && !(m_vkEmulation->getExternalMemoryMode() ==
                                                    ExternalMemory::Mode::Metal);
@@ -2172,13 +2177,16 @@ class VkDecoderGlobalState::Impl {
         }
 #endif
 
-        if (enableProtectedMemoryEmulation() ) {
-            // Enable VK_EXT_pipeline_protected_access extension support
-            VkExtensionProperties ycbcr_props;
-            strncpy(ycbcr_props.extensionName, VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME,
-                    sizeof(ycbcr_props.extensionName));
-            ycbcr_props.specVersion = VK_EXT_PIPELINE_PROTECTED_ACCESS_SPEC_VERSION;
-            properties.push_back(ycbcr_props);
+        if (enableProtectedMemoryEmulation()) {
+            if (!hasDeviceExtension(properties, VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME)) {
+                // Enable VK_EXT_pipeline_protected_access extension support
+                VkExtensionProperties protected_access_props;
+                strncpy(protected_access_props.extensionName,
+                        VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME,
+                        sizeof(protected_access_props.extensionName));
+                protected_access_props.specVersion = VK_EXT_PIPELINE_PROTECTED_ACCESS_SPEC_VERSION;
+                properties.push_back(protected_access_props);
+            }
         }
 
         if (pProperties == nullptr) {
@@ -2326,10 +2334,6 @@ class VkDecoderGlobalState::Impl {
                 // We log the behavior, to identify cases as some system apps may still try creating
                 // protected memory devices without checking the feature support.
                 GFXSTREAM_INFO("%s: Unsupported protected memory feature is requested!", __func__);
-                return VK_ERROR_FEATURE_NOT_PRESENT;
-            } else if (pipelineProtectedAccessFeatureRequested) {
-                GFXSTREAM_INFO("%s: Unsupported pipeline protected access feature is requested!",
-                               __func__);
                 return VK_ERROR_FEATURE_NOT_PRESENT;
             }
 
