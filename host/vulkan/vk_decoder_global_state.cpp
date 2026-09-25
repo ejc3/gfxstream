@@ -1165,6 +1165,38 @@ class VkDecoderGlobalState::Impl {
         deepcopy_VkInstanceCreateInfo(pool, VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, pCreateInfo,
                                       &createInfoFiltered);
 
+        std::string vvlAppName = "";
+        std::string vvlEngineName = "";
+        if (pCreateInfo->pApplicationInfo) {
+            if (pCreateInfo->pApplicationInfo->pApplicationName) {
+                vvlAppName = pCreateInfo->pApplicationInfo->pApplicationName;
+            }
+            if (pCreateInfo->pApplicationInfo->pEngineName) {
+                vvlEngineName = pCreateInfo->pApplicationInfo->pEngineName;
+            }
+        }
+
+        VkDebugUtilsMessengerCreateInfoEXT debugInfo = {};
+        std::unique_ptr<VVLContext> debugContext =
+            m_vkEmulation->createVVLContext(vvlAppName, vvlEngineName, &debugInfo);
+
+        if (debugContext) {
+            GFXSTREAM_INFO("Enabling VVL for %s %s", vvlAppName.c_str(), vvlEngineName.c_str());
+
+            bool hasDebugUtils = false;
+            for (const char* ext : finalExts) {
+                if (ext && strcmp(ext, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+                    hasDebugUtils = true;
+                    break;
+                }
+            }
+            if (!hasDebugUtils) {
+                finalExts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            }
+        } else {
+            GFXSTREAM_VERBOSE("Not enabling VVL for %s %s", vvlAppName.c_str(), vvlEngineName.c_str());
+        }
+
         createInfoFiltered.enabledExtensionCount = static_cast<uint32_t>(finalExts.size());
         createInfoFiltered.ppEnabledExtensionNames = finalExts.data();
         if (createInfoFiltered.pApplicationInfo != nullptr) {
@@ -1175,6 +1207,11 @@ class VkDecoderGlobalState::Impl {
 
         vk_struct_chain_filter<VkDebugReportCallbackCreateInfoEXT>(&createInfoFiltered);
         vk_struct_chain_filter<VkDebugUtilsMessengerCreateInfoEXT>(&createInfoFiltered);
+
+        if (debugContext) {
+            auto chainIter = vk_make_chain_iterator(&createInfoFiltered);
+            vk_append_struct(&chainIter, &debugInfo);
+        }
 
 #if defined(__APPLE__)
         if (m_vkEmulation->supportsPortabilityEnumeration()) {
@@ -1235,14 +1272,30 @@ class VkDecoderGlobalState::Impl {
             info.contextId = renderThreadInfo->ctx_id;
         }
 
-        VALIDATE_NEW_HANDLE_INFO_ENTRY(mInstanceInfo, *pInstance);
-        mInstanceInfo[*pInstance] = info;
+        if (debugContext) {
+            auto vk = dispatch_VkInstance(boxed);
+            if (vk && vk->vkCreateDebugUtilsMessengerEXT && vk->vkDestroyDebugUtilsMessengerEXT) {
+                VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
+                VkResult messengerRes = vk->vkCreateDebugUtilsMessengerEXT(*pInstance, &debugInfo, nullptr, &messenger);
+                if (messengerRes == VK_SUCCESS) {
+                    info.debugMessenger = messenger;
+                } else {
+                    GFXSTREAM_WARNING("Failed to create Vulkan debug utils messenger: %s", string_VkResult(messengerRes));
+                }
+            }
+        }
 
-        *pInstance = (VkInstance)info.boxed;
+        uint64_t contextId = info.contextId;
+        info.debugContext = std::move(debugContext);
+
+        VALIDATE_NEW_HANDLE_INFO_ENTRY(mInstanceInfo, *pInstance);
+        mInstanceInfo[*pInstance] = std::move(info);
+
+        *pInstance = (VkInstance)boxed;
 
         if (vkCleanupEnabled()) {
             m_vkEmulation->getGlobalState()->registerProcessCleanupCallback(
-                unbox_VkInstance(boxed), info.contextId, [this, boxed] {
+                unbox_VkInstance(boxed), contextId, [this, boxed] {
                     if (snapshotsEnabled()) {
                         snapshot()->vkDestroyInstance(nullptr, kInvalidSnapshotApiCallHandle, nullptr, 0, boxed, nullptr);
                     }
@@ -6405,54 +6458,6 @@ class VkDecoderGlobalState::Impl {
         if (dedicatedAllocInfoPtr) {
             localDedicatedAllocInfo = vk_make_orphan_copy(*dedicatedAllocInfoPtr);
         }
-#ifdef __ANDROID__
-        // The driver only resolves the layout if the bound memory carries an AHB, so import the
-        // image's AHB on its dedicated allocation. Function scope: vk_append_struct() only stores
-        // a pointer and the chain is consumed at vkAllocateMemory below.
-        VkImportAndroidHardwareBufferInfoANDROID importDeferredLayoutAhb = {
-            .sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID,
-            .pNext = nullptr,
-            .buffer = nullptr,
-        };
-        // Keeps the AHB alive past the lock: the chain is not consumed until vkAllocateMemory
-        // below, by which point the image may have been destroyed.
-        std::shared_ptr<AHardwareBuffer> deferredAhbHold;
-        // Set when the probe AHB became this image's own backing memory, so it can be withdrawn
-        // from the pending pool below -- an in-use AHB must not be adopted by a ColorBuffer.
-        // Withdrawn after mMutex is dropped: unstashPendingDeferredLayoutAhb() takes
-        // VkEmulation's mutex, and createVkColorBuffer() already holds that one when it reaches
-        // the adopt side, so taking it under mMutex here would invert the two.
-        AHardwareBuffer* importedProbeAhb = nullptr;
-        VkImageCreateInfo importedProbeShape = {};
-        if (dedicatedAllocInfoPtr && dedicatedAllocInfoPtr->image != VK_NULL_HANDLE) {
-            std::lock_guard<std::mutex> dlLock(mMutex);
-            auto* dlInfo = gfxstream::base::find(mImageInfo, dedicatedAllocInfoPtr->image);
-            if (dlInfo && dlInfo->deferredLayout.ahb) {
-                // A ColorBuffer import below appends its own AHB import for this same
-                // allocation -- skip ours so the chain never carries two
-                // VkImportAndroidHardwareBufferInfoANDROID structs.
-                if (!vk_find_struct<VkImportColorBufferGOOGLE>(pAllocateInfo)) {
-                    deferredAhbHold = dlInfo->deferredLayout.ahb;
-                    importDeferredLayoutAhb.buffer = deferredAhbHold.get();
-                    vk_append_struct(&structChainIter, &importDeferredLayoutAhb);
-                    importedProbeAhb = deferredAhbHold.get();
-                    importedProbeShape = dlInfo->imageCreateInfoShallow;
-                    GFXSTREAM_INFO("DL-AHB import image=%p ahb=%p size=%llu",
-                                   (void*)dedicatedAllocInfoPtr->image,
-                                   (void*)importDeferredLayoutAhb.buffer,
-                                   (unsigned long long)localAllocInfo.allocationSize);
-                }
-                // Either way, the probe AHB has served its purpose (imported above, or
-                // superseded by a ColorBuffer's own AHB) -- release it now rather than
-                // holding it for the image's lifetime. The cached size/alignment/
-                // memoryTypeBits/rowPitch survive for later requirement/layout queries.
-                dlInfo->deferredLayout.ahb.reset();
-            }
-        }
-        if (importedProbeAhb) {
-            m_vkEmulation->unstashPendingDeferredLayoutAhb(&importedProbeShape, importedProbeAhb);
-        }
-#endif
         if (!usingDirectMapping()) {
             // We copy bytes 1 page at a time from the guest to the host
             // if we are not using direct mapping. This means we can end up
@@ -11055,6 +11060,13 @@ class VkDecoderGlobalState::Impl {
 
         for (InstanceObjects::DeviceObjects& deviceObjects : objects.devices) {
             destroyDeviceObjects(deviceObjects);
+        }
+
+        if (instanceInfo.debugMessenger != VK_NULL_HANDLE) {
+            auto vk = dispatch_VkInstance(instanceInfo.boxed);
+            if (vk && vk->vkDestroyDebugUtilsMessengerEXT) {
+                vk->vkDestroyDebugUtilsMessengerEXT(instance, instanceInfo.debugMessenger, nullptr);
+            }
         }
 
         m_vk->vkDestroyInstance(instance, nullptr);
