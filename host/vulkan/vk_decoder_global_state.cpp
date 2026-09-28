@@ -879,6 +879,15 @@ class VkDecoderGlobalState::Impl {
                 it->second.blobId = blobId;
                 uint64_t blobIdToRestore = hostmemId ? hostmemId : blobId;
                 if (blobIdToRestore) {
+                    const bool isDeferredMapping = !hostmemId;
+                    if (isDeferredMapping && !it->second.virtioGpuMapped) {
+                        // Allocated with VkCreateBlobGOOGLE (so blobId != 0), and on Windows
+                        // VulkanAllocateHostMemory also set ptr != nullptr at vkAllocateMemory time,
+                        // but the guest never called vkGetBlobGOOGLE (OP_vkGetBlobGOOGLE was not
+                        // replayed). Do not register it in ExternalObjectManager; if the guest maps
+                        // this memory later, vkGetBlobGOOGLE will register it then.
+                        continue;
+                    }
                     if (!it->second.ptr) {
                         // Nothing to remap: this memory has a blob id but was never mapped on
                         // the host (e.g. a guest-handle blob). Keep the ids so that a later
