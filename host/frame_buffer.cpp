@@ -3011,9 +3011,11 @@ int FrameBuffer::Impl::getColorBufferScreenshot(
     if (m_compositor->getScaledDisplayRect(scaledDisplayRect, targetWidth, targetHeight)) {
         // Read the color buffer into a temporary storage
         std::vector<uint8_t> tempBuffer;
-        tempBuffer.resize(scaledDisplayRect.size.w * scaledDisplayRect.size.h * numChannels);
-        cb->readToBytesScaled(scaledDisplayRect.size.w, scaledDisplayRect.size.h, skinRotation,
-                              rect, pixelsFormat, tempBuffer.data(), colorTransform);
+        if (scaledDisplayRect.size.w > 0 && scaledDisplayRect.size.h > 0) {
+            tempBuffer.resize(scaledDisplayRect.size.w * scaledDisplayRect.size.h * numChannels);
+            cb->readToBytesScaled(scaledDisplayRect.size.w, scaledDisplayRect.size.h, skinRotation,
+                                  rect, pixelsFormat, tempBuffer.data(), colorTransform);
+        }
 
         // Copy color buffer into solid black background, based on display layout parameters
         // TODO(b/485981055): optimize this
