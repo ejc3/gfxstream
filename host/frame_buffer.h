@@ -25,7 +25,7 @@
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 #else
-#include "GlesCompat.h"
+#include "gles_compat.h"
 #endif  // GFXSTREAM_ENABLE_HOST_GLES
 #include <vulkan/vulkan.h>
 
@@ -154,7 +154,7 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     // virtio-gpu's RESOURCE_CREATE ioctl.
     // Returns true on success, false otherwise.
     bool createColorBufferWithResourceHandle(int p_width, int p_height, GfxstreamFormat format,
-                                             HandleType handle);
+                                             HandleType handle, bool linear = false);
 
     bool createColorBufferWithResourceHandleDeprecated(int width, int height, GLenum internalFormat,
                                                        FrameworkFormat frameworkFormat,

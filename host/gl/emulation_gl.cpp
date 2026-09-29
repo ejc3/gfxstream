@@ -25,6 +25,7 @@
 #include "OpenGLESDispatch/OpenGLDispatchLoader.h"
 #include "common/gles_context.h"
 #include "display_surface_gl.h"
+#include "glestranslator/egl/egl_global_info.h"
 #include "gfxstream/ThreadAnnotations.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/color_buffer_interface.h"
@@ -40,10 +41,6 @@
 #include "render-utils/RenderLib.h"
 #include "render_thread_info_gl.h"
 #include "yuv_converter.h"
-
-#ifdef __APPLE__
-#include "glestranslator/egl/egl_global_info.h"
-#endif
 
 namespace gfxstream {
 namespace host {

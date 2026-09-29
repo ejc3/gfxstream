@@ -378,7 +378,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
                                            GLenum internalFormat,
                                            FrameworkFormat frameworkFormat);
     bool createColorBufferWithResourceHandle(int p_width, int p_height,
-                                             GfxstreamFormat format, HandleType handle);
+                                             GfxstreamFormat format, HandleType handle,
+                                             bool linear = false);
     bool createColorBufferWithResourceHandleDeprecated(int width, int height,
                                                        GLenum internalFormat,
                                                        FrameworkFormat frameworkFormat,
@@ -826,7 +827,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
         m_framebuffer->fireEvent({FrameBufferChange::FrameReady, mFrameNumber++});
     }
     bool createColorBufferWithResourceHandleLocked(int p_width, int p_height,
-                                                   GfxstreamFormat format, HandleType handle);
+                                                   GfxstreamFormat format, HandleType handle,
+                                                   bool linear = false);
     bool createBufferWithResourceHandleLocked(uint64_t p_size, HandleType handle,
                                               uint32_t memoryProperty);
 
@@ -2058,7 +2060,8 @@ HandleType FrameBuffer::Impl::createColorBufferDeprecated(int width, int height,
 
 bool FrameBuffer::Impl::createColorBufferWithResourceHandle(int p_width, int p_height,
                                                             GfxstreamFormat format,
-                                                            HandleType handle) {
+                                                            HandleType handle,
+                                                            bool linear) {
     {
         AutoLock mutex(m_lock);
         sweepColorBuffersLocked();
@@ -2071,7 +2074,7 @@ bool FrameBuffer::Impl::createColorBufferWithResourceHandle(int p_width, int p_h
             return false;
         }
 
-        if (!createColorBufferWithResourceHandleLocked(p_width, p_height, format, handle)) {
+        if (!createColorBufferWithResourceHandleLocked(p_width, p_height, format, handle, linear)) {
             GFXSTREAM_ERROR("Could not create color buffer");
             return false;
         }
@@ -2095,9 +2098,10 @@ bool FrameBuffer::Impl::createColorBufferWithResourceHandleDeprecated(
 
 bool FrameBuffer::Impl::createColorBufferWithResourceHandleLocked(int p_width, int p_height,
                                                                   GfxstreamFormat format,
-                                                                  HandleType handle) {
+                                                                  HandleType handle,
+                                                                  bool linear) {
     ColorBufferPtr cb = ColorBuffer::create(m_emulationGl.get(), m_emulationVk.get(), p_width,
-                                            p_height, format, handle, nullptr /*stream*/);
+                                            p_height, format, handle, nullptr /*stream*/, linear);
     if (cb.get() == nullptr) {
         GFXSTREAM_ERROR("Failed to create ColorBuffer:%d format:%d with:%d height:%d", handle,
                         format, p_width, p_height);
@@ -3159,6 +3163,14 @@ AsyncResult FrameBuffer::Impl::composeWithCallback(uint32_t bufferSize, void* bu
 
 bool FrameBuffer::Impl::onSave(Stream* stream,
                                const ITextureSaverPtr& textureSaver) NO_THREAD_SAFETY_ANALYSIS {
+    // Things we do not need to snapshot:
+    //     m_eglSurface
+    //     m_eglContext
+    //     m_pbufSurface
+    //     m_pbufContext
+    //     m_prevContext
+    //     m_prevReadSurf
+    //     m_prevDrawSurf
     AutoLock mutex(m_lock);
 
     GFXSTREAM_DEBUG("snapshot save: save framebuffer");
@@ -4631,8 +4643,8 @@ HandleType FrameBuffer::createColorBufferDeprecated(int width, int height, GLenu
 }
 
 bool FrameBuffer::createColorBufferWithResourceHandle(int width, int height, GfxstreamFormat format,
-                                                      HandleType handle) {
-    return mImpl->createColorBufferWithResourceHandle(width, height, format, handle);
+                                                      HandleType handle, bool linear) {
+    return mImpl->createColorBufferWithResourceHandle(width, height, format, handle, linear);
 }
 
 bool FrameBuffer::createColorBufferWithResourceHandleDeprecated(int width, int height,
