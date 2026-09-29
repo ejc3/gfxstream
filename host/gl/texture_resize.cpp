@@ -226,6 +226,10 @@ TextureResize::TextureResize(GLuint width, GLuint height) :
 
     // Fix color banding by trying to use a texture type with a high precision.
     const char* exts = (const char*)s_gles2.glGetString(GL_EXTENSIONS);
+    if (!exts) {
+        GFXSTREAM_ERROR("Failed to initialize TextureResize: no GLES context bound.");
+        return;
+    }
 
     bool hasColorBufferFloat =
         get_gfxstream_renderer() == SELECTED_RENDERER_HOST ||
@@ -271,9 +275,13 @@ TextureResize::TextureResize(GLuint width, GLuint height) :
     // Clear bindings.
     s_gles2.glBindTexture(GL_TEXTURE_2D, 0);
     s_gles2.glBindBuffer(GL_ARRAY_BUFFER, 0);
+    mIsInitialized = true;
 }
 
 TextureResize::~TextureResize() {
+    if (!mIsInitialized) {
+        return;
+    }
     GLuint tex[2] = {mFBWidth.texture, mFBHeight.texture};
     s_gles2.glDeleteTextures(2, tex);
     s_gles2.glDeleteBuffers(1, &mVertexBuffer);
@@ -291,6 +299,9 @@ TextureResize::~TextureResize() {
 }
 
 GLuint TextureResize::update(GLuint texture) {
+    if (!mIsInitialized) {
+        return texture;
+    }
     // Store the viewport. The viewport is clobbered due to the framebuffers.
     GLint vport[4] = { 0, };
     s_gles2.glGetIntegerv(GL_VIEWPORT, vport);
@@ -330,6 +341,9 @@ GLuint TextureResize::update(GLuint texture) {
 }
 
 GLuint TextureResize::update(GLuint texture, int width, int height, int rotation) {
+    if (!mIsInitialized) {
+        return texture;
+    }
     if (mGenericResizer.get() == nullptr) {
         mGenericResizer.reset(new TextureResize::GenericResizer());
     }
@@ -337,6 +351,9 @@ GLuint TextureResize::update(GLuint texture, int width, int height, int rotation
 }
 
 void TextureResize::setupFramebuffers(unsigned int factor) {
+    if (!mIsInitialized) {
+        return;
+    }
     if (factor == mFactor) {
         // The factor hasn't changed, no need to update the framebuffers.
         return;
@@ -368,6 +385,9 @@ void TextureResize::setupFramebuffers(unsigned int factor) {
 }
 
 void TextureResize::resize(GLuint texture) {
+    if (!mIsInitialized) {
+        return;
+    }
     s_gles2.glBindBuffer(GL_ARRAY_BUFFER, mVertexBuffer);
     s_gles2.glActiveTexture(GL_TEXTURE0);
 

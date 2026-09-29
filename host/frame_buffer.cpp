@@ -130,7 +130,7 @@ static constexpr uint32_t kNumMaxColorBuffers = 16000;
 // Version and magic numbers for framebuffer stream for validity checks.
 // The global snapshot version (e.g. kVersionBase for AEMU) should be updated when changing
 // the framebuffer version to avoid getting errors when loading old, unsupported snapshots.
-static constexpr uint32_t kFramebufferSnapshotVersionNumber = 2;
+static constexpr uint32_t kFramebufferSnapshotVersionNumber = 3;
 static constexpr uint32_t kFramebufferSnapshotMagicNumber = 0xC0FFEEEE;
 
 // A condition variable needed to wait for framebuffer initialization.
@@ -2403,6 +2403,7 @@ void FrameBuffer::Impl::cleanupProcGLObjects(uint64_t puid) {
 
 std::vector<HandleType> FrameBuffer::Impl::cleanupProcGLObjects_locked(uint64_t puid, bool forced)
     NO_THREAD_SAFETY_ANALYSIS {
+    sweepColorBuffersLocked();
     std::vector<HandleType> colorBuffersToCleanup;
     {
         std::unique_ptr<RecursiveScopedContextBind> bind = nullptr;
@@ -3596,8 +3597,15 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         GFXSTREAM_DEBUG("snapshot load: load decoder global state");
         lock.unlock();
         GfxApiLogger gfxLogger;
-        vk::VkDecoderGlobalState::get()->load(stream, gfxLogger);
+        const bool vkLoaded = vk::VkDecoderGlobalState::get()->load(stream, gfxLogger);
         lock.lock();
+        if (!vkLoaded) {
+            // The stream position is undefined after a failed load, so any further reads
+            // (including the trailing magic number check) would be meaningless.
+            GFXSTREAM_ERROR("%s:%d - failed to load Vulkan decoder global state.", __func__,
+                            __LINE__);
+            return false;
+        }
     }
 
     repost(false);
