@@ -93,7 +93,9 @@ std::string TestParams::ToString() const {
     ret += "SampleCount" + std::to_string(samples);
     if (!with_features.empty()) {
         ret += "WithFeatures_";
-        ret += Join(with_features, "_");
+        std::string featuresStr = Join(with_features, "_");
+        std::replace(featuresStr.begin(), featuresStr.end(), ':', '_');
+        ret += featuresStr;
         ret += "_";
     }
     ret += "Over";
@@ -250,6 +252,9 @@ void GfxstreamEnd2EndTest::SetUp() {
 
     ASSERT_THAT(gfxstream::testing::SetupGraphicsTestEnvironment(), IsTrue())
         << "Failed to configured graphics test environment!";
+
+    const std::string testdataDirectory = GetTestDataPath("kumquat_virtio").parent_path().string();
+    gfxstream::base::setEnvironmentVariable("GFXSTREAM_TESTDATA_PATH", testdataDirectory.c_str());
 
     ASSERT_THAT(setenv("GFXSTREAM_TRANSPORT", transportValue.c_str(), /*overwrite=*/1), Eq(0));
 
@@ -621,8 +626,6 @@ GfxstreamEnd2EndTest::SetUpTypicalVkTestEnvironment(const TypicalVkTestEnvironme
         .pNext = opts.deviceCreateInfoPNext ? *opts.deviceCreateInfoPNext : nullptr,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &deviceQueueCreateInfo,
-        .enabledLayerCount = 0,
-        .ppEnabledLayerNames = nullptr,
         .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
         .ppEnabledExtensionNames = deviceExtensions.data(),
     };

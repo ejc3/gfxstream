@@ -11,6 +11,11 @@ namespace gfxstream {
 namespace host {
 namespace vk {
 
+// X11 headers (via -DUSE_X11) define `#define None 0L`, which conflicts with VVLBehavior::None.
+#ifdef None
+#undef None
+#endif
+
 enum class VVLBehavior {
     None,         // Do not register callback / ignore validation
     PrintOnly,
