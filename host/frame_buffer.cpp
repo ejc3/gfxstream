@@ -378,7 +378,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
                                            GLenum internalFormat,
                                            FrameworkFormat frameworkFormat);
     bool createColorBufferWithResourceHandle(int p_width, int p_height,
-                                             GfxstreamFormat format, HandleType handle);
+                                             GfxstreamFormat format, HandleType handle,
+                                             bool linear = false);
     bool createColorBufferWithResourceHandleDeprecated(int width, int height,
                                                        GLenum internalFormat,
                                                        FrameworkFormat frameworkFormat,
@@ -826,7 +827,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
         m_framebuffer->fireEvent({FrameBufferChange::FrameReady, mFrameNumber++});
     }
     bool createColorBufferWithResourceHandleLocked(int p_width, int p_height,
-                                                   GfxstreamFormat format, HandleType handle);
+                                                   GfxstreamFormat format, HandleType handle,
+                                                   bool linear = false);
     bool createBufferWithResourceHandleLocked(uint64_t p_size, HandleType handle,
                                               uint32_t memoryProperty);
 
@@ -1485,6 +1487,14 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
     const uint64_t kOneSecondNs = 1000000000ULL;
     impl->m_vsyncThread.reset(new VsyncThread((uint64_t)kOneSecondNs / (uint64_t)impl->m_vsyncHz));
 
+    if (width == 0 && height == 0) {
+        impl->m_lastPostedColorBuffer =
+            impl->createColorBuffer(1, 1, GfxstreamFormat::R8G8B8A8_UNORM);
+        if (impl->m_lastPostedColorBuffer) {
+            impl->openColorBuffer(impl->m_lastPostedColorBuffer);
+        }
+    }
+
     // Nothing else to do - we're ready to rock!
     return impl;
 }
@@ -1776,7 +1786,7 @@ bool FrameBuffer::Impl::setupSubWindow(FBNativeWindowType p_window, int wx, int 
     // emulator.
     const bool shouldMoveSubWindow =
         !shouldCreateSubWindow &&
-        !(m_x == wx && m_y == wy && m_windowWidth == ww && m_windowHeight == wh
+        !(m_x == wx && m_y == wy && m_windowWidth == ww && m_windowHeight == wh && m_dpr == dpr
 #if defined(__APPLE__)
           && m_zRot == zRot
 #endif
@@ -2050,7 +2060,8 @@ HandleType FrameBuffer::Impl::createColorBufferDeprecated(int width, int height,
 
 bool FrameBuffer::Impl::createColorBufferWithResourceHandle(int p_width, int p_height,
                                                             GfxstreamFormat format,
-                                                            HandleType handle) {
+                                                            HandleType handle,
+                                                            bool linear) {
     {
         AutoLock mutex(m_lock);
         sweepColorBuffersLocked();
@@ -2063,7 +2074,7 @@ bool FrameBuffer::Impl::createColorBufferWithResourceHandle(int p_width, int p_h
             return false;
         }
 
-        if (!createColorBufferWithResourceHandleLocked(p_width, p_height, format, handle)) {
+        if (!createColorBufferWithResourceHandleLocked(p_width, p_height, format, handle, linear)) {
             GFXSTREAM_ERROR("Could not create color buffer");
             return false;
         }
@@ -2087,9 +2098,10 @@ bool FrameBuffer::Impl::createColorBufferWithResourceHandleDeprecated(
 
 bool FrameBuffer::Impl::createColorBufferWithResourceHandleLocked(int p_width, int p_height,
                                                                   GfxstreamFormat format,
-                                                                  HandleType handle) {
+                                                                  HandleType handle,
+                                                                  bool linear) {
     ColorBufferPtr cb = ColorBuffer::create(m_emulationGl.get(), m_emulationVk.get(), p_width,
-                                            p_height, format, handle, nullptr /*stream*/);
+                                            p_height, format, handle, nullptr /*stream*/, linear);
     if (cb.get() == nullptr) {
         GFXSTREAM_ERROR("Failed to create ColorBuffer:%d format:%d with:%d height:%d", handle,
                         format, p_width, p_height);
@@ -2798,20 +2810,19 @@ Renderer::FlushReadPixelPipeline FrameBuffer::Impl::getFlushReadPixelPipeline() 
 
 bool FrameBuffer::Impl::repost(bool needLockAndBind) {
     GFXSTREAM_DEBUG("Reposting framebuffer.");
-    if (m_displayVk) {
-        setGuestPostedAFrame();
-        return true;
-    }
     if (m_lastPostedColorBuffer && sInitialized.load(std::memory_order_relaxed)) {
         GFXSTREAM_DEBUG("Has last posted colorbuffer and is initialized; post.");
         auto res = postImplSync(m_lastPostedColorBuffer, needLockAndBind, true);
         if (res) setGuestPostedAFrame();
         return res;
-    } else {
-        GFXSTREAM_DEBUG("No repost: no last posted color buffer");
-        if (!sInitialized.load(std::memory_order_relaxed)) {
-            GFXSTREAM_DEBUG("No repost: initialization is not finished.");
-        }
+    }
+    if (m_displayVk) {
+        setGuestPostedAFrame();
+        return true;
+    }
+    GFXSTREAM_DEBUG("No repost: no last posted color buffer");
+    if (!sInitialized.load(std::memory_order_relaxed)) {
+        GFXSTREAM_DEBUG("No repost: initialization is not finished.");
     }
     return false;
 }
@@ -3004,9 +3015,11 @@ int FrameBuffer::Impl::getColorBufferScreenshot(
     if (m_compositor->getScaledDisplayRect(scaledDisplayRect, targetWidth, targetHeight)) {
         // Read the color buffer into a temporary storage
         std::vector<uint8_t> tempBuffer;
-        tempBuffer.resize(scaledDisplayRect.size.w * scaledDisplayRect.size.h * numChannels);
-        cb->readToBytesScaled(scaledDisplayRect.size.w, scaledDisplayRect.size.h, skinRotation,
-                              rect, pixelsFormat, tempBuffer.data(), colorTransform);
+        if (scaledDisplayRect.size.w > 0 && scaledDisplayRect.size.h > 0) {
+            tempBuffer.resize(scaledDisplayRect.size.w * scaledDisplayRect.size.h * numChannels);
+            cb->readToBytesScaled(scaledDisplayRect.size.w, scaledDisplayRect.size.h, skinRotation,
+                                  rect, pixelsFormat, tempBuffer.data(), colorTransform);
+        }
 
         // Copy color buffer into solid black background, based on display layout parameters
         // TODO(b/485981055): optimize this
@@ -3152,6 +3165,14 @@ AsyncResult FrameBuffer::Impl::composeWithCallback(uint32_t bufferSize, void* bu
 
 bool FrameBuffer::Impl::onSave(Stream* stream,
                                const ITextureSaverPtr& textureSaver) NO_THREAD_SAFETY_ANALYSIS {
+    // Things we do not need to snapshot:
+    //     m_eglSurface
+    //     m_eglContext
+    //     m_pbufSurface
+    //     m_pbufContext
+    //     m_prevContext
+    //     m_prevReadSurf
+    //     m_prevDrawSurf
     AutoLock mutex(m_lock);
 
     GFXSTREAM_DEBUG("snapshot save: save framebuffer");
@@ -4037,10 +4058,11 @@ void FrameBuffer::Impl::setScreenBackground(int width, int height, const uint8_t
 
     //  Try to update the display at least 30 times a second, in case the guest is not
     //  updating the display
-    if (m_guestPostedAFrameTime && m_lastPostedColorBuffer) {
+    if (m_lastPostedColorBuffer) {
         const std::chrono::milliseconds maxUpdateLatency(1000 / 30);
         const auto nowTime = std::chrono::steady_clock::now();
-        bool shouldRepost = (nowTime - m_guestPostedAFrameTime.value()) > maxUpdateLatency;
+        bool shouldRepost = !m_guestPostedAFrameTime ||
+                            (nowTime - m_guestPostedAFrameTime.value()) > maxUpdateLatency;
         if (prevImageSize != mScreenBackgroundImage.m_rgbaData.size()) {
             // Always repost if the image size has changed, e.g. disabling background image
             shouldRepost = true;
@@ -4623,8 +4645,8 @@ HandleType FrameBuffer::createColorBufferDeprecated(int width, int height, GLenu
 }
 
 bool FrameBuffer::createColorBufferWithResourceHandle(int width, int height, GfxstreamFormat format,
-                                                      HandleType handle) {
-    return mImpl->createColorBufferWithResourceHandle(width, height, format, handle);
+                                                      HandleType handle, bool linear) {
+    return mImpl->createColorBufferWithResourceHandle(width, height, format, handle, linear);
 }
 
 bool FrameBuffer::createColorBufferWithResourceHandleDeprecated(int width, int height,

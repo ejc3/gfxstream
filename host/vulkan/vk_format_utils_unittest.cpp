@@ -466,6 +466,115 @@ TEST(VkFormatUtilsTest, GetTransferInfoWidthAlignmentOverflowReturnsFalse) {
     EXPECT_THAT(getFormatTransferInfo(format, {UINT32_MAX, 16, 1}, &transferInfo), IsFalse());
 }
 
+TEST(VkFormatUtilsTest, GetTransferInfoBC1) {
+    const VkFormat format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    const uint32_t width = 16;
+    const uint32_t height = 16;
+
+    TransferInfo transferInfo;
+    ASSERT_THAT(getFormatTransferInfo(format, {width, height, 1}, &transferInfo), IsTrue());
+    // 16x16 texels = 4x4 blocks; 8 bytes per BC1 block = 128 bytes.
+    EXPECT_THAT(transferInfo.stagingBufferCopySize, Eq(128));
+    ASSERT_THAT(transferInfo.bufferImageCopies,
+                ElementsAre(EqsVkBufferImageCopy(VkBufferImageCopy{
+                    .bufferOffset = 0,
+                    .bufferRowLength = 16,
+                    .bufferImageHeight = 0,
+                    .imageSubresource =
+                        {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .mipLevel = 0,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                    .imageOffset =
+                        {
+                            .x = 0,
+                            .y = 0,
+                            .z = 0,
+                        },
+                    .imageExtent =
+                        {
+                            .width = 16,
+                            .height = 16,
+                            .depth = 1,
+                        },
+                })));
+}
+
+TEST(VkFormatUtilsTest, GetTransferInfoBC3) {
+    const VkFormat format = VK_FORMAT_BC3_UNORM_BLOCK;
+    const uint32_t width = 16;
+    const uint32_t height = 16;
+
+    TransferInfo transferInfo;
+    ASSERT_THAT(getFormatTransferInfo(format, {width, height, 1}, &transferInfo), IsTrue());
+    // 16x16 texels = 4x4 blocks; 16 bytes per BC3 block = 256 bytes.
+    EXPECT_THAT(transferInfo.stagingBufferCopySize, Eq(256));
+    ASSERT_THAT(transferInfo.bufferImageCopies,
+                ElementsAre(EqsVkBufferImageCopy(VkBufferImageCopy{
+                    .bufferOffset = 0,
+                    .bufferRowLength = 16,
+                    .bufferImageHeight = 0,
+                    .imageSubresource =
+                        {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .mipLevel = 0,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                    .imageOffset =
+                        {
+                            .x = 0,
+                            .y = 0,
+                            .z = 0,
+                        },
+                    .imageExtent =
+                        {
+                            .width = 16,
+                            .height = 16,
+                            .depth = 1,
+                        },
+                })));
+}
+
+TEST(VkFormatUtilsTest, GetTransferInfoBC3SubBlockMipExtent) {
+    const VkFormat format = VK_FORMAT_BC3_UNORM_BLOCK;
+    const uint32_t width = 2;
+    const uint32_t height = 2;
+
+    TransferInfo transferInfo;
+    ASSERT_THAT(getFormatTransferInfo(format, {width, height, 1}, &transferInfo), IsTrue());
+    // 2x2 mip level still occupies 1x1 4x4 block (16 bytes), with bufferRowLength aligned to 4
+    // and imageExtent matching the 2x2 subresource dimensions.
+    EXPECT_THAT(transferInfo.stagingBufferCopySize, Eq(16));
+    ASSERT_THAT(transferInfo.bufferImageCopies,
+                ElementsAre(EqsVkBufferImageCopy(VkBufferImageCopy{
+                    .bufferOffset = 0,
+                    .bufferRowLength = 4,
+                    .bufferImageHeight = 0,
+                    .imageSubresource =
+                        {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .mipLevel = 0,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                    .imageOffset =
+                        {
+                            .x = 0,
+                            .y = 0,
+                            .z = 0,
+                        },
+                    .imageExtent =
+                        {
+                            .width = 2,
+                            .height = 2,
+                            .depth = 1,
+                        },
+                })));
+}
+
 }  // namespace
 }  // namespace vk
 }  // namespace host

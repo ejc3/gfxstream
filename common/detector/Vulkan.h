@@ -19,6 +19,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define VULKAN_HPP_NAMESPACE vkhpp
@@ -26,7 +27,7 @@
 #define VULKAN_HPP_ENABLE_DYNAMIC_LOADER_TOOL 1
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #define VULKAN_HPP_NO_EXCEPTIONS
-#define VULKAN_HPP_ASSERT_ON_RESULT
+#define VULKAN_HPP_ASSERT_ON_RESULT(x) (std::ignore = (x))
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_to_string.hpp>
 

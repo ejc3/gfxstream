@@ -28,7 +28,9 @@ namespace gfxstream {
 namespace host {
 namespace {
 
+#if GFXSTREAM_ENABLE_HOST_GLES
 using gl::ColorBufferGl;
+#endif
 using vk::ColorBufferVk;
 
 // ColorBufferVk natively supports YUV images. However, ColorBufferGl
@@ -58,7 +60,8 @@ class ColorBuffer::Impl : public LazySnapshotObj<ColorBuffer::Impl> {
    public:
     static std::unique_ptr<Impl> create(gl::EmulationGl* emulationGl, vk::VkEmulation* emulationVk,
                                         uint32_t width, uint32_t height, GfxstreamFormat format,
-                                        HandleType handle, gfxstream::Stream* stream = nullptr);
+                                        HandleType handle, gfxstream::Stream* stream = nullptr,
+                                        bool linear = false);
 
     static std::unique_ptr<Impl> onLoad(gl::EmulationGl* emulationGl, vk::VkEmulation* emulationVk,
                                         gfxstream::Stream* stream);
@@ -132,7 +135,7 @@ ColorBuffer::Impl::Impl(HandleType handle, uint32_t width, uint32_t height, Gfxs
 /*static*/
 std::unique_ptr<ColorBuffer::Impl> ColorBuffer::Impl::create(
     gl::EmulationGl* emulationGl, vk::VkEmulation* emulationVk, uint32_t width, uint32_t height,
-    GfxstreamFormat format, HandleType handle, gfxstream::Stream* stream) {
+    GfxstreamFormat format, HandleType handle, gfxstream::Stream* stream, bool linear) {
     if (format == GfxstreamFormat::UNKNOWN) {
         GFXSTREAM_ERROR("Invalid format for color buffer %u, with size %ux%u", handle, width,
                         height);
@@ -161,8 +164,13 @@ std::unique_ptr<ColorBuffer::Impl> ColorBuffer::Impl::create(
 #endif
 
     if (emulationVk) {
+#if GFXSTREAM_ENABLE_HOST_GLES
         const bool vulkanOnly = colorBuffer->mColorBufferGl == nullptr;
-        const uint32_t memoryProperty = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#else
+        const bool vulkanOnly = true;
+#endif
+        const uint32_t memoryProperty = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
+            (linear ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT : 0);
         const uint32_t mipLevels = 1;
         colorBuffer->mColorBufferVk = vk::ColorBufferVk::create(
             *emulationVk, handle, width, height, format, vulkanOnly, memoryProperty, mipLevels);
@@ -512,11 +520,12 @@ std::optional<BlobDescriptorInfo> ColorBuffer::Impl::exportBlob() {
 std::shared_ptr<ColorBuffer> ColorBuffer::create(gl::EmulationGl* emulationGl,
                                                  vk::VkEmulation* emulationVk, uint32_t width,
                                                  uint32_t height, GfxstreamFormat format,
-                                                 HandleType handle, gfxstream::Stream* stream) {
+                                                 HandleType handle, gfxstream::Stream* stream,
+                                                 bool linear) {
     std::shared_ptr<ColorBuffer> colorbuffer(new ColorBuffer());
 
     colorbuffer->mImpl = ColorBuffer::Impl::create(emulationGl, emulationVk, width, height, format,
-                                                   handle, stream);
+                                                   handle, stream, linear);
     if (!colorbuffer->mImpl) {
         return nullptr;
     }
@@ -548,6 +557,8 @@ std::shared_ptr<ColorBuffer> ColorBuffer::onLoad(gl::EmulationGl* emulationGl,
 
     return colorbuffer;
 }
+
+ColorBuffer::~ColorBuffer() = default;
 
 bool ColorBuffer::onSave(gfxstream::Stream* stream) {
     return mImpl->onSave(stream);

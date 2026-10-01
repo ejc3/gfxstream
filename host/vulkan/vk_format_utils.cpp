@@ -30,6 +30,8 @@ namespace {
 struct FormatPlaneLayout {
     uint32_t horizontalSubsampling = 1;
     uint32_t verticalSubsampling = 1;
+    uint32_t texelBlockWidth = 1;
+    uint32_t texelBlockHeight = 1;
     uint32_t sampleIncrementBytes = 0;
     VkImageAspectFlags aspectMask = 0;
 };
@@ -41,6 +43,7 @@ inline T alignToPower2(T val, T align) {
 
 struct FormatPlaneLayouts {
     uint32_t horizontalAlignmentPixels = 1;
+    uint32_t verticalAlignmentPixels = 1;
     std::vector<FormatPlaneLayout> planeLayouts;
     TransferInfo::PackFunction packFunction = nullptr;
     TransferInfo::UnpackFunction unpackFunction = nullptr;
@@ -306,6 +309,25 @@ const std::unordered_map<VkFormat, FormatPlaneLayouts>& getFormatPlaneLayoutsMap
         LIST_VK_FORMATS_LINEAR(ADD_SINGLE_PLANE_FORMAT_INFO)
 #undef ADD_SINGLE_PLANE_FORMAT_INFO
 
+#define ADD_BC_FORMAT_INFO(format, blockWidth, blockHeight, bytesPerBlock) \
+    (*map)[format] = FormatPlaneLayouts{                                   \
+        .horizontalAlignmentPixels = blockWidth,                           \
+        .verticalAlignmentPixels = blockHeight,                            \
+        .planeLayouts =                                                    \
+            {                                                              \
+                {                                                          \
+                    .horizontalSubsampling = 1,                            \
+                    .verticalSubsampling = 1,                              \
+                    .texelBlockWidth = blockWidth,                         \
+                    .texelBlockHeight = blockHeight,                       \
+                    .sampleIncrementBytes = bytesPerBlock,                 \
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,               \
+                },                                                         \
+            },                                                             \
+    };
+        LIST_VK_FORMATS_BC(ADD_BC_FORMAT_INFO)
+#undef ADD_BC_FORMAT_INFO
+
         return map;
     }();
     return *kPlaneLayoutsMap;
@@ -464,8 +486,15 @@ bool getFormatTransferInfo(VkFormat format, VkExtent3D extent, TransferInfo* out
                         alignmentPixels);
         return false;
     }
+    const VkDeviceSize alignedHeight64 =
+        alignToPower2<VkDeviceSize>(extent.height, formatInfo->verticalAlignmentPixels);
+    if (alignedHeight64 > std::numeric_limits<uint32_t>::max()) {
+        GFXSTREAM_ERROR("Overflow aligning height %u with alignment %u", extent.height,
+                        formatInfo->verticalAlignmentPixels);
+        return false;
+    }
     const uint32_t alignedWidth = static_cast<uint32_t>(alignedWidth64);
-    const uint32_t alignedHeight = extent.height;
+    const uint32_t alignedHeight = static_cast<uint32_t>(alignedHeight64);
     VkDeviceSize cumulativeOffset = 0;
 
     outTransferInfo->bufferImageCopies.clear();
@@ -476,12 +505,23 @@ bool getFormatTransferInfo(VkFormat format, VkExtent3D extent, TransferInfo* out
                                              : cumulativeOffset;
         const uint32_t planeWidth = alignedWidth / planeInfo.horizontalSubsampling;
         const uint32_t planeHeight = alignedHeight / planeInfo.verticalSubsampling;
+        const uint32_t planeBlocksWide = planeWidth / planeInfo.texelBlockWidth;
+        const uint32_t planeBlocksHigh = planeHeight / planeInfo.texelBlockHeight;
         const VkDeviceSize planeBpp = planeInfo.sampleIncrementBytes;
         const uint32_t planeStrideTexels = planeWidth;
         const VkDeviceSize planeStrideBytes =
-            static_cast<VkDeviceSize>(planeStrideTexels) * planeBpp;
+            static_cast<VkDeviceSize>(planeBlocksWide) * planeBpp;
         const VkDeviceSize planeSize =
-            static_cast<VkDeviceSize>(planeHeight) * planeStrideBytes * extent.depth;
+            static_cast<VkDeviceSize>(planeBlocksHigh) * planeStrideBytes * extent.depth;
+
+        const uint32_t imageExtentWidth =
+            (planeInfo.texelBlockWidth > 1)
+                ? (extent.width / planeInfo.horizontalSubsampling)
+                : planeWidth;
+        const uint32_t imageExtentHeight =
+            (planeInfo.texelBlockHeight > 1)
+                ? (extent.height / planeInfo.verticalSubsampling)
+                : planeHeight;
 
         outTransferInfo->bufferImageCopies.emplace_back(VkBufferImageCopy{
             .bufferOffset = planeOffset,
@@ -502,8 +542,8 @@ bool getFormatTransferInfo(VkFormat format, VkExtent3D extent, TransferInfo* out
                 },
             .imageExtent =
                 {
-                    .width = planeWidth,
-                    .height = planeHeight,
+                    .width = imageExtentWidth,
+                    .height = imageExtentHeight,
                     .depth = extent.depth,
                 },
         });
