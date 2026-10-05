@@ -691,7 +691,6 @@ bool CompositorVk::createImage(CompositorVkBase::Image& imageOut, uint32_t width
     };
     VkImage image = VK_NULL_HANDLE;
     VK_CHECK_RETURN(m_vk.vkCreateImage(m_vkDevice, &imageCreateInfo, nullptr, &image));
-    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk:image:%s", debugName.c_str());
 
     VkMemoryRequirements imageMemoryRequirements;
     m_vk.vkGetImageMemoryRequirements(m_vkDevice, image, &imageMemoryRequirements);
@@ -740,7 +739,6 @@ bool CompositorVk::createImage(CompositorVkBase::Image& imageOut, uint32_t width
     };
     VkImageView imageView = VK_NULL_HANDLE;
     VK_CHECK_RETURN(m_vk.vkCreateImageView(m_vkDevice, &imageViewCreateInfo, nullptr, &imageView));
-    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk:imageView:%s", debugName.c_str());
 
     VkBuffer stagingBuffer = VK_NULL_HANDLE;
     VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
@@ -836,9 +834,9 @@ bool CompositorVk::createImage(CompositorVkBase::Image& imageOut, uint32_t width
     m_vk.vkDestroyBuffer(m_vkDevice, stagingBuffer, nullptr);
     m_vk.vkFreeMemory(m_vkDevice, stagingBufferMemory, nullptr);
 
-    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk::image %s", debugName.c_str());
-    m_debugUtilsHelper.addDebugLabel(imageView, "CompositorVk::imageView %s", debugName.c_str());
-    m_debugUtilsHelper.addDebugLabel(imageMemory, "CompositorVk::imageMemory %s",
+    m_debugUtilsHelper.addDebugLabel(image, "CompositorVk:image:%s", debugName.c_str());
+    m_debugUtilsHelper.addDebugLabel(imageView, "CompositorVk:imageView:%s", debugName.c_str());
+    m_debugUtilsHelper.addDebugLabel(imageMemory, "CompositorVk::imageMemory:%s",
                                      debugName.c_str());
 
     // Encapsulate the created vulkan objects into an Image instance

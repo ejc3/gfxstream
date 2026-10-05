@@ -328,28 +328,14 @@ void GlobalNameSpace::preSaveAddTex(TextureData* texture) {
 void GlobalNameSpace::onSave(gfxstream::Stream* stream,
                              const gfxstream::ITextureSaverPtr& textureSaver,
                              SaveableTexture::saver_t saver) {
-#if SNAPSHOT_PROFILE > 1
-    int cleanTexs = 0;
-    int dirtyTexs = 0;
-#endif // SNAPSHOT_PROFILE > 1
     gfxstream::host::saveCollection(
             stream, m_textureMap,
             [saver, &textureSaver
-#if SNAPSHOT_PROFILE > 1
-            , &cleanTexs, &dirtyTexs
-#endif // SNAPSHOT_PROFILE > 1
                 ](
                     gfxstream::Stream* stream,
                     const std::pair<const unsigned int, SaveableTexturePtr>&
                             tex) {
                 stream->putBe32(tex.first);
-#if SNAPSHOT_PROFILE > 1
-                if (tex.second.get() && tex.second->isDirty()) {
-                    dirtyTexs ++;
-                } else {
-                    cleanTexs ++;
-                }
-#endif // SNAPSHOT_PROFILE > 1
                 textureSaver->saveTexture(
                         tex.first,
                         [saver, &tex](gfxstream::Stream* stream,
@@ -359,9 +345,6 @@ void GlobalNameSpace::onSave(gfxstream::Stream* stream,
                         });
             });
     clearTextureMap();
-#if SNAPSHOT_PROFILE > 1
-    GFXSTREAM_INFO("Dirty texture saved %d, clean texture saved %d\n", dirtyTexs, cleanTexs);
-#endif // SNAPSHOT_PROFILE > 1
 }
 
 void GlobalNameSpace::onLoad(gfxstream::Stream* stream,

@@ -24,6 +24,7 @@
 #include <time.h>
 
 #include <iomanip>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -121,6 +122,16 @@ bool postOnlyOnMainThread() {
 }
 
 static FrameBuffer* sFrameBuffer = NULL;
+
+// Limit number of resources for validation and consistency checks
+static constexpr uint32_t kNumMaxProcessResources = 5000;
+static constexpr uint32_t kNumMaxColorBuffers = 16000;
+
+// Version and magic numbers for framebuffer stream for validity checks.
+// The global snapshot version (e.g. kVersionBase for AEMU) should be updated when changing
+// the framebuffer version to avoid getting errors when loading old, unsupported snapshots.
+static constexpr uint32_t kFramebufferSnapshotVersionNumber = 3;
+static constexpr uint32_t kFramebufferSnapshotMagicNumber = 0xC0FFEEEE;
 
 // A condition variable needed to wait for framebuffer initialization.
 struct InitializedGlobals {
@@ -1476,6 +1487,14 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
     const uint64_t kOneSecondNs = 1000000000ULL;
     impl->m_vsyncThread.reset(new VsyncThread((uint64_t)kOneSecondNs / (uint64_t)impl->m_vsyncHz));
 
+    if (width == 0 && height == 0) {
+        impl->m_lastPostedColorBuffer =
+            impl->createColorBuffer(1, 1, GfxstreamFormat::R8G8B8A8_UNORM);
+        if (impl->m_lastPostedColorBuffer) {
+            impl->openColorBuffer(impl->m_lastPostedColorBuffer);
+        }
+    }
+
     // Nothing else to do - we're ready to rock!
     return impl;
 }
@@ -1767,7 +1786,7 @@ bool FrameBuffer::Impl::setupSubWindow(FBNativeWindowType p_window, int wx, int 
     // emulator.
     const bool shouldMoveSubWindow =
         !shouldCreateSubWindow &&
-        !(m_x == wx && m_y == wy && m_windowWidth == ww && m_windowHeight == wh
+        !(m_x == wx && m_y == wy && m_windowWidth == ww && m_windowHeight == wh && m_dpr == dpr
 #if defined(__APPLE__)
           && m_zRot == zRot
 #endif
@@ -2340,16 +2359,17 @@ void FrameBuffer::Impl::createGraphicsProcessResources(uint64_t puid) {
 }
 
 std::unique_ptr<ProcessResources> FrameBuffer::Impl::removeGraphicsProcessResources(uint64_t puid) {
-    std::unordered_map<uint64_t, std::unique_ptr<ProcessResources>>::node_type node;
+    std::unique_ptr<ProcessResources> res;
     {
         AutoLock mutex(m_procOwnedResourcesLock);
-        node = m_procOwnedResources.extract(puid);
+        if (auto node = m_procOwnedResources.extract(puid)) {
+            res = std::move(node.mapped());
+        }
     }
-    if (node.empty()) {
+    if (!res) {
         GFXSTREAM_WARNING("Failed to find process resource for puid %" PRIu64 ".", puid);
         return nullptr;
     }
-    std::unique_ptr<ProcessResources> res = std::move(node.mapped());
     return res;
 }
 
@@ -2790,20 +2810,19 @@ Renderer::FlushReadPixelPipeline FrameBuffer::Impl::getFlushReadPixelPipeline() 
 
 bool FrameBuffer::Impl::repost(bool needLockAndBind) {
     GFXSTREAM_DEBUG("Reposting framebuffer.");
-    if (m_displayVk) {
-        setGuestPostedAFrame();
-        return true;
-    }
     if (m_lastPostedColorBuffer && sInitialized.load(std::memory_order_relaxed)) {
         GFXSTREAM_DEBUG("Has last posted colorbuffer and is initialized; post.");
         auto res = postImplSync(m_lastPostedColorBuffer, needLockAndBind, true);
         if (res) setGuestPostedAFrame();
         return res;
-    } else {
-        GFXSTREAM_DEBUG("No repost: no last posted color buffer");
-        if (!sInitialized.load(std::memory_order_relaxed)) {
-            GFXSTREAM_DEBUG("No repost: initialization is not finished.");
-        }
+    }
+    if (m_displayVk) {
+        setGuestPostedAFrame();
+        return true;
+    }
+    GFXSTREAM_DEBUG("No repost: no last posted color buffer");
+    if (!sInitialized.load(std::memory_order_relaxed)) {
+        GFXSTREAM_DEBUG("No repost: initialization is not finished.");
     }
     return false;
 }
@@ -2996,9 +3015,11 @@ int FrameBuffer::Impl::getColorBufferScreenshot(
     if (m_compositor->getScaledDisplayRect(scaledDisplayRect, targetWidth, targetHeight)) {
         // Read the color buffer into a temporary storage
         std::vector<uint8_t> tempBuffer;
-        tempBuffer.resize(scaledDisplayRect.size.w * scaledDisplayRect.size.h * numChannels);
-        cb->readToBytesScaled(scaledDisplayRect.size.w, scaledDisplayRect.size.h, skinRotation,
-                              rect, pixelsFormat, tempBuffer.data(), colorTransform);
+        if (scaledDisplayRect.size.w > 0 && scaledDisplayRect.size.h > 0) {
+            tempBuffer.resize(scaledDisplayRect.size.w * scaledDisplayRect.size.h * numChannels);
+            cb->readToBytesScaled(scaledDisplayRect.size.w, scaledDisplayRect.size.h, skinRotation,
+                                  rect, pixelsFormat, tempBuffer.data(), colorTransform);
+        }
 
         // Copy color buffer into solid black background, based on display layout parameters
         // TODO(b/485981055): optimize this
@@ -3154,6 +3175,9 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
     //     m_prevDrawSurf
     AutoLock mutex(m_lock);
 
+    GFXSTREAM_DEBUG("snapshot save: save framebuffer");
+    stream->putBe32(kFramebufferSnapshotVersionNumber);
+
     std::unique_ptr<RecursiveScopedContextBind> bind;
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (m_emulationGl) {
@@ -3177,6 +3201,7 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
     stream->putBe32(m_framebufferHeight);
     stream->putFloat(m_dpr);
     stream->putBe32(mDisplayActiveConfigId);
+    GFXSTREAM_DEBUG("snapshot save: saving %zu display configs", mDisplayConfigs.size());
     saveCollection(stream, mDisplayConfigs,
                    [](Stream* s, const std::map<int, DisplayConfig>::value_type& pair) {
                        s->putBe32(pair.first);
@@ -3196,6 +3221,7 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
         currentId = nextId;
     }
 
+    GFXSTREAM_DEBUG("snapshot save: saving %zu displays", displayIds.size());
     stream->putBe32(displayIds.size());
     for (uint32_t id : displayIds) {
         stream->putBe32(id);
@@ -3213,7 +3239,6 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
     // we skip reading from GPU (for non-texture objects) or force a restore in
     // previous eglPreSaveContext and eglSaveAllImages calls (for texture
     // objects).
-    // TODO: skip reading from GPU even for texture objects.
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (m_emulationGl) {
         m_emulationGl->saveContexts(stream);
@@ -3226,15 +3251,29 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
 
     {
         AutoLock colorBufferMapLock(m_colorBufferMapLock);
+        const size_t colorBufferCount = m_colorbuffers.size();
+        if (colorBufferCount > kNumMaxColorBuffers) {
+            GFXSTREAM_ERROR("snapshot save: too many color buffers: %zu", colorBufferCount);
+            return false;
+        }
+        GFXSTREAM_DEBUG("snapshot save: save %zu color buffers", colorBufferCount);
         stream->putByte(m_guestManagedColorBufferLifetime);
-        saveCollection(stream, m_colorbuffers, [now](Stream* s, const auto& pair) {
-            auto cb = pair.second.cb;
-            assert(cb);
-            cb->onSave(s);
-            s->putBe32(pair.second.refcount);
-            s->putByte(pair.second.opened);
-            s->putBe32(std::max<uint64_t>(0, now - pair.second.closedTs));
-        });
+        bool colorBuffersSaved =
+            trySaveCollection(stream, m_colorbuffers, kNumMaxColorBuffers,
+                              [now](Stream* s, const auto& pair) {
+                                  if (!pair.second.cb->onSave(s)) {
+                                      return false;
+                                  }
+                                  s->putBe32(pair.second.refcount);
+                                  s->putByte(pair.second.opened);
+                                  s->putBe32(std::max<uint64_t>(0, now - pair.second.closedTs));
+                                  return true;
+                              });
+
+        if (!colorBuffersSaved) {
+            GFXSTREAM_ERROR("snapshot save: could not save %zu color buffers", colorBufferCount);
+            return false;
+        }
     }
     stream->putBe32(m_lastPostedColorBuffer);
 #if GFXSTREAM_ENABLE_HOST_GLES
@@ -3256,10 +3295,17 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
     }
 #endif
 
-    // TODO(b/309858017): remove if when ready to bump snapshot version
-    if (m_features.VulkanSnapshots.enabled()) {
+    // save process owned resources
+    {
         AutoLock procResourceLock(m_procOwnedResourcesLock);
-        stream->putBe64(m_procOwnedResources.size());
+        size_t procResourceCount = m_procOwnedResources.size();
+        if (procResourceCount > kNumMaxProcessResources) {
+            GFXSTREAM_ERROR("snapshot save: too many process owned resources: %zu",
+                            procResourceCount);
+            return false;
+        }
+        GFXSTREAM_DEBUG("snapshot save: save %zu process owned resources", procResourceCount);
+        stream->putBe64(procResourceCount);
         for (const auto& element : m_procOwnedResources) {
             stream->putBe64(element.first);
             stream->putBe32(element.second->getSequenceNumberPtr()->load());
@@ -3268,6 +3314,7 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
 
     // Save Vulkan state
     if (m_features.VulkanSnapshots.enabled() && vk::VkDecoderGlobalState::get()) {
+        GFXSTREAM_DEBUG("snapshot save: save decoder global state");
         bool res = vk::VkDecoderGlobalState::get()->save(stream);
         if (!res) {
             return false;
@@ -3280,12 +3327,32 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
         EmulatedEglFenceSync::onSave(stream);
     }
 #endif
+
+    // Finish with a magic number to be able to verify load later on.
+    stream->putBe32(kFramebufferSnapshotMagicNumber);
+
+    if (stream->hasErrors()) {
+        GFXSTREAM_ERROR("snapshot save: stream has errors: %s", stream->getErrors().value_or("unknown error").c_str());
+        return false;
+    }
+
     return true;
 }
 
 bool FrameBuffer::Impl::onLoad(Stream* stream,
                                const ITextureLoaderPtr& textureLoader) NO_THREAD_SAFETY_ANALYSIS {
     AutoLock lock(m_lock);
+
+    GFXSTREAM_DEBUG("snapshot load: load framebuffer");
+    const uint32_t versionSaved = stream->getBe32();
+    if (versionSaved != kFramebufferSnapshotVersionNumber) {
+        // The global snapshot version should be updated when changing the version for the
+        // framebuffer here in order to avoid this situation.
+        GFXSTREAM_ERROR("Unsupported snapshot version: 0x%x (Version supported: 0x%x)",
+                        versionSaved, kFramebufferSnapshotVersionNumber);
+        return false;
+    }
+
     // cleanups
     {
         sweepColorBuffersLocked();
@@ -3384,7 +3451,6 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
                 GFXSTREAM_ERROR("warning: on load, stale colorbuffers: %zu", m_colorbuffers.size());
                 m_colorbuffers.clear();
             }
-            assert(m_colorbuffers.empty());
         }
 #if GFXSTREAM_ENABLE_HOST_GLES
         if (m_emulationGl) {
@@ -3406,12 +3472,14 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
                        int dpiY = static_cast<int>(s->getBe32());
                        return {idx, {w, h, dpiX, dpiY}};
                    });
+    GFXSTREAM_DEBUG("snapshot load: loaded %zu display configs", mDisplayConfigs.size());
 
     uint32_t numDisplays = stream->getBe32();
     for (uint32_t i = 0; i < numDisplays; ++i) {
         uint32_t displayId = stream->getBe32();
         get_gfxstream_multi_display_operations().create_display(&displayId);
     }
+    GFXSTREAM_DEBUG("snapshot load: loaded %u displays", numDisplays);
 
     // TODO: resize the window
     //
@@ -3433,15 +3501,17 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
 
     auto now = gfxstream::base::getUnixTimeUs();
     {
+        GFXSTREAM_DEBUG("snapshot load: load color buffers");
         AutoLock colorBufferMapLock(m_colorBufferMapLock);
         m_guestManagedColorBufferLifetime = stream->getByte();
-        loadCollection(
-            stream, &m_colorbuffers,
-            [this, now](Stream* stream) -> std::pair<HandleType, ReferenceCountedColorBuffer> {
+        bool colorBuffersLoaded = tryLoadCollection(
+            stream, &m_colorbuffers, kNumMaxColorBuffers,
+            [this, now](Stream* stream) -> std::optional<std::pair<HandleType, ReferenceCountedColorBuffer>> {
                 ColorBufferPtr cb =
                     ColorBuffer::onLoad(m_emulationGl.get(), m_emulationVk.get(), stream);
                 if (!cb) {
-                    GFXSTREAM_FATAL("Cannot load color buffer for the snapshot!");
+                    GFXSTREAM_ERROR("Cannot load color buffer for the snapshot!");
+                    return std::nullopt;
                 }
                 const HandleType handle = cb->getHndl();
                 const unsigned refCount = stream->getBe32();
@@ -3450,9 +3520,15 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
                 if (refCount == 0) {
                     m_colorBufferDelayedCloseList.push_back({closedTs, handle});
                 }
-                return {handle,
-                        ReferenceCountedColorBuffer{std::move(cb), refCount, opened, closedTs}};
+                return std::make_optional(std::make_pair(
+                    handle, ReferenceCountedColorBuffer{std::move(cb), refCount, opened, closedTs}));
             });
+
+        if (!colorBuffersLoaded) {
+            GFXSTREAM_ERROR("snapshot load: could not load color buffers");
+            return false;
+        }
+        GFXSTREAM_DEBUG("snapshot load: %zu color buffers loaded", m_colorbuffers.size());
     }
     m_lastPostedColorBuffer = static_cast<HandleType>(stream->getBe32());
     GFXSTREAM_DEBUG("Got lasted posted color buffer from snapshot");
@@ -3487,10 +3563,16 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         m_emulationGl->loadProcOwnedContexts(stream);
     }
 #endif
-    // TODO(b/309858017): remove if when ready to bump snapshot version
-    if (m_features.VulkanSnapshots.enabled()) {
-        size_t resourceCount = stream->getBe64();
-        for (size_t i = 0; i < resourceCount; i++) {
+
+    // load process owned resources
+    {
+        uint64_t resourceCount = stream->getBe64();
+        if (resourceCount > kNumMaxProcessResources) {
+            GFXSTREAM_ERROR("%s:%d - too many process resources in snapshot: %" PRIu64, __func__,
+                            __LINE__, resourceCount);
+            return false;
+        }
+        for (uint64_t i = 0; i < resourceCount; i++) {
             uint64_t puid = stream->getBe64();
             uint32_t sequenceNumber = stream->getBe32();
             std::unique_ptr<ProcessResources> processResources = ProcessResources::create();
@@ -3500,6 +3582,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
                 m_procOwnedResources.emplace(puid, std::move(processResources));
             }
         }
+        GFXSTREAM_DEBUG("snapshot load: loaded %zu process resources", resourceCount);
     }
 
 #if GFXSTREAM_ENABLE_HOST_GLES
@@ -3532,10 +3615,18 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
 
     // Restore Vulkan state
     if (m_features.VulkanSnapshots.enabled() && vk::VkDecoderGlobalState::get()) {
+        GFXSTREAM_DEBUG("snapshot load: load decoder global state");
         lock.unlock();
         GfxApiLogger gfxLogger;
-        vk::VkDecoderGlobalState::get()->load(stream, gfxLogger);
+        const bool vkLoaded = vk::VkDecoderGlobalState::get()->load(stream, gfxLogger);
         lock.lock();
+        if (!vkLoaded) {
+            // The stream position is undefined after a failed load, so any further reads
+            // (including the trailing magic number check) would be meaningless.
+            GFXSTREAM_ERROR("%s:%d - failed to load Vulkan decoder global state.", __func__,
+                            __LINE__);
+            return false;
+        }
     }
 
     repost(false);
@@ -3545,6 +3636,21 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         EmulatedEglFenceSync::onLoad(stream);
     }
 #endif
+
+    // Check if the stream is read correctly by checking a magic number at the end of the stream.
+    uint32_t magicNumberLoaded = stream->getBe32();
+    if (magicNumberLoaded != kFramebufferSnapshotMagicNumber) {
+        GFXSTREAM_ERROR("%s:%d - framebuffer snapshot magic number mismatch: 0x%x", __func__,
+                        __LINE__, magicNumberLoaded);
+        return false;
+    }
+
+    if (stream->hasErrors()) {
+        GFXSTREAM_ERROR("%s:%d - stream has errors: %s", __func__, __LINE__, stream->getErrors().value_or("unknown error").c_str());
+        return false;
+    }
+
+    GFXSTREAM_DEBUG("snapshot load: framebuffer loaded successfully");
 
     return true;
     // TODO: restore memory management
@@ -3952,10 +4058,11 @@ void FrameBuffer::Impl::setScreenBackground(int width, int height, const uint8_t
 
     //  Try to update the display at least 30 times a second, in case the guest is not
     //  updating the display
-    if (m_guestPostedAFrameTime && m_lastPostedColorBuffer) {
+    if (m_lastPostedColorBuffer) {
         const std::chrono::milliseconds maxUpdateLatency(1000 / 30);
         const auto nowTime = std::chrono::steady_clock::now();
-        bool shouldRepost = (nowTime - m_guestPostedAFrameTime.value()) > maxUpdateLatency;
+        bool shouldRepost = !m_guestPostedAFrameTime ||
+                            (nowTime - m_guestPostedAFrameTime.value()) > maxUpdateLatency;
         if (prevImageSize != mScreenBackgroundImage.m_rgbaData.size()) {
             // Always repost if the image size has changed, e.g. disabling background image
             shouldRepost = true;
@@ -3987,7 +4094,7 @@ void FrameBuffer::Impl::registerVulkanInstance(uint64_t id, std::string_view app
         if (position != std::string::npos) {
             process_name = process_name.substr(0, position);
         }
-    } else if(appName) {
+    } else if(appName.size()) {
         process_name = std::string(appName);
     }
     get_gfxstream_vm_operations().register_vulkan_instance(id, process_name.c_str());
@@ -4726,7 +4833,7 @@ void FrameBuffer::setDisplayLayout(int screenWidth, int screenHeight, const Rect
 
 #ifdef CONFIG_AEMU
 void FrameBuffer::registerVulkanInstance(uint64_t id, const char* appName) const {
-    mImpl->registerVulkanInstance(id, appName);
+    mImpl->registerVulkanInstance(id, appName ? appName : "");
 }
 
 void FrameBuffer::unregisterVulkanInstance(uint64_t id) const {

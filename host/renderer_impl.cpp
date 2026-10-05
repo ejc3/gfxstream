@@ -383,16 +383,7 @@ bool RendererImpl::save(gfxstream::Stream* stream,
 
 bool RendererImpl::load(gfxstream::Stream* stream,
                         const ITextureLoaderPtr& textureLoader) {
-
-#ifdef SNAPSHOT_PROFILE
-    gfxstream::base::System::Duration startTime =
-            gfxstream::base::System::get()->getUnixTimeUs();
-#endif
     waitForProcessCleanup();
-#ifdef SNAPSHOT_PROFILE
-    GFXSTREAM_INFO("Previous session cleanup time: %lld ms\n",
-                   (long long)(gfxstream::base::System::get()->getUnixTimeUs() - startTime) / 1000);
-#endif
 
     mStopped = stream->getByte();
     if (mStopped) {

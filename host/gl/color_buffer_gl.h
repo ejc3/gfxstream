@@ -188,7 +188,7 @@ class ColorBufferGl {
     // readback() but async (to the specified |buffer|)
     bool readbackAsync(GLuint buffer, bool readbackBgra = false);
 
-    void onSave(gfxstream::Stream* stream);
+    bool onSave(gfxstream::Stream* stream);
     static std::unique_ptr<ColorBufferGl> onLoad(gfxstream::Stream* stream, EGLDisplay p_display,
                                                  ContextHelper* helper, TextureDraw* textureDraw,
                                                  bool fastBlitSupported,

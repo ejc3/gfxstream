@@ -22,6 +22,7 @@
 #include "OpenGLESDispatch/OpenGLDispatchLoader.h"
 #include "gfxstream/ArraySize.h"
 #include "gfxstream/files/PathUtils.h"
+#include "gfxstream/host/handle.h"
 #include "gfxstream/host/testing/VkTestUtils.h"
 #include "gfxstream/system/System.h"
 #include "vk_common_operations.h"
@@ -484,3 +485,4 @@ TEST(VVLConfigurationTest, FilterEnvironmentVariables) {
 }  // namespace vk
 }  // namespace host
 }  // namespace gfxstream
+

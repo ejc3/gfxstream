@@ -70,15 +70,36 @@ static constexpr int kMinThreadsToRunUnlimited = 5;
 // A thread run limiter that limits render threads to run one slice at a time.
 static gfxstream::base::Lock sThreadRunLimiter;
 
-RenderThread::RenderThread(RenderChannelImpl* channel,
-                           gfxstream::Stream* load,
+static std::atomic<uint32_t> sActiveRenderThreads{0};
+static const uint32_t kWarnMaxRenderThreads = 1000;
+
+static void incrementAndCheckRenderThreadCount() {
+    uint32_t count = ++sActiveRenderThreads;
+    GFXSTREAM_VERBOSE("Created RenderThread. Active RenderThreads: %u", count);
+    if (count > kWarnMaxRenderThreads) {
+        GFXSTREAM_WARNING("High number of active render threads detected: %u", count);
+    }
+}
+
+static void decrementRenderThreadCount() {
+    uint32_t count = --sActiveRenderThreads;
+    GFXSTREAM_VERBOSE("Destroyed RenderThread. Active RenderThreads: %u", count);
+}
+
+uint32_t RenderThread::getActiveRenderThreadsCount() {
+    return sActiveRenderThreads.load();
+}
+
+RenderThread::RenderThread(RenderChannelImpl* channel, gfxstream::Stream* load,
                            uint32_t virtioGpuContextId)
     : gfxstream::base::Thread(gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
-                            "RenderThread"),
+                              virtioGpuContextId == INVALID_CONTEXT_ID
+                                  ? "RenderThread"
+                                  : "RenderThread-" + std::to_string(virtioGpuContextId)),
       mChannel(channel),
       mRunInLimitedMode(gfxstream::base::getCpuCoreCount() < kMinThreadsToRunUnlimited),
-      mContextId(virtioGpuContextId)
-{
+      mContextId(virtioGpuContextId) {
+    incrementAndCheckRenderThreadCount();
     if (load) {
         const bool success = load->getByte();
         if (success) {
@@ -86,17 +107,22 @@ RenderThread::RenderThread(RenderChannelImpl* channel,
             loadStream(load, &*mStream);
             mState = SnapshotState::StartLoading;
         } else {
-            mFinished.store(true, std::memory_order_relaxed);
+            setFinished();
         }
     }
 }
 
 RenderThread::RenderThread(const AsgConsumerCreateInfo& info, Stream* load)
-    : gfxstream::base::Thread(gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
-                              info.virtioGpuContextName ? *info.virtioGpuContextName : ""),
+    : gfxstream::base::Thread(
+          gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
+          (info.virtioGpuContextId && *info.virtioGpuContextId != INVALID_CONTEXT_ID)
+              ? "RenderThread-" + std::to_string(*info.virtioGpuContextId)
+              : "RenderThread"),
       mRingStream(new RingStream(info, kStreamBufferSize)),
       mContextId(info.virtioGpuContextId ? *info.virtioGpuContextId : 0),
-      mCapsetId(info.virtioGpuCapsetId ? *info.virtioGpuCapsetId : 0) {
+      mCapsetId(info.virtioGpuCapsetId ? *info.virtioGpuCapsetId : 0),
+      mContextName(info.virtioGpuContextName) {
+    incrementAndCheckRenderThreadCount();
     if (load) {
         const bool success = load->getByte();
         if (success) {
@@ -104,7 +130,7 @@ RenderThread::RenderThread(const AsgConsumerCreateInfo& info, Stream* load)
             loadStream(load, &*mStream);
             mState = SnapshotState::StartLoading;
         } else {
-            mFinished.store(true, std::memory_order_relaxed);
+            setFinished();
         }
     }
 }
@@ -112,7 +138,9 @@ RenderThread::RenderThread(const AsgConsumerCreateInfo& info, Stream* load)
 // Note: the RenderThread destructor might be called from a different thread
 // than from RenderThread::main() so thread specific cleanup likely belongs at
 // the end of RenderThread::main().
-RenderThread::~RenderThread() = default;
+RenderThread::~RenderThread() {
+    decrementRenderThreadCount();
+}
 
 void RenderThread::pausePreSnapshot() {
     AutoLock lock(mLock);
@@ -281,6 +309,12 @@ intptr_t RenderThread::main() {
     ChecksumCalculator& checksumCalc = ChecksumCalculatorThreadInfo::get();
     bool needRestoreFromSnapshot = false;
 
+    if (!FrameBuffer::getFB()) {
+        GFXSTREAM_ERROR("Invalid framebuffer for RenderThread @%p", this);
+        setFinished();
+        return 0;
+    }
+
     //
     // initialize decoders
 #if GFXSTREAM_ENABLE_HOST_GLES
@@ -293,7 +327,7 @@ intptr_t RenderThread::main() {
 
     if (!mChannel && !mRingStream) {
         GFXSTREAM_DEBUG("Exited a loader RenderThread @%p", this);
-        mFinished.store(true, std::memory_order_relaxed);
+        setFinished();
         return 0;
     }
 
@@ -419,8 +453,8 @@ intptr_t RenderThread::main() {
             anyProgress |= progress;
 
             const char* contextName = nullptr;
-            if (mNameOpt) {
-                contextName = (*mNameOpt).c_str();
+            if (mContextName) {
+                contextName = mContextName->c_str();
             }
 
             if (!tInfo->m_puid) {

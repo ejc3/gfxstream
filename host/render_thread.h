@@ -48,6 +48,8 @@ class RenderThread : public gfxstream::base::Thread {
     RenderThread(const AsgConsumerCreateInfo& info, Stream* loadStream);
     virtual ~RenderThread();
 
+    static uint32_t getActiveRenderThreadsCount();
+
     // Returns true iff the thread has finished.
     bool isFinished() const { return mFinished.load(std::memory_order_relaxed); }
     void waitForFinished();
@@ -116,6 +118,7 @@ class RenderThread : public gfxstream::base::Thread {
     bool mRunInLimitedMode = false;
     uint32_t mContextId = 0;
     uint32_t mCapsetId = 0;
+    std::optional<std::string> mContextName;
     // If we need to reload process resources.
     // This happens in snapshot testing where we don't snapshot render threads.
     bool mNeedReloadProcessResources = false;

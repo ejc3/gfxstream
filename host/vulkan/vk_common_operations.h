@@ -50,6 +50,7 @@
 #include "render-utils/Renderer.h"
 #include "vk_format_support.h"
 #include "vk_utils.h"
+#include "vk_vvl_configuration.h"
 
 #if defined(_WIN32)
 typedef void* HANDLE;
@@ -444,6 +445,7 @@ class VkEmulation {
     bool updateColorBufferFromBytes(uint32_t colorBufferHandle, const std::vector<uint8_t>& bytes);
     bool updateColorBufferFromBytes(uint32_t colorBufferHandle, uint32_t x, uint32_t y, uint32_t w,
                                     uint32_t h, const void* pixels);
+    bool clearColorBuffer(uint32_t colorBufferHandle);
 
     // Data buffer operations
     bool getBufferAllocationInfo(uint32_t bufferHandle, VkDeviceSize* outSize,
@@ -801,6 +803,7 @@ class VkEmulation {
     std::vector<std::tuple<VkCommandBuffer, VkFence>> mTransferQueueCommandBufferPool GUARDED_BY(mMutex);
 
     std::unique_ptr<CompositorVk> mCompositorVk;
+    std::atomic<bool> mGpuScaledReadbackFailed = false;
 
     // The implementation for Vulkan native swapchain. Only initialized in initVkEmulationFeatures
     // if useVulkanNativeSwapchain is set.

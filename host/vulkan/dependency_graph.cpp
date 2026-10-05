@@ -50,14 +50,26 @@ void DependencyGraph::removeDescendantsOfHandle(const NodeId id) {
     }
 }
 
+bool DependencyGraph::isDeleteDelayedType(NodeId id) const {
+    switch (getNodeIdType(id)) {
+        case Tag_VkDescriptorSetLayout:
+        case Tag_VkPipelineCache:
+        case Tag_VkRenderPass:
+        case Tag_VkSampler:
+        case Tag_VkSamplerYcbcrConversion:
+        case Tag_VkSamplerYcbcrConversionKHR:
+        case Tag_VkShaderModule:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// TODO: b/559186898, This potentially keeps alive many vk objects. Replace
+// with proper parent-child object dependencies.
 void DependencyGraph::removeNodesAndDescendants(const NodeId* toRemove, uint32_t count) {
-    // shader can be removed after pipeline is created, but we need it during
-    // load, so do not remove it. This also apply to renderpass
     for (uint32_t i = 0; i < count; ++i) {
-        if (getNodeIdType(toRemove[i]) == Tag_VkShaderModule) {
-            continue;
-        }
-        if (getNodeIdType(toRemove[i]) == Tag_VkRenderPass) {
+        if (isDeleteDelayedType(toRemove[i])) {
             continue;
         }
         removeNodeAndDescendants(toRemove[i]);

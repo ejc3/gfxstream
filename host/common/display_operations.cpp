@@ -305,7 +305,7 @@ int DefaultGfxstreamWindowSetColorTransform(uint32_t id, const float colorMatrix
 int DefaultGfxstreamMultiDisplayGetDisplayPowerMode(uint32_t id, uint32_t* powerMode) {
     auto it = sDisplayInfos.find(id);
     if (it == sDisplayInfos.end()) {
-        GFXSTREAM_ERROR("Failed to get display power mode: cannot find display %d", id);
+        GFXSTREAM_ERROR("Failed to get display power mode: cannot find display %u", id);
         return -1;
     }
     const DisplayInfo& info = it->second;
@@ -316,9 +316,13 @@ int DefaultGfxstreamMultiDisplayGetDisplayPowerMode(uint32_t id, uint32_t* power
 }
 
 int DefaultGfxstreamMultiDisplaySetDisplayPowerMode(uint32_t id, uint32_t powerMode) {
+    if (powerMode > static_cast<uint32_t>(PowerMode::ON_SUSPEND)) {
+        GFXSTREAM_ERROR("Failed to set display power mode: invalid mode %u", powerMode);
+        return -1;
+    }
     auto it = sDisplayInfos.find(id);
     if (it == sDisplayInfos.end()) {
-        GFXSTREAM_ERROR("Failed to set display power mode: cannot find display %d", id);
+        GFXSTREAM_ERROR("Failed to set display power mode: cannot find display %u", id);
         return -1;
     }
     DisplayInfo& info = it->second;

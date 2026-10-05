@@ -174,7 +174,6 @@ static constexpr const char* const kEmulatedInstanceExtensions[] = {
 static constexpr uint64_t kPageSizeforBlob = 4096;
 static constexpr uint64_t kPageMaskForBlob = ~(0xfff);
 
-static std::atomic<uint64_t> sNextHostBlobId{1};
 static std::atomic<uint64_t> sUniqueShmemId = 0;
 
 class VkDecoderGlobalState::Impl {
@@ -483,25 +482,26 @@ class VkDecoderGlobalState::Impl {
             }
         }
 
+        stream->putBe64(mNextHostBlobId.load());
+
         snapshot()->saveReplayBuffers(stream);
 
-        // Save mapped memory
-        uint32_t memoryCount = 0;
+        // Save mapped memory and host/guest blob ids.
+        GFXSTREAM_DEBUG("snapshot save: mapped memory and host blob ids");
+        stream->putBe32(static_cast<uint32_t>(mMemoryInfo.size()));
         for (const auto& it : mMemoryInfo) {
-            if (it.second.ptr) {
-                memoryCount++;
-            }
-        }
-        GFXSTREAM_DEBUG("snapshot save: mapped memory");
-        stream->putBe32(memoryCount);
-        for (const auto& it : mMemoryInfo) {
-            if (!it.second.ptr) {
-                continue;
-            }
             stream->putBe64(reinterpret_cast<uint64_t>(
                 unboxed_to_boxed_non_dispatchable_VkDeviceMemory(it.first)));
-            stream->putBe64(it.second.size);
-            stream->write(it.second.ptr, it.second.size);
+
+            bool hasPtr = it.second.ptr != nullptr;
+            stream->putByte(hasPtr ? 1 : 0);
+            if (hasPtr) {
+                stream->putBe64(it.second.size);
+                stream->write(it.second.ptr, it.second.size);
+            }
+
+            stream->putBe64(it.second.hostmemId);
+            stream->putBe64(it.second.blobId);
         }
 
         // Set up VK structs to snapshot other Vulkan objects
@@ -753,6 +753,11 @@ class VkDecoderGlobalState::Impl {
 
         mSnapshotState = SnapshotState::Normal;
         GFXSTREAM_DEBUG("VulkanSnapshots save (end)");
+        if (stream && stream->hasErrors()) {
+            GFXSTREAM_ERROR("VulkanSnapshots save failed due to stream errors: %s",
+                            stream->getErrors().value_or("unknown error").c_str());
+            return false;
+        }
         return true;
     }
 
@@ -794,6 +799,9 @@ class VkDecoderGlobalState::Impl {
             }
         }
 
+        GFXSTREAM_DEBUG("snapshot load: host blob id counter");
+        mNextHostBlobId.store(stream->getBe64());
+
         // Replay command stream:
         GFXSTREAM_DEBUG("snapshot load: replay command stream");
         {
@@ -827,24 +835,86 @@ class VkDecoderGlobalState::Impl {
         {
             std::lock_guard<std::mutex> lock(mMutex);
 
-            // load mapped memory
-            GFXSTREAM_DEBUG("snapshot load: mapped memory");
+            // load mapped memory and host blob ids
+            GFXSTREAM_DEBUG("snapshot load: mapped memory and host blob ids");
             uint32_t memoryCount = stream->getBe32();
             for (uint32_t i = 0; i < memoryCount; i++) {
                 VkDeviceMemory boxedMemory = reinterpret_cast<VkDeviceMemory>(stream->getBe64());
-                VkDeviceMemory unboxedMemory = unbox_VkDeviceMemory(boxedMemory);
-                auto it = mMemoryInfo.find(unboxedMemory);
+                VkDeviceMemory unboxedMemory = try_unbox_VkDeviceMemory(boxedMemory);
+                auto it = (unboxedMemory != VK_NULL_HANDLE) ? mMemoryInfo.find(unboxedMemory)
+                                                            : mMemoryInfo.end();
                 if (it == mMemoryInfo.end()) {
-                    GFXSTREAM_ERROR("Snapshot load failure: cannot find memory handle for VkDeviceMemory:%p", boxedMemory);
-                    return false;
+                    GFXSTREAM_WARNING(
+                        "Snapshot load: cannot find memory handle for VkDeviceMemory:%p, "
+                        "skipping memory info restore.",
+                        boxedMemory);
+                    bool hasPtr = stream->getByte() != 0;
+                    if (hasPtr) {
+                        VkDeviceSize size = stream->getBe64();
+                        std::vector<uint8_t> discard(size);
+                        stream->read(discard.data(), size);
+                    }
+                    stream->getBe64();  // hostmemId
+                    stream->getBe64();  // blobId
+                    continue;
                 }
-                VkDeviceSize size = stream->getBe64();
-                if (size != it->second.size || !it->second.ptr) {
-                    GFXSTREAM_ERROR("Snapshot load failure: memory size does not match for VkDeviceMemory:%p", boxedMemory);
-                    return false;
+
+                bool hasPtr = stream->getByte() != 0;
+                if (hasPtr) {
+                    VkDeviceSize size = stream->getBe64();
+                    if (size != it->second.size || !it->second.ptr) {
+                        GFXSTREAM_ERROR(
+                            "Snapshot load failure: memory size does not match for "
+                            "VkDeviceMemory:%p",
+                            boxedMemory);
+                        return false;
+                    }
+                    stream->read(it->second.ptr, size);
                 }
-                stream->read(it->second.ptr, size);
+
+                uint64_t hostmemId = stream->getBe64();
+                uint64_t blobId = stream->getBe64();
+                uint64_t existingBlobId =
+                    it->second.hostmemId ? it->second.hostmemId : it->second.blobId;
+                it->second.hostmemId = hostmemId;
+                it->second.blobId = blobId;
+                uint64_t blobIdToRestore = hostmemId ? hostmemId : blobId;
+                if (blobIdToRestore) {
+                    const bool isDeferredMapping = !hostmemId;
+                    if (isDeferredMapping && !it->second.virtioGpuMapped) {
+                        // Allocated with VkCreateBlobGOOGLE (so blobId != 0), and on Windows
+                        // VulkanAllocateHostMemory also set ptr != nullptr at vkAllocateMemory time,
+                        // but the guest never called vkGetBlobGOOGLE (OP_vkGetBlobGOOGLE was not
+                        // replayed). Do not register it in ExternalObjectManager; if the guest maps
+                        // this memory later, vkGetBlobGOOGLE will register it then.
+                        continue;
+                    }
+                    if (!it->second.ptr) {
+                        // Nothing to remap: this memory has a blob id but was never mapped on
+                        // the host (e.g. a guest-handle blob). Keep the ids so that a later
+                        // vkGetBlobGOOGLE() still sees consistent state, but do not fail the
+                        // whole snapshot load.
+                        GFXSTREAM_WARNING(
+                            "Snapshot load: no host mapping for blob id %" PRIu64
+                            ", skipping external object remapping.",
+                            blobIdToRestore);
+                        continue;
+                    }
+                    auto ctxIdOpt = getContextIdForDeviceLocked(it->second.device);
+                    if (!ctxIdOpt) {
+                        GFXSTREAM_ERROR(
+                            "Snapshot load failure: missing context id for blob id %" PRIu64,
+                            blobIdToRestore);
+                        return false;
+                    }
+                    if (existingBlobId) {
+                        ExternalObjectManager::get()->removeMapping(*ctxIdOpt, existingBlobId);
+                    }
+                    ExternalObjectManager::get()->addMapping(*ctxIdOpt, blobIdToRestore,
+                                                             it->second.ptr, it->second.caching);
+                }
             }
+
             // Set up VK structs to snapshot other Vulkan objects
             // TODO(b/323064243): group all images from the same device and reuse queue / command
             // pool
@@ -1092,6 +1162,11 @@ class VkDecoderGlobalState::Impl {
             mSnapshotState = SnapshotState::Normal;
         }
         GFXSTREAM_DEBUG("VulkanSnapshots load (end)");
+        if (stream && stream->hasErrors()) {
+            GFXSTREAM_ERROR("VulkanSnapshots load failed due to stream errors: %s",
+                            stream->getErrors().value_or("unknown error").c_str());
+            return false;
+        }
         return true;
     }
 
@@ -1573,6 +1648,8 @@ class VkDecoderGlobalState::Impl {
                 vk_find_struct<VkPhysicalDeviceVulkan11Features>(pFeatures);
             VkPhysicalDeviceVulkan13Features* vulkan13Features =
                 vk_find_struct<VkPhysicalDeviceVulkan13Features>(pFeatures);
+            VkPhysicalDeviceVulkan14Features* vulkan14Features =
+                vk_find_struct<VkPhysicalDeviceVulkan14Features>(pFeatures);
             VkPhysicalDeviceProtectedMemoryFeatures* protectedMemoryFeatures =
                 vk_find_struct<VkPhysicalDeviceProtectedMemoryFeatures>(pFeatures);
             VkPhysicalDevicePipelineProtectedAccessFeatures* pipelineAccessFeatures =
@@ -1588,6 +1665,9 @@ class VkDecoderGlobalState::Impl {
                 if (pipelineAccessFeatures) {
                     pipelineAccessFeatures->pipelineProtectedAccess = VK_TRUE;
                 }
+                if (vulkan14Features) {
+                    vulkan14Features->pipelineProtectedAccess = VK_TRUE;
+                }
             } else {
                 if (protectedMemoryFeatures) {
                     protectedMemoryFeatures->protectedMemory = VK_FALSE;
@@ -1595,9 +1675,8 @@ class VkDecoderGlobalState::Impl {
                 if (vk11Features) {
                     vk11Features->protectedMemory = VK_FALSE;
                 }
-                if (pipelineAccessFeatures) {
-                    pipelineAccessFeatures->pipelineProtectedAccess = VK_FALSE;
-                }
+                // No need to change pipelineProtectedAccess features as they
+                // can be enabled without enabling 'protectedMemory'
             }
 
             if (m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
@@ -2108,13 +2187,16 @@ class VkDecoderGlobalState::Impl {
         }
 #endif
 
-        if (enableProtectedMemoryEmulation() ) {
-            // Enable VK_EXT_pipeline_protected_access extension support
-            VkExtensionProperties ycbcr_props;
-            strncpy(ycbcr_props.extensionName, VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME,
-                    sizeof(ycbcr_props.extensionName));
-            ycbcr_props.specVersion = VK_EXT_PIPELINE_PROTECTED_ACCESS_SPEC_VERSION;
-            properties.push_back(ycbcr_props);
+        if (enableProtectedMemoryEmulation()) {
+            if (!hasDeviceExtension(properties, VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME)) {
+                // Enable VK_EXT_pipeline_protected_access extension support
+                VkExtensionProperties protected_access_props;
+                strncpy(protected_access_props.extensionName,
+                        VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME,
+                        sizeof(protected_access_props.extensionName));
+                protected_access_props.specVersion = VK_EXT_PIPELINE_PROTECTED_ACCESS_SPEC_VERSION;
+                properties.push_back(protected_access_props);
+            }
         }
 
         if (pProperties == nullptr) {
@@ -2262,10 +2344,6 @@ class VkDecoderGlobalState::Impl {
                 // We log the behavior, to identify cases as some system apps may still try creating
                 // protected memory devices without checking the feature support.
                 GFXSTREAM_INFO("%s: Unsupported protected memory feature is requested!", __func__);
-                return VK_ERROR_FEATURE_NOT_PRESENT;
-            } else if (pipelineProtectedAccessFeatureRequested) {
-                GFXSTREAM_INFO("%s: Unsupported pipeline protected access feature is requested!",
-                               __func__);
                 return VK_ERROR_FEATURE_NOT_PRESENT;
             }
 
@@ -2457,6 +2535,7 @@ class VkDecoderGlobalState::Impl {
         VALIDATE_NEW_HANDLE_INFO_ENTRY(mDeviceInfo, *pDevice);
         auto& deviceInfo = mDeviceInfo[*pDevice];
         deviceInfo.physicalDevice = physicalDevice;
+        deviceInfo.maxImageDimension2D = physicalDeviceInfo.props.limits.maxImageDimension2D;
         deviceInfo.emulateTextureEtc2 = emulateTextureEtc2;
         deviceInfo.emulateTextureAstc = emulateTextureAstc;
         deviceInfo.emulateProtectedMemory = emulateProtectedMemory;
@@ -3184,49 +3263,16 @@ class VkDecoderGlobalState::Impl {
         }
 
 #ifdef __APPLE__
-        // TODO(b/438924843) this is probably not optimal as it might slow down image creation a
-        // bit. Not validating the dimensions seems to be only fatal on macOS, and can create false
-        // positives on desktop GPUs with the format's support, so it's only checked on macOS.
-        {
-            auto physicalDevice = deviceInfo->physicalDevice;
-            auto* physdevInfo = gfxstream::base::find(mPhysdevInfo, physicalDevice);
-            if (!physdevInfo) {
-                GFXSTREAM_ERROR("vkCreateImage: Could not find physical device info.");
-                return VK_ERROR_OUT_OF_HOST_MEMORY;
-            }
-
-            auto* instanceInfo = gfxstream::base::find(mInstanceInfo, physdevInfo->instance);
-            if (!instanceInfo) {
-                GFXSTREAM_ERROR("vkCreateImage: Could not find instance info.");
-                return VK_ERROR_OUT_OF_HOST_MEMORY;
-            }
-
-            auto ivk = dispatch_VkInstance(instanceInfo->boxed);
-            VkImageFormatProperties imageFormatProperties;
-            VkResult res = ivk->vkGetPhysicalDeviceImageFormatProperties(
-                physicalDevice, pCreateInfo->format, pCreateInfo->imageType, pCreateInfo->tiling,
-                pCreateInfo->usage, pCreateInfo->flags, &imageFormatProperties);
-
-            if (res != VK_SUCCESS) {
-                GFXSTREAM_WARNING(
-                    "vkCreateImage: vkGetPhysicalDeviceImageFormatProperties failed with %s on "
-                    "format %s[%d]",
-                    string_VkResult(res), string_VkFormat(pCreateInfo->format),
-                    pCreateInfo->format);
-                return VK_ERROR_VALIDATION_FAILED_EXT;
-            }
-
-            if (pCreateInfo->extent.width > imageFormatProperties.maxExtent.width ||
-                pCreateInfo->extent.height > imageFormatProperties.maxExtent.height ||
-                pCreateInfo->extent.depth > imageFormatProperties.maxExtent.depth) {
-                GFXSTREAM_WARNING(
-                    "vkCreateImage: requested image dimensions (%u x %u x %u) "
-                    "exceeds device limits (%u x %u x %u).",
-                    pCreateInfo->extent.width, pCreateInfo->extent.height,
-                    pCreateInfo->extent.depth, imageFormatProperties.maxExtent.width,
-                    imageFormatProperties.maxExtent.height, imageFormatProperties.maxExtent.depth);
-                return VK_ERROR_VALIDATION_FAILED_EXT;
-            }
+        // We do some validation on macOS, because it can crash the whole app if exceeded.
+        if (pCreateInfo->imageType == VK_IMAGE_TYPE_2D &&
+            (pCreateInfo->extent.width > deviceInfo->maxImageDimension2D ||
+             pCreateInfo->extent.height > deviceInfo->maxImageDimension2D)) {
+            GFXSTREAM_WARNING(
+                "vkCreateImage: requested image dimensions (%u x %u) "
+                "exceeds maxImageDimension2D limit (%u).",
+                pCreateInfo->extent.width, pCreateInfo->extent.height,
+                deviceInfo->maxImageDimension2D);
+            return VK_ERROR_VALIDATION_FAILED;
         }
 #endif
 
@@ -5971,31 +6017,42 @@ class VkDecoderGlobalState::Impl {
         }
     }
 
-    inline void convertQueueFamilyForeignToExternal(uint32_t* queueFamilyIndexPtr) {
-        if (*queueFamilyIndexPtr == VK_QUEUE_FAMILY_FOREIGN_EXT) {
-            *queueFamilyIndexPtr = VK_QUEUE_FAMILY_EXTERNAL;
+    void ConvertQueueFamilyForeignToExternal(uint32_t* queue_family_index_ptr) {
+        if (*queue_family_index_ptr == VK_QUEUE_FAMILY_FOREIGN_EXT) {
+            *queue_family_index_ptr = VK_QUEUE_FAMILY_EXTERNAL;
+        }
+    }
+
+    void ConvertQueueFamilyIgnored(uint32_t* src_queue_family_index_ptr, uint32_t* dst_queue_family_index_ptr) {
+        if (*src_queue_family_index_ptr == *dst_queue_family_index_ptr) {
+            *src_queue_family_index_ptr = VK_QUEUE_FAMILY_IGNORED;
+            *dst_queue_family_index_ptr = VK_QUEUE_FAMILY_IGNORED;
         }
     }
 
     void convertQueueFamilyForeignToExternal_VkBufferMemoryBarrier(
         VkBufferMemoryBarrier& barrier) {
-        convertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
-        convertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyIgnored(&barrier.srcQueueFamilyIndex, &barrier.dstQueueFamilyIndex);
     }
     void convertQueueFamilyForeignToExternal_VkImageMemoryBarrier(
         VkImageMemoryBarrier& barrier) {
-        convertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
-        convertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyIgnored(&barrier.srcQueueFamilyIndex, &barrier.dstQueueFamilyIndex);
     }
     void convertQueueFamilyForeignToExternal_VkBufferMemoryBarrier2(
         VkBufferMemoryBarrier2& barrier) {
-        convertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
-        convertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyIgnored(&barrier.srcQueueFamilyIndex, &barrier.dstQueueFamilyIndex);
     }
     void convertQueueFamilyForeignToExternal_VkImageMemoryBarrier2(
         VkImageMemoryBarrier2& barrier) {
-        convertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
-        convertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.srcQueueFamilyIndex);
+        ConvertQueueFamilyForeignToExternal(&barrier.dstQueueFamilyIndex);
+        ConvertQueueFamilyIgnored(&barrier.srcQueueFamilyIndex, &barrier.dstQueueFamilyIndex);
     }
 
     inline VkImage getIMBImage(const VkImageMemoryBarrier& imb) { return imb.image; }
@@ -7542,7 +7599,11 @@ class VkDecoderGlobalState::Impl {
         auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
         if (!deviceInfo) return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-        hostBlobId = (info->blobId && !hostBlobId) ? info->blobId : hostBlobId;
+        if (hostBlobId) {
+            info->hostmemId = hostBlobId;
+        } else {
+            hostBlobId = info->blobId;
+        }
 
         if ((m_vkEmulation->getFeatures().SystemBlob.enabled() ||
              m_vkEmulation->getFeatures().VulkanAllocateHostVisibleAsUdmabuf.enabled()) &&
@@ -7576,7 +7637,7 @@ class VkDecoderGlobalState::Impl {
                 memcpy(vulkanInfo.driverUUID, driverUuidOpt->data(), sizeof(vulkanInfo.driverUUID));
             }
 
-            if (snapshotsEnabled()) {
+            if (snapshotsEnabled() && !info->needUnmap) {
                 VkResult mapResult = vk->vkMapMemory(device, memory, 0, info->size, 0, &info->ptr);
                 if (mapResult != VK_SUCCESS) {
                     return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -7627,7 +7688,6 @@ class VkDecoderGlobalState::Impl {
             ExternalObjectManager::get()->addMapping(virtioGpuContextId, hostBlobId,
                                                      (void*)(uintptr_t)alignedHva, info->caching);
             info->virtioGpuMapped = true;
-            info->hostmemId = hostBlobId;
         }
 
         return VK_SUCCESS;
@@ -7642,7 +7702,7 @@ class VkDecoderGlobalState::Impl {
                                                  VkSnapshotApiCallHandle, VkDevice boxed_device,
                                                  VkDeviceMemory memory, uint64_t* pAddress,
                                                  uint64_t* pSize, uint64_t* pHostmemId) {
-        uint64_t hostBlobId = sNextHostBlobId++;
+        uint64_t hostBlobId = mNextHostBlobId++;
         *pHostmemId = hostBlobId;
         return vkGetBlobInternal(boxed_device, memory, hostBlobId);
     }
@@ -7896,6 +7956,7 @@ class VkDecoderGlobalState::Impl {
                                    const VkSubmitInfo* pSubmits, VkFence fence) {
         VkResult res = vk->vkQueueSubmit(unboxed_queue, submitCount, pSubmits, fence);
         if (res != VK_SUCCESS) {
+            GFXSTREAM_VERBOSE("vkQueueSubmit failed with %s [%d]", string_VkResult(res), res);
             return res;
         }
 
@@ -7923,6 +7984,7 @@ class VkDecoderGlobalState::Impl {
                                    const VkSubmitInfo2* pSubmits, VkFence fence) {
         VkResult res = vk->vkQueueSubmit2(unboxed_queue, submitCount, pSubmits, fence);
         if (res != VK_SUCCESS) {
+            GFXSTREAM_VERBOSE("vkQueueSubmit2 failed with %s [%d]", string_VkResult(res), res);
             return res;
         }
 
@@ -8149,6 +8211,7 @@ class VkDecoderGlobalState::Impl {
                 if (result != VK_SUCCESS) {
                     GFXSTREAM_WARNING("dispatchVkQueueSubmit failed: %s [%d]", string_VkResult(result),
                                     result);
+                    builder.OnQueueSubmissionAborted(usedFence);
                     return result;
                 }
             } else {
@@ -8186,6 +8249,7 @@ class VkDecoderGlobalState::Impl {
                 if (result != VK_SUCCESS) {
                     GFXSTREAM_WARNING("dispatchVkQueueSubmit failed: %s [%d]", string_VkResult(result),
                                     result);
+                    builder.OnQueueSubmissionAborted(usedFence);
                     return result;
                 }
             }
@@ -8284,7 +8348,7 @@ class VkDecoderGlobalState::Impl {
             for (uint32_t i = 0; i < submitCount; ++i) {
                 const uint32_t cmdCount = getCommandBufferCount(pSubmits[i]);
                 for (uint32_t j = 0; j < cmdCount; ++j) {
-                    auto commandBuffer = getCommandBuffer(pSubmits[i], i);
+                    auto commandBuffer = getCommandBuffer(pSubmits[i], j);
                     processEventsForSubmittedCommandBuffer(queue, commandBuffer);
                 }
             }
@@ -11407,6 +11471,8 @@ class VkDecoderGlobalState::Impl {
             }
         }
     }
+
+    std::atomic<uint64_t> mNextHostBlobId{1};
 
     // Info tracking for vulkan objects
     std::unordered_map<VkInstance, InstanceInfo> mInstanceInfo GUARDED_BY(mMutex);

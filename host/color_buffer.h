@@ -61,7 +61,7 @@ class ColorBuffer : public IColorBuffer, public LazySnapshotObj<ColorBuffer> {
     static std::shared_ptr<ColorBuffer> onLoad(gl::EmulationGl* emulationGl,
                                                vk::VkEmulation* emulationVk, Stream* stream);
     ~ColorBuffer() override;
-    void onSave(Stream* stream);
+    bool onSave(Stream* stream);
     void restore();
     void touch() override;
 

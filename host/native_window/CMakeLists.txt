@@ -9,9 +9,12 @@ elseif (WIN32)
 elseif (QNX)
     set(gfxstream_host_native_window_platform_sources
         native_sub_window_qnx.cpp)
-else()
+elseif (LINUX)
     set(gfxstream_host_native_window_platform_sources
         native_sub_window_x11.cpp)
+else()
+    set(gfxstream_host_native_window_platform_sources
+        native_sub_window_stub.cpp)
 endif()
 
 

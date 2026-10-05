@@ -280,7 +280,7 @@ bool YcbcrSamplerPool::getOrCreateSamplerInfo(GfxstreamFormat format, YCbCrSampl
         VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT;
 
     if ((formatFeatures & kYcbcrFeatures) == 0) {
-        GFXSTREAM_ERROR("Format %s does not support YCbCr sampler conversion", string_VkFormat(vkFormat));
+        GFXSTREAM_INFO("Format %s does not support YCbCr sampler conversion", string_VkFormat(vkFormat));
         return false;
     }
 

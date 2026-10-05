@@ -599,7 +599,7 @@ bool ColorBufferGl::readPixelsScaled(int width, int height, int rotation, const 
         GFXSTREAM_ERROR(
             "readPixelsScaled failed. Out-of-bound rectangle: (%d, %d) [%d x %d]"
             " with screen [%d x %d]",
-            rect.pos.x, rect.pos.y, rect.size.w, rect.size.h);
+            rect.pos.x, rect.pos.y, rect.size.w, rect.size.h, width, height);
         return false;
     }
 
@@ -620,6 +620,10 @@ bool ColorBufferGl::readPixelsScaled(int width, int height, int rotation, const 
     const GLenum pixelDataType = *pixelDataTypeOpt;
 
     waitSync();
+    if (!m_resizer) {
+        GFXSTREAM_ERROR("Failed to readPixelsScaled: m_resizer is null.");
+        return false;
+    }
     GLuint tex = m_resizer->update(m_tex, width, height, rotation);
     if (bindFbo(&m_scaleRotationFbo, tex, m_needFboReattach)) {
         m_needFboReattach = false;
@@ -1059,7 +1063,12 @@ bool ColorBufferGl::bindToRenderbuffer() {
     return true;
 }
 
-GLuint ColorBufferGl::getViewportScaledTexture() { return m_resizer->update(m_tex); }
+GLuint ColorBufferGl::getViewportScaledTexture() {
+    if (!m_resizer) {
+        return m_tex;
+    }
+    return m_resizer->update(m_tex);
+}
 
 void ColorBufferGl::setSync(bool debug) {
     m_sync = (GLsync)s_egl.eglSetImageFenceANDROID(m_display, m_eglImage);
@@ -1132,7 +1141,7 @@ bool ColorBufferGl::readbackAsync(GLuint buffer, bool readbackBgra) {
 
 HandleType ColorBufferGl::getHndl() const { return mHndl; }
 
-void ColorBufferGl::onSave(gfxstream::Stream* stream) {
+bool ColorBufferGl::onSave(gfxstream::Stream* stream) {
     stream->putBe32(getHndl());
     stream->putBe32(static_cast<uint32_t>(m_width));
     stream->putBe32(static_cast<uint32_t>(m_height));
@@ -1142,6 +1151,13 @@ void ColorBufferGl::onSave(gfxstream::Stream* stream) {
     stream->putBe32(reinterpret_cast<uintptr_t>(m_eglImage));
     stream->putBe32(reinterpret_cast<uintptr_t>(m_blitEGLImage));
     stream->putBe32(m_needFormatCheck);
+
+    if (stream->hasErrors()) {
+        GFXSTREAM_ERROR("ColorBufferGl::onSave failed with errors: %s",
+                        stream->getErrors().value_or("unknown error").c_str());
+        return false;
+    }
+    return true;
 }
 
 std::unique_ptr<ColorBufferGl> ColorBufferGl::onLoad(gfxstream::Stream* stream,
@@ -1187,6 +1203,10 @@ std::unique_ptr<ColorBufferGl> ColorBufferGl::onLoad(gfxstream::Stream* stream,
 
 void ColorBufferGl::restore() {
     RecursiveScopedContextBind context(m_helper);
+    if (!context.isOk()) {
+        GFXSTREAM_ERROR("Failed to bind context in ColorBufferGl::restore()");
+        return;
+    }
     s_gles2.glGenTextures(1, &m_tex);
     s_gles2.glBindTexture(GL_TEXTURE_2D, m_tex);
     s_gles2.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
@@ -1211,6 +1231,10 @@ void ColorBufferGl::postLayer(const ComposeLayer& l, int frameWidth, int frameHe
 bool ColorBufferGl::importMemory(ManagedDescriptor externalDescriptor, uint64_t size,
                                  bool dedicated, bool linearTiling) {
     RecursiveScopedContextBind context(m_helper);
+    if (!context.isOk()) {
+        GFXSTREAM_ERROR("Failed to bind context in ColorBufferGl::importMemory()");
+        return false;
+    }
     s_gles2.glCreateMemoryObjectsEXT(1, &m_memoryObject);
     if (dedicated) {
         static const GLint DEDICATED_FLAG = GL_TRUE;

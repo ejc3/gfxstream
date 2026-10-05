@@ -28,11 +28,6 @@ EGLContext s_context = EGL_NO_CONTEXT;
 EGLSurface s_surface = EGL_NO_SURFACE;
 
 intptr_t GLBackgroundLoader::main() {
-#if SNAPSHOT_PROFILE > 1
-    const auto start = get_uptime_ms();
-    GFXSTREAM_INFO("Starting GL background loading at %" PRIu64 " ms\n", start);
-#endif
-
     if (s_context == EGL_NO_CONTEXT) {
         if (!m_eglIface.createAndBindAuxiliaryContext(&s_context, &s_surface)) {
             return 0;
@@ -69,12 +64,6 @@ intptr_t GLBackgroundLoader::main() {
     m_textureMap.clear();
 
     m_eglIface.unbindAuxiliaryContext();
-
-#if SNAPSHOT_PROFILE > 1
-    const auto end = get_uptime_ms();
-    GFXSTREAM_INFO("Finished GL background loading at %" PRIu64 " ms (%d ms total)\n",
-                   end, int(end - start));
-#endif
 
     return 0;
 }

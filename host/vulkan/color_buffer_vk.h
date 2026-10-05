@@ -76,8 +76,8 @@ class ColorBufferVk {
     std::unique_ptr<ColorBufferVkImageInfo> prepareForComposition(bool colorBufferIsTarget);
     std::unique_ptr<ColorBufferVkImageInfo> prepareForDisplay();
 
-    void onLoad(gfxstream::Stream* stream, LoadImageBehavior behavior);
-    void onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
+    bool onLoad(gfxstream::Stream* stream, LoadImageBehavior behavior);
+    bool onSave(gfxstream::Stream* stream, SaveImageBehavior behavior);
 
     std::optional<BlobDescriptorInfo> exportBlob();
 

@@ -24,7 +24,7 @@ namespace host {
 
 // An implementation of the Stream interface on top of a
 // stdio FILE* instance.
-class StdioStream : public gfxstream::Stream {
+class StdioStream : public gfxstream::StreamWithErrorLogger {
   public:
     enum Ownership { kNotOwner, kOwner };
 
