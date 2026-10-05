@@ -390,6 +390,7 @@ struct ImageInfo {
 
 struct ImageViewInfo {
     VkDevice device;
+    VkImage image = VK_NULL_HANDLE;
     bool needEmulatedAlpha = false;
     VkImageView boxed = VK_NULL_HANDLE;
 
@@ -595,11 +596,13 @@ struct PipelineInfo {
 
 struct RenderPassInfo {
     VkDevice device;
+    std::vector<VkImageLayout> attachmentFinalLayouts;
 };
 
 struct FramebufferInfo {
     VkDevice device;
     std::vector<HandleType> attachedColorBuffers;
+    std::vector<VkImage> attachedImages;
 };
 
 typedef std::function<void()> PreprocessFunc;
