@@ -507,6 +507,36 @@ class VkDecoderGlobalState::Impl {
         // Set up VK structs to snapshot other Vulkan objects
         // TODO(b/323064243): group all images from the same device and reuse queue / command pool
 
+        // snapshot buffers before images so that on load, loadImageContent (vkCmdCopyBufferToImage)
+        // is always the final write to any unified/shared VkDeviceMemory.
+        GFXSTREAM_DEBUG("snapshot save: buffers");
+        std::vector<VkBuffer> sortedBoxedBuffers;
+        for (const auto& bufferIte : mBufferInfo) {
+            sortedBoxedBuffers.push_back(
+                unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
+        }
+        sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
+        for (const auto& boxedBuffer : sortedBoxedBuffers) {
+            auto unboxedBuffer = try_unbox_VkBuffer(boxedBuffer);
+            if (unboxedBuffer == VK_NULL_HANDLE) {
+                // TODO(b/294277842): should return an error here.
+                continue;
+            }
+            const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
+            if (bufferInfo.memory == VK_NULL_HANDLE) {
+                continue;
+            }
+            // TODO: add a special case for host mapped memory
+            StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
+
+            // TODO(b/294277842): make sure the queue is empty before using.
+            if (!saveBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
+                releaseSnapshotStateBlock(&stateBlock);
+                return false;
+            }
+            releaseSnapshotStateBlock(&stateBlock);
+        }
+
         GFXSTREAM_DEBUG("snapshot save: image content");
         std::vector<VkImage> sortedBoxedImages;
         for (const auto& imageIte : mImageInfo) {
@@ -535,35 +565,6 @@ class VkDecoderGlobalState::Impl {
             StateBlock stateBlock = createSnapshotStateBlock(imageInfo.device);
             // TODO(b/294277842): make sure the queue is empty before using.
             if (!saveImageContent(stream, &stateBlock, unboxedImage, &imageInfo)) {
-                releaseSnapshotStateBlock(&stateBlock);
-                return false;
-            }
-            releaseSnapshotStateBlock(&stateBlock);
-        }
-
-        // snapshot buffers
-        GFXSTREAM_DEBUG("snapshot save: buffers");
-        std::vector<VkBuffer> sortedBoxedBuffers;
-        for (const auto& bufferIte : mBufferInfo) {
-            sortedBoxedBuffers.push_back(
-                unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
-        }
-        sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
-        for (const auto& boxedBuffer : sortedBoxedBuffers) {
-            auto unboxedBuffer = try_unbox_VkBuffer(boxedBuffer);
-            if (unboxedBuffer == VK_NULL_HANDLE) {
-                // TODO(b/294277842): should return an error here.
-                continue;
-            }
-            const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
-            if (bufferInfo.memory == VK_NULL_HANDLE) {
-                continue;
-            }
-            // TODO: add a special case for host mapped memory
-            StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
-
-            // TODO(b/294277842): make sure the queue is empty before using.
-            if (!saveBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
                 releaseSnapshotStateBlock(&stateBlock);
                 return false;
             }
@@ -918,6 +919,31 @@ class VkDecoderGlobalState::Impl {
             // TODO(b/323064243): group all images from the same device and reuse queue / command
             // pool
 
+            // snapshot buffers before images so that loadImageContent (vkCmdCopyBufferToImage)
+            // is always the final write to any unified/shared VkDeviceMemory.
+            GFXSTREAM_DEBUG("snapshot load: buffers");
+            std::vector<VkBuffer> sortedBoxedBuffers;
+            for (const auto& bufferIte : mBufferInfo) {
+                sortedBoxedBuffers.push_back(
+                    unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
+            }
+            sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
+            for (const auto& boxedBuffer : sortedBoxedBuffers) {
+                auto unboxedBuffer = unbox_VkBuffer(boxedBuffer);
+                const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
+                if (bufferInfo.memory == VK_NULL_HANDLE) {
+                    continue;
+                }
+                // TODO: add a special case for host mapped memory
+                StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
+                // TODO(b/294277842): make sure the queue is empty before using.
+                if (!loadBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
+                    releaseSnapshotStateBlock(&stateBlock);
+                    return false;
+                }
+                releaseSnapshotStateBlock(&stateBlock);
+            }
+
             GFXSTREAM_DEBUG("snapshot load: image content");
             std::vector<VkImage> sortedBoxedImages;
             for (const auto& imageIte : mImageInfo) {
@@ -950,30 +976,6 @@ class VkDecoderGlobalState::Impl {
                 StateBlock stateBlock = createSnapshotStateBlock(imageInfo.device);
                 // TODO(b/294277842): make sure the queue is empty before using.
                 if (!loadImageContent(stream, &stateBlock, unboxedImage, &imageInfo)) {
-                    releaseSnapshotStateBlock(&stateBlock);
-                    return false;
-                }
-                releaseSnapshotStateBlock(&stateBlock);
-            }
-
-            // snapshot buffers
-            GFXSTREAM_DEBUG("snapshot load: buffers");
-            std::vector<VkBuffer> sortedBoxedBuffers;
-            for (const auto& bufferIte : mBufferInfo) {
-                sortedBoxedBuffers.push_back(
-                    unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
-            }
-            sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
-            for (const auto& boxedBuffer : sortedBoxedBuffers) {
-                auto unboxedBuffer = unbox_VkBuffer(boxedBuffer);
-                const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
-                if (bufferInfo.memory == VK_NULL_HANDLE) {
-                    continue;
-                }
-                // TODO: add a special case for host mapped memory
-                StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
-                // TODO(b/294277842): make sure the queue is empty before using.
-                if (!loadBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
                     releaseSnapshotStateBlock(&stateBlock);
                     return false;
                 }
