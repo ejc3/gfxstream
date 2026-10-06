@@ -422,7 +422,7 @@ long ring_buffer_view_read(
 
 void ring_buffer_yield() {
 #ifdef _WIN32
-    _mm_pause();
+    YieldProcessor();
 #else
     sched_yield();
 #endif

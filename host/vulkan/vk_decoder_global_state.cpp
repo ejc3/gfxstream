@@ -42,6 +42,7 @@
 #include "common/goldfish_vk_dispatch.h"
 #include "common/goldfish_vk_marshaling.h"
 #include "common/goldfish_vk_reserved_marshaling.h"
+#include "common/goldfish_vk_supported_extensions.h"
 #include "emulated_textures/astc_texture.h"
 #include "emulated_textures/compressed_image_info.h"
 #include "emulated_textures/gpu_decompression_pipeline.h"
@@ -879,6 +880,15 @@ class VkDecoderGlobalState::Impl {
                 it->second.blobId = blobId;
                 uint64_t blobIdToRestore = hostmemId ? hostmemId : blobId;
                 if (blobIdToRestore) {
+                    const bool isDeferredMapping = !hostmemId;
+                    if (isDeferredMapping && !it->second.virtioGpuMapped) {
+                        // Allocated with VkCreateBlobGOOGLE (so blobId != 0), and on Windows
+                        // VulkanAllocateHostMemory also set ptr != nullptr at vkAllocateMemory time,
+                        // but the guest never called vkGetBlobGOOGLE (OP_vkGetBlobGOOGLE was not
+                        // replayed). Do not register it in ExternalObjectManager; if the guest maps
+                        // this memory later, vkGetBlobGOOGLE will register it then.
+                        continue;
+                    }
                     if (!it->second.ptr) {
                         // Nothing to remap: this memory has a blob id but was never mapped on
                         // the host (e.g. a guest-handle blob). Keep the ids so that a later
@@ -1638,6 +1648,8 @@ class VkDecoderGlobalState::Impl {
                 vk_find_struct<VkPhysicalDeviceVulkan11Features>(pFeatures);
             VkPhysicalDeviceVulkan13Features* vulkan13Features =
                 vk_find_struct<VkPhysicalDeviceVulkan13Features>(pFeatures);
+            VkPhysicalDeviceVulkan14Features* vulkan14Features =
+                vk_find_struct<VkPhysicalDeviceVulkan14Features>(pFeatures);
             VkPhysicalDeviceProtectedMemoryFeatures* protectedMemoryFeatures =
                 vk_find_struct<VkPhysicalDeviceProtectedMemoryFeatures>(pFeatures);
             VkPhysicalDevicePipelineProtectedAccessFeatures* pipelineAccessFeatures =
@@ -1653,6 +1665,9 @@ class VkDecoderGlobalState::Impl {
                 if (pipelineAccessFeatures) {
                     pipelineAccessFeatures->pipelineProtectedAccess = VK_TRUE;
                 }
+                if (vulkan14Features) {
+                    vulkan14Features->pipelineProtectedAccess = VK_TRUE;
+                }
             } else {
                 if (protectedMemoryFeatures) {
                     protectedMemoryFeatures->protectedMemory = VK_FALSE;
@@ -1660,9 +1675,8 @@ class VkDecoderGlobalState::Impl {
                 if (vk11Features) {
                     vk11Features->protectedMemory = VK_FALSE;
                 }
-                if (pipelineAccessFeatures) {
-                    pipelineAccessFeatures->pipelineProtectedAccess = VK_FALSE;
-                }
+                // No need to change pipelineProtectedAccess features as they
+                // can be enabled without enabling 'protectedMemory'
             }
 
             if (m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
@@ -2105,36 +2119,37 @@ class VkDecoderGlobalState::Impl {
         auto physicalDevice = unbox_VkPhysicalDevice(boxed_physicalDevice);
         auto vk = dispatch_VkPhysicalDevice(boxed_physicalDevice);
 
-        bool shouldPassthrough = !m_vkEmulation->isYcbcrEmulationEnabled();
-#if defined(__APPLE__)
-        shouldPassthrough = shouldPassthrough && !(m_vkEmulation->getExternalMemoryMode() ==
-                                                   ExternalMemory::Mode::Metal);
-#endif
+        // Start with host extensions:
+        std::vector<VkExtensionProperties> properties;
+        VkResult result =
+            enumerateDeviceExtensionProperties(vk, physicalDevice, pLayerName, properties);
+        if (result != VK_SUCCESS) {
+            GFXSTREAM_ERROR("Failed to query host device extensions.");
+            return result;
+        }
+
+        // Remove all extensions that are not supported by the host codegen to prevent
+        // guest to host compatibility issues:
+        const auto& supportedDeviceExtensions = GetDeviceExtensionsSupportedByCodegen();
+        properties.erase(
+            std::remove_if(properties.begin(), properties.end(),
+                           [&](const VkExtensionProperties& extension) {
+                               return supportedDeviceExtensions.find(extension.extensionName) ==
+                                      supportedDeviceExtensions.end();
+                           }),
+            properties.end());
+
+        // Add in emulated extensions:
 
 #if defined(_WIN32)
         // Temporary fix to get old system images working with lavapipe
         // TODO(b/409769371): remove this once system images updated or win32 extension is supported
         const bool advertiseHostAllocAsWin32 =
             (m_vkEmulation->getExternalMemoryMode() == ExternalMemory::Mode::HostAllocation);
-        if (advertiseHostAllocAsWin32) {
-            shouldPassthrough = false;
-        }
 #endif
-
-        if (shouldPassthrough) {
-            return vk->vkEnumerateDeviceExtensionProperties(physicalDevice, pLayerName,
-                                                            pPropertyCount, pProperties);
-        }
 
         // If MoltenVK is supported on host, we need to ensure that we include
         // VK_MVK_moltenvk extenstion in returned properties.
-        std::vector<VkExtensionProperties> properties;
-        VkResult result =
-            enumerateDeviceExtensionProperties(vk, physicalDevice, pLayerName, properties);
-        if (result != VK_SUCCESS) {
-            return result;
-        }
-
 #if defined(__APPLE__) && defined(VK_MVK_moltenvk)
         // Guest will check for VK_MVK_moltenvk extension for enabling AHB support
         if ((m_vkEmulation->getExternalMemoryMode() == ExternalMemory::Mode::Metal) &&
@@ -2172,13 +2187,16 @@ class VkDecoderGlobalState::Impl {
         }
 #endif
 
-        if (enableProtectedMemoryEmulation() ) {
-            // Enable VK_EXT_pipeline_protected_access extension support
-            VkExtensionProperties ycbcr_props;
-            strncpy(ycbcr_props.extensionName, VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME,
-                    sizeof(ycbcr_props.extensionName));
-            ycbcr_props.specVersion = VK_EXT_PIPELINE_PROTECTED_ACCESS_SPEC_VERSION;
-            properties.push_back(ycbcr_props);
+        if (enableProtectedMemoryEmulation()) {
+            if (!hasDeviceExtension(properties, VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME)) {
+                // Enable VK_EXT_pipeline_protected_access extension support
+                VkExtensionProperties protected_access_props;
+                strncpy(protected_access_props.extensionName,
+                        VK_EXT_PIPELINE_PROTECTED_ACCESS_EXTENSION_NAME,
+                        sizeof(protected_access_props.extensionName));
+                protected_access_props.specVersion = VK_EXT_PIPELINE_PROTECTED_ACCESS_SPEC_VERSION;
+                properties.push_back(protected_access_props);
+            }
         }
 
         if (pProperties == nullptr) {
@@ -2326,10 +2344,6 @@ class VkDecoderGlobalState::Impl {
                 // We log the behavior, to identify cases as some system apps may still try creating
                 // protected memory devices without checking the feature support.
                 GFXSTREAM_INFO("%s: Unsupported protected memory feature is requested!", __func__);
-                return VK_ERROR_FEATURE_NOT_PRESENT;
-            } else if (pipelineProtectedAccessFeatureRequested) {
-                GFXSTREAM_INFO("%s: Unsupported pipeline protected access feature is requested!",
-                               __func__);
                 return VK_ERROR_FEATURE_NOT_PRESENT;
             }
 
@@ -2817,6 +2831,65 @@ class VkDecoderGlobalState::Impl {
                                                                       pPropertyCount, pProperties);
     }
 
+    void on_vkGetDeviceBufferMemoryRequirements(gfxstream::base::BumpPool* pool,
+                                                VkSnapshotApiCallHandle apiCallHandle,
+                                                VkDevice boxed_device,
+                                                const VkDeviceBufferMemoryRequirements* pInfo,
+                                                VkMemoryRequirements2* pMemoryRequirements) {
+        auto device = unbox_VkDevice(boxed_device);
+        auto vk = dispatch_VkDevice(boxed_device);
+
+        VkDeviceBufferMemoryRequirements localInfo;
+        VkBufferCreateInfo localCreateInfo;
+        if (snapshotsEnabled()) {
+            localInfo = *pInfo;
+            localCreateInfo = *pInfo->pCreateInfo;
+            if (localCreateInfo.usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) {
+                localCreateInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            }
+            localInfo.pCreateInfo = &localCreateInfo;
+            pInfo = &localInfo;
+        }
+
+        VkExternalMemoryBufferCreateInfo externalCI = {
+            VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+        if (m_vkEmulation->getFeatures().VulkanAllocateHostMemory.enabled()) {
+            localInfo = *pInfo;
+            localCreateInfo = *pInfo->pCreateInfo;
+            externalCI.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+            externalCI.pNext = localCreateInfo.pNext;
+            localCreateInfo.pNext = &externalCI;
+            localInfo.pCreateInfo = &localCreateInfo;
+            pInfo = &localInfo;
+        }
+
+        if (vk->vkGetDeviceBufferMemoryRequirements) {
+            vk->vkGetDeviceBufferMemoryRequirements(device, pInfo, pMemoryRequirements);
+        } else if (vk->vkGetDeviceBufferMemoryRequirementsKHR) {
+            vk->vkGetDeviceBufferMemoryRequirementsKHR(device, pInfo, pMemoryRequirements);
+        } else {
+            GFXSTREAM_FATAL("%s: function implementation cannot be found!", __func__);
+        }
+
+        std::lock_guard<std::mutex> lock(mMutex);
+
+        auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
+        if (!deviceInfo) {
+            GFXSTREAM_ERROR("%s: Failed to find device info for device: %p", __func__, device);
+            return;
+        }
+
+        auto* physicalDeviceInfo = gfxstream::base::find(mPhysdevInfo, deviceInfo->physicalDevice);
+        if (!physicalDeviceInfo) {
+            GFXSTREAM_FATAL("No physical device info available for VkPhysicalDevice: %p",
+                            deviceInfo->physicalDevice);
+        }
+
+        auto& physicalDeviceMemHelper = physicalDeviceInfo->memoryPropertiesHelper;
+        physicalDeviceMemHelper->transformToGuestMemoryRequirements(
+            &pMemoryRequirements->memoryRequirements);
+    }
+
     void on_vkGetDeviceImageMemoryRequirements(gfxstream::base::BumpPool* pool,
                                                VkSnapshotApiCallHandle apiCallHandle,
                                                VkDevice boxed_device,
@@ -3251,6 +3324,71 @@ class VkDecoderGlobalState::Impl {
         imageInfo.imageCreateInfoShallow = vk_make_orphan_copy(*pCreateInfo);
         imageInfo.layout = pCreateInfo->initialLayout;
         imageInfo.anbInfo = std::move(anbInfo);
+        if (const auto* extMemCreateInfo =
+                vk_find_struct<VkExternalMemoryImageCreateInfo>(pCreateInfo)) {
+            imageInfo.externalHandleTypes = extMemCreateInfo->handleTypes;
+        }
+#ifdef __ANDROID__
+        // Deferred image layout, see ImageInfo::DeferredLayoutInfo. Only for AHB-external
+        // images we are not already backing another way: the ANB path owns its own buffer, and for
+        // compressed images updateImageMemoryRequirementsLocked() overwrites them anyway.
+        if ((imageInfo.externalHandleTypes &
+             VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) &&
+            !imageInfo.anbInfo && !imageInfo.compressInfo) {
+            VkMemoryRequirements probeReqs = {};
+            vk->vkGetImageMemoryRequirements(device, *pImage, &probeReqs);
+            // Only intervene where the driver actually refused to answer. A driver that reports a
+            // real size needs no help from us, and substituting there would be a regression.
+            if (probeReqs.size == 0) {
+                AHardwareBuffer* rawAhb = allocAhb(pCreateInfo);
+                if (rawAhb) {
+                    VkAndroidHardwareBufferPropertiesANDROID ahbProps = {
+                        .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID,
+                        .pNext = nullptr,
+                    };
+                    VkResult propsRes =
+                        vk->vkGetAndroidHardwareBufferPropertiesANDROID(device, rawAhb, &ahbProps);
+                    if (propsRes == VK_SUCCESS && ahbProps.allocationSize > 0) {
+                        imageInfo.deferredLayout.ahb =
+                            std::shared_ptr<AHardwareBuffer>(rawAhb, [](AHardwareBuffer* b) {
+                                if (b) AHardwareBuffer_release(b);
+                            });
+                        imageInfo.deferredLayout.size = ahbProps.allocationSize;
+                        // The driver reported no alignment either; the AHB satisfies its own.
+                        imageInfo.deferredLayout.alignment =
+                            probeReqs.alignment ? probeReqs.alignment : 1;
+                        imageInfo.deferredLayout.memoryTypeBits = ahbProps.memoryTypeBits;
+                        // The driver will also refuse to report rowPitch for this image; the AHB
+                        // knows its own stride (in pixels), so derive the byte pitch from it.
+                        AHardwareBuffer_Desc ahbDesc = {};
+                        AHardwareBuffer_describe(rawAhb, &ahbDesc);
+                        uint32_t bytesPerPixel = 4;  // allocAhb only ever picks 32-bit RGBA/BGRA
+                        imageInfo.deferredLayout.rowPitch =
+                            static_cast<VkDeviceSize>(ahbDesc.stride) * bytesPerPixel;
+                        // Also offer this AHB to a same-shaped ColorBuffer's own allocation,
+                        // which otherwise pays for a second AHardwareBuffer_allocate() for what
+                        // is usually the very same image a moment later (see the guest's
+                        // vkCreateImage -> vkGetImageSubresourceLayout -> CreateBlob sequence).
+                        m_vkEmulation->stashPendingDeferredLayoutAhb(pCreateInfo, rawAhb);
+                        GFXSTREAM_INFO(
+                            "DL-AHB tracked image=%p size=%llu typeBits=0x%x rowPitch=%llu "
+                            "ahbStridePx=%u (driver said size=0)",
+                            (void*)*pImage, (unsigned long long)imageInfo.deferredLayout.size,
+                            imageInfo.deferredLayout.memoryTypeBits,
+                            (unsigned long long)imageInfo.deferredLayout.rowPitch, ahbDesc.stride);
+                    } else {
+                        GFXSTREAM_ERROR(
+                            "DL-AHB properties query failed (res=%d size=%llu); leaving "
+                            "requirements untouched",
+                            (int)propsRes, (unsigned long long)ahbProps.allocationSize);
+                        AHardwareBuffer_release(rawAhb);
+                    }
+                } else {
+                    GFXSTREAM_ERROR("DL-AHB allocAhb failed for image=%p", (void*)*pImage);
+                }
+            }
+        }
+#endif
 
         if (boxImage) {
             *pImage = new_boxed_non_dispatchable_VkImage(*pImage);
@@ -5541,6 +5679,11 @@ class VkDecoderGlobalState::Impl {
         }
     }
 
+    // An AHB-backed image does not need to be CPU-mappable, and it
+    // must not be: if the guest picks a HOST_VISIBLE memory type, gfxstream has to expose the
+    // allocation as a mappable blob, and crosvm's resource_map_blob() only accepts Mesa handles --
+    // an AHB-backed blob fails with "invalid Mesa handle" and the guest's mmap64 returns EINVAL.
+    // So hand back only the device-local, non-host-visible subset when one exists.
     void on_vkGetImageMemoryRequirements(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
                                          VkDevice boxed_device, VkImage image,
                                          VkMemoryRequirements* pMemoryRequirements) {
@@ -5548,7 +5691,6 @@ class VkDecoderGlobalState::Impl {
         auto vk = dispatch_VkDevice(boxed_device);
         vk->vkGetImageMemoryRequirements(device, image, pMemoryRequirements);
         std::lock_guard<std::mutex> lock(mMutex);
-        updateImageMemorySizeLocked(device, image, pMemoryRequirements);
 
         auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
         if (!deviceInfo) {
@@ -5564,7 +5706,30 @@ class VkDecoderGlobalState::Impl {
         }
 
         auto& physicalDeviceMemHelper = physicalDeviceInfo->memoryPropertiesHelper;
+        updateImageMemoryRequirementsLocked(device, image, pMemoryRequirements);
         physicalDeviceMemHelper->transformToGuestMemoryRequirements(pMemoryRequirements);
+    }
+
+    // A driver that defers the layout also reports rowPitch=0; answer with the AHB's stride.
+    void on_vkGetImageSubresourceLayout(gfxstream::base::BumpPool*, VkSnapshotApiCallHandle,
+                                        VkDevice boxed_device, VkImage image,
+                                        const VkImageSubresource* pSubresource,
+                                        VkSubresourceLayout* pLayout) {
+        auto device = unbox_VkDevice(boxed_device);
+        auto vk = dispatch_VkDevice(boxed_device);
+        vk->vkGetImageSubresourceLayout(device, image, pSubresource, pLayout);
+#ifdef __ANDROID__
+        if (pLayout && pLayout->rowPitch == 0) {
+            std::lock_guard<std::mutex> lock(mMutex);
+            auto* dlInfo = gfxstream::base::find(mImageInfo, image);
+            if (dlInfo && dlInfo->deferredLayout.rowPitch > 0) {
+                pLayout->rowPitch = dlInfo->deferredLayout.rowPitch;
+                if (pLayout->size == 0) pLayout->size = dlInfo->deferredLayout.size;
+                GFXSTREAM_INFO("DL-AHB stride image=%p rowPitch=%llu", (void*)image,
+                               (unsigned long long)pLayout->rowPitch);
+            }
+        }
+#endif
     }
 
     void on_vkGetImageMemoryRequirements2(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -5605,9 +5770,9 @@ class VkDecoderGlobalState::Impl {
                                              &pMemoryRequirements->memoryRequirements);
         }
 
-        updateImageMemorySizeLocked(device, pInfo->image, &pMemoryRequirements->memoryRequirements);
-
         auto& physicalDeviceMemHelper = physicalDeviceInfo->memoryPropertiesHelper;
+        updateImageMemoryRequirementsLocked(device, pInfo->image,
+                                            &pMemoryRequirements->memoryRequirements);
         physicalDeviceMemHelper->transformToGuestMemoryRequirements(
             &pMemoryRequirements->memoryRequirements);
     }
@@ -6063,6 +6228,62 @@ class VkDecoderGlobalState::Impl {
         }
     }
 
+    // Conservatively converts synchronization2 stage masks for the legacy decompression path.
+    static VkPipelineStageFlags toLegacyPipelineStageFlags(VkPipelineStageFlags2 flags) {
+        const uint64_t upperBits = static_cast<uint64_t>(flags) & ~uint64_t{UINT32_MAX};
+        VkPipelineStageFlags result = static_cast<VkPipelineStageFlags>(flags);
+        if (upperBits != 0 || result == 0) {
+            result |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        }
+        return result;
+    }
+
+    // Conservatively converts synchronization2 access masks for legacy image barriers.
+    static VkAccessFlags toLegacyAccessFlags(VkAccessFlags2 flags) {
+        const uint64_t upperBits = static_cast<uint64_t>(flags) & ~uint64_t{UINT32_MAX};
+        VkAccessFlags result = static_cast<VkAccessFlags>(flags);
+        if (upperBits != 0) {
+            result |= VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        }
+        return result;
+    }
+
+    // Converts a synchronization2 image barrier for the existing decompression implementation.
+    static VkImageMemoryBarrier toLegacyImageMemoryBarrier(const VkImageMemoryBarrier2& barrier) {
+        return {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = toLegacyAccessFlags(barrier.srcAccessMask),
+            .dstAccessMask = toLegacyAccessFlags(barrier.dstAccessMask),
+            .oldLayout = barrier.oldLayout,
+            .newLayout = barrier.newLayout,
+            .srcQueueFamilyIndex = barrier.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = barrier.dstQueueFamilyIndex,
+            .image = barrier.image,
+            .subresourceRange = barrier.subresourceRange,
+        };
+    }
+
+    // Converts an expanded legacy image barrier back to synchronization2.
+    static VkImageMemoryBarrier2 toImageMemoryBarrier2(const VkImageMemoryBarrier& barrier,
+                                                       VkPipelineStageFlags2 srcStageMask,
+                                                       VkPipelineStageFlags2 dstStageMask) {
+        return {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = srcStageMask,
+            .srcAccessMask = barrier.srcAccessMask,
+            .dstStageMask = dstStageMask,
+            .dstAccessMask = barrier.dstAccessMask,
+            .oldLayout = barrier.oldLayout,
+            .newLayout = barrier.newLayout,
+            .srcQueueFamilyIndex = barrier.srcQueueFamilyIndex,
+            .dstQueueFamilyIndex = barrier.dstQueueFamilyIndex,
+            .image = barrier.image,
+            .subresourceRange = barrier.subresourceRange,
+        };
+    }
+
     void on_vkCmdPipelineBarrier2(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
                                   VkCommandBuffer boxed_commandBuffer,
                                   const VkDependencyInfo* pDependencyInfo) {
@@ -6070,11 +6291,13 @@ class VkDecoderGlobalState::Impl {
         auto vk = dispatch_VkCommandBuffer(boxed_commandBuffer);
 
         for (uint32_t i = 0; i < pDependencyInfo->bufferMemoryBarrierCount; ++i) {
-            convertQueueFamilyForeignToExternal_VkBufferMemoryBarrier2(const_cast<VkBufferMemoryBarrier2&>(pDependencyInfo->pBufferMemoryBarriers[i]));
+            convertQueueFamilyForeignToExternal_VkBufferMemoryBarrier2(
+                const_cast<VkBufferMemoryBarrier2&>(pDependencyInfo->pBufferMemoryBarriers[i]));
         }
 
         for (uint32_t i = 0; i < pDependencyInfo->imageMemoryBarrierCount; ++i) {
-            convertQueueFamilyForeignToExternal_VkImageMemoryBarrier2(const_cast<VkImageMemoryBarrier2&>(pDependencyInfo->pImageMemoryBarriers[i]));
+            convertQueueFamilyForeignToExternal_VkImageMemoryBarrier2(
+                const_cast<VkImageMemoryBarrier2&>(pDependencyInfo->pImageMemoryBarriers[i]));
         }
 
         VkDependencyInfo mappedDependencyInfo = *pDependencyInfo;
@@ -6100,9 +6323,54 @@ class VkDecoderGlobalState::Impl {
         processImageMemoryBarrierLocked(commandBuffer, pDependencyInfo->imageMemoryBarrierCount,
                                         pDependencyInfo->pImageMemoryBarriers);
 
-        // TODO: If this is a decompressed image, handle decompression before calling
-        // VkCmdvkCmdPipelineBarrier2 i.e. match on_vkCmdPipelineBarrier implementation
-        vk->vkCmdPipelineBarrier2(commandBuffer, pDependencyInfo);
+        if (!deviceInfo->emulateTextureEtc2 && !deviceInfo->emulateTextureAstc) {
+            vk->vkCmdPipelineBarrier2(commandBuffer, pDependencyInfo);
+            return;
+        }
+
+        std::vector<VkImageMemoryBarrier2> imageBarriers;
+        bool needRebind = false;
+        for (uint32_t i = 0; i < pDependencyInfo->imageMemoryBarrierCount; ++i) {
+            const VkImageMemoryBarrier2& srcBarrier = pDependencyInfo->pImageMemoryBarriers[i];
+            auto* imageInfo = gfxstream::base::find(mImageInfo, srcBarrier.image);
+            bool needGpuDecompression = false;
+            if (imageInfo && imageInfo->compressInfo) {
+                needGpuDecompression =
+                    !imageInfo->compressInfo->isAstc() || !deviceInfo->useAstcCpuDecompression;
+            }
+            if (!needGpuDecompression) {
+                imageBarriers.push_back(srcBarrier);
+                continue;
+            }
+
+            const VkImageMemoryBarrier legacyBarrier = toLegacyImageMemoryBarrier(srcBarrier);
+            std::vector<VkImageMemoryBarrier> legacyOutputBarriers;
+            needRebind |= imageInfo->compressInfo->decompressIfNeeded(
+                vk, commandBuffer, toLegacyPipelineStageFlags(srcBarrier.srcStageMask),
+                toLegacyPipelineStageFlags(srcBarrier.dstStageMask), legacyBarrier,
+                legacyOutputBarriers);
+            for (const auto& barrier : legacyOutputBarriers) {
+                imageBarriers.push_back(toImageMemoryBarrier2(barrier, srcBarrier.srcStageMask,
+                                                              srcBarrier.dstStageMask));
+            }
+        }
+
+        if (needRebind && cmdBufferInfo->computePipeline) {
+            vk->vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  cmdBufferInfo->computePipeline);
+            if (!cmdBufferInfo->currentDescriptorSets.empty()) {
+                vk->vkCmdBindDescriptorSets(
+                    commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, cmdBufferInfo->descriptorLayout,
+                    cmdBufferInfo->firstSet, cmdBufferInfo->currentDescriptorSets.size(),
+                    cmdBufferInfo->currentDescriptorSets.data(),
+                    cmdBufferInfo->dynamicOffsets.size(), cmdBufferInfo->dynamicOffsets.data());
+            }
+        }
+
+        VkDependencyInfo dependencyInfo = *pDependencyInfo;
+        dependencyInfo.imageMemoryBarrierCount = static_cast<uint32_t>(imageBarriers.size());
+        dependencyInfo.pImageMemoryBarriers = imageBarriers.data();
+        vk->vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
     void on_vkCmdWaitEvents(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -7346,7 +7614,10 @@ class VkDecoderGlobalState::Impl {
             ExternalObjectManager::get()->addBlobDescriptorInfo(
                 virtioGpuContextId, hostBlobId, info->sharedMemory->releaseHandle(),
                 STREAM_HANDLE_TYPE_MEM_SHM, info->caching, std::nullopt);
-        } else if (m_vkEmulation->getFeatures().ExternalBlob.enabled()) {
+        } else if (m_vkEmulation->getFeatures().ExternalBlob.enabled() ||
+                   info->boundColorBuffer.has_value()) {
+            // A ColorBuffer's memory must always be exported for scanout, regardless of
+            // ExternalBlob (which only governs the map_blob transport for non-scanout memory).
 #ifdef __APPLE__
             if (m_vkEmulation->getExternalMemoryMode() == ExternalMemory::Mode::Metal) {
                 GFXSTREAM_FATAL("ExternalBlob feature is not supported with external memory metal");
@@ -10347,14 +10618,27 @@ class VkDecoderGlobalState::Impl {
         return false;
     }
 
-    void updateImageMemorySizeLocked(VkDevice device, VkImage image,
-                                     VkMemoryRequirements* pMemoryRequirements) REQUIRES(mMutex) {
+    void updateImageMemoryRequirementsLocked(VkDevice device, VkImage image,
+                                             VkMemoryRequirements* pMemoryRequirements)
+        REQUIRES(mMutex) {
         auto* imageInfo = gfxstream::base::find(mImageInfo, image);
-        if (!imageInfo || !imageInfo->compressInfo) {
+        if (!imageInfo) return;
+
+        if (imageInfo->compressInfo) {
+            *pMemoryRequirements = imageInfo->compressInfo->getMemoryRequirements();
             return;
         }
-
-        *pMemoryRequirements = imageInfo->compressInfo->getMemoryRequirements();
+#ifdef __ANDROID__
+        // A driver that defers an AHB-external image's layout answers size=0 until bind. Answer
+        // with what the image's own AHB needs instead. Host memory type indices here; the caller
+        // must still run transformToGuestMemoryRequirements afterwards.
+        if (pMemoryRequirements && pMemoryRequirements->size == 0 &&
+            imageInfo->deferredLayout.size > 0) {
+            pMemoryRequirements->size = imageInfo->deferredLayout.size;
+            pMemoryRequirements->alignment = imageInfo->deferredLayout.alignment;
+            pMemoryRequirements->memoryTypeBits = imageInfo->deferredLayout.memoryTypeBits;
+        }
+#endif
     }
 
     bool enableEmulatedEtc2() const { return m_vkEmulation->isEtc2EmulationEnabled(); }
@@ -11594,6 +11878,20 @@ void VkDecoderGlobalState::on_vkGetPhysicalDeviceSparseImageFormatProperties2KHR
     mImpl->on_vkGetPhysicalDeviceSparseImageFormatProperties2KHR(pool, apiCallHandle, physicalDevice, pFormatInfo, pPropertyCount, pProperties);
 }
 
+void VkDecoderGlobalState::on_vkGetDeviceBufferMemoryRequirements(
+    gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle apiCallHandle, VkDevice device,
+    const VkDeviceBufferMemoryRequirements* pInfo, VkMemoryRequirements2* pMemoryRequirements) {
+    mImpl->on_vkGetDeviceBufferMemoryRequirements(pool, apiCallHandle, device, pInfo,
+                                                  pMemoryRequirements);
+}
+
+void VkDecoderGlobalState::on_vkGetDeviceBufferMemoryRequirementsKHR(
+    gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle apiCallHandle, VkDevice device,
+    const VkDeviceBufferMemoryRequirements* pInfo, VkMemoryRequirements2* pMemoryRequirements) {
+    mImpl->on_vkGetDeviceBufferMemoryRequirements(pool, apiCallHandle, device, pInfo,
+                                                  pMemoryRequirements);
+}
+
 void VkDecoderGlobalState::on_vkGetDeviceImageMemoryRequirements(
     gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle apiCallHandle, VkDevice device,
     const VkDeviceImageMemoryRequirements* pInfo, VkMemoryRequirements2* pMemoryRequirements) {
@@ -12024,6 +12322,13 @@ void VkDecoderGlobalState::on_vkCmdCopyImageToBuffer2KHR(
     gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle apiCallHandle,
     VkCommandBuffer commandBuffer, const VkCopyImageToBufferInfo2KHR* pCopyImageToBufferInfo) {
     mImpl->on_vkCmdCopyImageToBuffer2KHR(pool, apiCallHandle, commandBuffer, pCopyImageToBufferInfo);
+}
+
+void VkDecoderGlobalState::on_vkGetImageSubresourceLayout(
+    gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle apiCallHandle, VkDevice device,
+    VkImage image, const VkImageSubresource* pSubresource, VkSubresourceLayout* pLayout) {
+    mImpl->on_vkGetImageSubresourceLayout(pool, apiCallHandle, device, image, pSubresource,
+                                          pLayout);
 }
 
 void VkDecoderGlobalState::on_vkGetImageMemoryRequirements(
