@@ -1209,11 +1209,43 @@ class VkDecoderGlobalState::Impl {
                                                    VkSnapshotApiCallHandle, const char* pLayerName,
                                                    uint32_t* pPropertyCount,
                                                    VkExtensionProperties* pProperties) {
+        if (pPropertyCount == nullptr) {
+            return VK_INCOMPLETE;
+        }
+
 #if defined(__linux__)
         // TODO(b/401005629) always lock before the call on linux
         std::lock_guard<std::mutex> lock(mMutex);
 #endif
-        return m_vk->vkEnumerateInstanceExtensionProperties(pLayerName, pPropertyCount, pProperties);
+        // Start with host extensions:
+        std::vector<VkExtensionProperties> properties;
+        VkResult result = enumerateInstanceExtensionProperties(m_vk, pLayerName, properties);
+        if (result != VK_SUCCESS) {
+            GFXSTREAM_ERROR("Failed to query host instance extensions.");
+            return result;
+        }
+
+        // Remove all extensions that are not supported by the host codegen to prevent
+        // guest to host compatibility issues:
+        const auto& supportedInstanceExtensions = GetInstanceExtensionsSupportedByCodegen();
+        properties.erase(
+            std::remove_if(properties.begin(), properties.end(),
+                           [&](const VkExtensionProperties& extension) {
+                               return supportedInstanceExtensions.find(extension.extensionName) ==
+                                      supportedInstanceExtensions.end();
+                           }),
+            properties.end());
+
+        if (pProperties == nullptr) {
+            *pPropertyCount = properties.size();
+        } else {
+            // return number of structures actually written to pProperties.
+            *pPropertyCount = std::min((uint32_t)properties.size(), *pPropertyCount);
+            if (*pPropertyCount > 0) {
+                std::memcpy(pProperties, properties.data(), *pPropertyCount * sizeof(VkExtensionProperties));
+            }
+        }
+        return *pPropertyCount < properties.size() ? VK_INCOMPLETE : VK_SUCCESS;
     }
 
     VkResult on_vkCreateInstance(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -7349,6 +7381,20 @@ class VkDecoderGlobalState::Impl {
             if (strcmp(prop.extensionName, name) == 0) return true;
         }
         return false;
+    }
+
+    // Convenience function to call vkEnumerateInstanceExtensionProperties and get the results as an
+    // std::vector
+    VkResult enumerateInstanceExtensionProperties(VulkanDispatch* vk, const char* pLayerName,
+                                                  std::vector<VkExtensionProperties>& properties) {
+        uint32_t propertyCount = 0;
+        VkResult result =
+            vk->vkEnumerateInstanceExtensionProperties(pLayerName, &propertyCount, nullptr);
+        if (result != VK_SUCCESS) return result;
+
+        properties.resize(propertyCount);
+        return vk->vkEnumerateInstanceExtensionProperties(pLayerName, &propertyCount,
+                                                          properties.data());
     }
 
     // Convenience function to call vkEnumerateDeviceExtensionProperties and get the results as an
