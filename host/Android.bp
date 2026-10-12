@@ -230,3 +230,25 @@ cc_test_host {
         "general-tests",
     ],
 }
+
+// Run with `atest GfxstreamVirtioGpuResourceTests`
+cc_test_host {
+    name: "GfxstreamVirtioGpuResourceTests",
+    defaults: ["gfxstream_host_cc_defaults"],
+    srcs: [
+        "virtio_gpu_resource_unittest.cpp",
+    ],
+    shared_libs: [
+        "libbase",
+        "libgfxstream_backend",
+    ],
+    static_libs: [
+        "libgmock",
+    ],
+    test_options: {
+        unit_test: true,
+    },
+    test_suites: [
+        "general-tests",
+    ],
+}

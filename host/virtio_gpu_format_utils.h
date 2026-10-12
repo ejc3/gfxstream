@@ -14,6 +14,9 @@
 
 #pragma once
 
+#include <cstddef>
+#include <limits>
+
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/gfxstream_format.h"
 
@@ -109,6 +112,14 @@ static inline void set_virgl_format_supported(uint32_t* mask, uint32_t virgl_for
     }
 }
 
+static inline bool SafeMulSizeT(size_t a, size_t b, size_t* out) {
+    return !__builtin_mul_overflow(a, b, out);
+}
+
+static inline bool SafeAddSizeT(size_t a, size_t b, size_t* out) {
+    return !__builtin_add_overflow(a, b, out);
+}
+
 static inline size_t GetTransferOffset(uint32_t virglFormat,
                                        uint32_t totalWidth,
                                        uint32_t totalHeight,
@@ -133,12 +144,21 @@ static inline size_t GetTransferOffset(uint32_t virglFormat,
         GFXSTREAM_ERROR("Unhandled format %s", formatString.c_str());
         return 0;
     }
-    const uint32_t bpp = *bppOpt;
-    const uint32_t stride = totalWidth * bpp;
-    return y * stride + x * bpp;
+    const size_t bpp = *bppOpt;
+    size_t stride = 0;
+    size_t rowOffset = 0;
+    size_t colOffset = 0;
+    size_t offset = 0;
+    if (!SafeMulSizeT(static_cast<size_t>(totalWidth), bpp, &stride) ||
+        !SafeMulSizeT(static_cast<size_t>(y), stride, &rowOffset) ||
+        !SafeMulSizeT(static_cast<size_t>(x), bpp, &colOffset) ||
+        !SafeAddSizeT(rowOffset, colOffset, &offset)) {
+        return std::numeric_limits<size_t>::max();
+    }
+    return offset;
 }
 
-static inline uint32_t align_up_power_of_2(uint32_t n, uint32_t a) {
+static inline size_t align_up_power_of_2(size_t n, size_t a) {
     return (n + (a - 1)) & ~(a - 1);
 }
 
@@ -149,6 +169,10 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
                                      uint32_t y,
                                      uint32_t w,
                                      uint32_t h) {
+    if (totalWidth == 0 || totalHeight == 0 || w == 0 || h == 0) {
+        return 0;
+    }
+
     auto formatOpt = ToGfxstreamFormat(virglFormat);
     if (!formatOpt) {
         GFXSTREAM_ERROR("Unhandled format %d", virglFormat);
@@ -157,7 +181,7 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
     auto format = *formatOpt;
 
     if (IsYuvFormat(format)) {
-        uint32_t bpp;
+        size_t bpp;
         switch (format) {
             case GfxstreamFormat::P010:
             case GfxstreamFormat::P210:
@@ -176,9 +200,9 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
             }
         }
 
-        uint32_t yWidth = totalWidth;
-        uint32_t yHeight = totalHeight;
-        uint32_t yStridePixels;
+        size_t yWidth = totalWidth;
+        size_t yHeight = totalHeight;
+        size_t yStridePixels;
         switch (format) {
             case GfxstreamFormat::NV12:
             case GfxstreamFormat::NV21:
@@ -189,6 +213,11 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
             }
             case GfxstreamFormat::YV12:
             case GfxstreamFormat::YV21: {
+                // Guard against `yWidth + 31` overflowing `size_t` inside
+                // `align_up_power_of_2(yWidth, 32)` (e.g. on 32-bit targets).
+                if (yWidth > std::numeric_limits<size_t>::max() - 31U) {
+                    return std::numeric_limits<size_t>::max();
+                }
                 yStridePixels = align_up_power_of_2(yWidth, 32);
                 break;
             }
@@ -199,11 +228,15 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
             }
         }
 
-        uint32_t yStrideBytes = yStridePixels * bpp;
-        uint32_t ySize = yStrideBytes * yHeight;
+        size_t yStrideBytes = 0;
+        size_t ySize = 0;
+        if (!SafeMulSizeT(yStridePixels, bpp, &yStrideBytes) ||
+            !SafeMulSizeT(yStrideBytes, yHeight, &ySize)) {
+            return std::numeric_limits<size_t>::max();
+        }
 
-        uint32_t uvStridePixels;
-        uint32_t uvPlaneCount;
+        size_t uvStridePixels;
+        size_t uvPlaneCount;
         switch (format) {
             case GfxstreamFormat::NV12:
             case GfxstreamFormat::NV21:
@@ -226,8 +259,7 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
             }
         }
 
-        uint32_t uvStrideBytes = uvStridePixels * bpp;
-        uint32_t verticalSubsampling;
+        size_t verticalSubsampling;
         switch (format) {
             case GfxstreamFormat::P210:
                 verticalSubsampling = 1;
@@ -245,10 +277,17 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
                 return 0;
             }
         }
-        uint32_t uvHeight = totalHeight / verticalSubsampling;
-        uint32_t uvSize = uvStrideBytes * uvHeight * uvPlaneCount;
-
-        uint32_t dataSize = ySize + uvSize;
+        size_t uvHeight = totalHeight / verticalSubsampling;
+        size_t uvStrideBytes = 0;
+        size_t uvPlaneSize = 0;
+        size_t uvSize = 0;
+        size_t dataSize = 0;
+        if (!SafeMulSizeT(uvStridePixels, bpp, &uvStrideBytes) ||
+            !SafeMulSizeT(uvStrideBytes, uvHeight, &uvPlaneSize) ||
+            !SafeMulSizeT(uvPlaneSize, uvPlaneCount, &uvSize) ||
+            !SafeAddSizeT(ySize, uvSize, &dataSize)) {
+            return std::numeric_limits<size_t>::max();
+        }
         return dataSize;
     } else {
         auto bppOpt = GetBpp(format);
@@ -257,12 +296,21 @@ static inline size_t GetTransferSize(uint32_t virglFormat,
             GFXSTREAM_ERROR("Unhandled format %s", formatString.c_str());
             return 0;
         }
-        const uint32_t bpp = *bppOpt;
-        const uint32_t stride = totalWidth * bpp;
+        const size_t bpp = *bppOpt;
+        size_t stride = 0;
+        size_t rowsBytes = 0;
+        size_t lastRowBytes = 0;
+        size_t totalBytes = 0;
 
         // height - 1 in order to treat the (w * bpp) row specially
         // (i.e., the last row does not occupy the full stride)
-        return (h - 1U) * stride + w * bpp;
+        if (!SafeMulSizeT(static_cast<size_t>(totalWidth), bpp, &stride) ||
+            !SafeMulSizeT(static_cast<size_t>(h - 1U), stride, &rowsBytes) ||
+            !SafeMulSizeT(static_cast<size_t>(w), bpp, &lastRowBytes) ||
+            !SafeAddSizeT(rowsBytes, lastRowBytes, &totalBytes)) {
+            return std::numeric_limits<size_t>::max();
+        }
+        return totalBytes;
     }
 }
 
