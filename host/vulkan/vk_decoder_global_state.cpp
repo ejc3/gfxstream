@@ -1796,10 +1796,35 @@ class VkDecoderGlobalState::Impl {
         auto* extImageFormatInfo =
             vk_find_struct<VkPhysicalDeviceExternalImageFormatInfo>(pImageFormatInfo);
 
-        if (extImageFormatInfo &&
-            extImageFormatInfo->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
-            const_cast<VkPhysicalDeviceExternalImageFormatInfo*>(extImageFormatInfo)->handleType =
-                m_vkEmulation->getDefaultExternalMemoryHandleType();
+        if (extImageFormatInfo) {
+            if (extImageFormatInfo->handleType &
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
+                VkFormat resolvedFormat = resolveAhbFormat(pImageFormatInfo->format);
+                std::unique_ptr<VkImageCreateInfo> colorBufferVkImageCi =
+                    m_vkEmulation->generateColorBufferVkImageCreateInfo(
+                        resolvedFormat, 1, 1, pImageFormatInfo->tiling, 1);
+                if (colorBufferVkImageCi) {
+                    if (pImageFormatInfo != &imageFormatInfo) {
+                        imageFormatInfo = *pImageFormatInfo;
+                        pImageFormatInfo = &imageFormatInfo;
+                    }
+                    imageFormatInfo.format = resolvedFormat;
+                    imageFormatInfo.flags |= colorBufferVkImageCi->flags;
+                    imageFormatInfo.usage |= colorBufferVkImageCi->usage;
+                }
+            }
+
+            auto* mutExtImageFormatInfo =
+                const_cast<VkPhysicalDeviceExternalImageFormatInfo*>(extImageFormatInfo);
+            mutExtImageFormatInfo->handleType =
+                static_cast<VkExternalMemoryHandleTypeFlagBits>(
+                    m_vkEmulation->transformExternalMemoryHandleTypeFlags_tohost(
+                        mutExtImageFormatInfo->handleType));
+            if (mutExtImageFormatInfo->handleType ==
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
+                mutExtImageFormatInfo->handleType =
+                    m_vkEmulation->getDefaultExternalMemoryHandleType();
+            }
         }
         VkResult res = VK_ERROR_INITIALIZATION_FAILED;
 
@@ -10255,6 +10280,22 @@ class VkDecoderGlobalState::Impl {
         }
     }
 
+    VkFormat resolveAhbFormat(VkFormat format) {
+        // Use UNORM formats for SRGB format requests.
+        switch (format) {
+            case VK_FORMAT_R8G8B8A8_SRGB:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case VK_FORMAT_R8G8B8_SRGB:
+                return VK_FORMAT_R8G8B8_UNORM;
+            case VK_FORMAT_B8G8R8A8_SRGB:
+                return VK_FORMAT_B8G8R8A8_UNORM;
+            case VK_FORMAT_R8_SRGB:
+                return VK_FORMAT_R8_UNORM;
+            default:
+                return format;
+        }
+    }
+
     void transformImpl_VkImageCreateInfo_tohost(const VkImageCreateInfo* pImageCreateInfos,
                                                 uint32_t count) {
         for (uint32_t i = 0; i < count; i++) {
@@ -10289,24 +10330,7 @@ class VkDecoderGlobalState::Impl {
             // the contents of the memory differently, ...
             std::unique_ptr<VkImageCreateInfo> colorBufferVkImageCi = nullptr;
             const char* importSourceDebug = "";
-            VkFormat resolvedFormat = VK_FORMAT_UNDEFINED;
-            // Use UNORM formats for SRGB format requests.
-            switch (imageCreateInfo.format) {
-                case VK_FORMAT_R8G8B8A8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8G8B8A8_UNORM;
-                    break;
-                case VK_FORMAT_R8G8B8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8G8B8_UNORM;
-                    break;
-                case VK_FORMAT_B8G8R8A8_SRGB:
-                    resolvedFormat = VK_FORMAT_B8G8R8A8_UNORM;
-                    break;
-                case VK_FORMAT_R8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8_UNORM;
-                    break;
-                default:
-                    resolvedFormat = imageCreateInfo.format;
-            }
+            VkFormat resolvedFormat = resolveAhbFormat(imageCreateInfo.format);
             if (importAndroidHardwareBuffer) {
                 // For AHardwareBufferImage binding, we can't know which ColorBuffer this
                 // to-be-created VkImage will bind to, so we try our best to infer the creation
@@ -10473,7 +10497,10 @@ class VkDecoderGlobalState::Impl {
         }                                                                                 \
     }
 
-    DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkPhysicalDeviceExternalImageFormatInfo, handleType)
+    void transformImpl_VkPhysicalDeviceExternalImageFormatInfo_tohost(
+        const VkPhysicalDeviceExternalImageFormatInfo*, uint32_t) {}
+    void transformImpl_VkPhysicalDeviceExternalImageFormatInfo_fromhost(
+        const VkPhysicalDeviceExternalImageFormatInfo*, uint32_t) {}
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkPhysicalDeviceExternalBufferInfo, handleType)
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkExternalMemoryImageCreateInfo, handleTypes)
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkExternalMemoryBufferCreateInfo, handleTypes)
