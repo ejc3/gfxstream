@@ -933,8 +933,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     std::string m_graphicsApiVersion;
     std::string m_graphicsApiExtensions;
     std::string m_graphicsDeviceExtensions;
-    gfxstream::base::Lock m_procOwnedResourcesLock;
-    std::unordered_map<uint64_t, std::unique_ptr<ProcessResources>> m_procOwnedResources;
+    gfxstream::base::Lock m_guestProcessResourcesLock;
+    std::unordered_map<uint64_t, std::unique_ptr<GuestProcessResources>> m_guestProcessResources;
 
     // Flag set when emulator is shutting down.
     bool m_shuttingDown = false;
@@ -2350,8 +2350,8 @@ void FrameBuffer::Impl::eraseDelayedCloseColorBufferLocked(HandleType cb, uint64
 void FrameBuffer::Impl::createGraphicsProcessResources(uint64_t puid) {
     bool inserted = false;
     {
-        AutoLock mutex(m_procOwnedResourcesLock);
-        inserted = m_procOwnedResources.try_emplace(puid, ProcessResources::create()).second;
+        AutoLock mutex(m_guestProcessResourcesLock);
+        inserted = m_guestProcessResources.try_emplace(puid, GuestProcessResources::create()).second;
     }
     if (!inserted) {
         GFXSTREAM_WARNING("Failed to create process resource for puid %" PRIu64 ".", puid);
@@ -2361,8 +2361,8 @@ void FrameBuffer::Impl::createGraphicsProcessResources(uint64_t puid) {
 std::unique_ptr<ProcessResources> FrameBuffer::Impl::removeGraphicsProcessResources(uint64_t puid) {
     std::unique_ptr<ProcessResources> res;
     {
-        AutoLock mutex(m_procOwnedResourcesLock);
-        if (auto node = m_procOwnedResources.extract(puid)) {
+        AutoLock mutex(m_guestProcessResourcesLock);
+        if (auto node = m_guestProcessResources.extract(puid)) {
             res = std::move(node.mapped());
         }
     }
@@ -3297,8 +3297,8 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
 
     // save process owned resources
     {
-        AutoLock procResourceLock(m_procOwnedResourcesLock);
-        size_t procResourceCount = m_procOwnedResources.size();
+        AutoLock procResourceLock(m_guestProcessResourcesLock);
+        size_t procResourceCount = m_guestProcessResources.size();
         if (procResourceCount > kNumMaxProcessResources) {
             GFXSTREAM_ERROR("snapshot save: too many process owned resources: %zu",
                             procResourceCount);
@@ -3306,7 +3306,7 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
         }
         GFXSTREAM_DEBUG("snapshot save: save %zu process owned resources", procResourceCount);
         stream->putBe64(procResourceCount);
-        for (const auto& element : m_procOwnedResources) {
+        for (const auto& element : m_guestProcessResources) {
             stream->putBe64(element.first);
             stream->putBe32(element.second->getSequenceNumberPtr()->load());
         }
@@ -3424,8 +3424,8 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
             }
 
             {
-                AutoLock mutex(m_procOwnedResourcesLock);
-                m_procOwnedResources.clear();
+                AutoLock mutex(m_guestProcessResourcesLock);
+                m_guestProcessResources.clear();
             }
 
             performDelayedColorBufferCloseLocked(true);
@@ -3575,11 +3575,11 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         for (uint64_t i = 0; i < resourceCount; i++) {
             uint64_t puid = stream->getBe64();
             uint32_t sequenceNumber = stream->getBe32();
-            std::unique_ptr<ProcessResources> processResources = ProcessResources::create();
+            std::unique_ptr<GuestProcessResources> processResources = GuestProcessResources::create();
             processResources->getSequenceNumberPtr()->store(sequenceNumber);
             {
-                AutoLock mutex(m_procOwnedResourcesLock);
-                m_procOwnedResources.emplace(puid, std::move(processResources));
+                AutoLock mutex(m_guestProcessResourcesLock);
+                m_guestProcessResources.emplace(puid, std::move(processResources));
             }
         }
         GFXSTREAM_DEBUG("snapshot load: loaded %zu process resources", resourceCount);
@@ -3759,9 +3759,9 @@ CancelableFuture FrameBuffer::Impl::scheduleAsyncWork(std::function<void()> work
 
 const ProcessResources* FrameBuffer::Impl::getProcessResources(uint64_t puid) {
     {
-        AutoLock mutex(m_procOwnedResourcesLock);
-        auto i = m_procOwnedResources.find(puid);
-        if (i != m_procOwnedResources.end()) {
+        AutoLock mutex(m_guestProcessResourcesLock);
+        auto i = m_guestProcessResources.find(puid);
+        if (i != m_guestProcessResources.end()) {
             return i->second.get();
         }
     }

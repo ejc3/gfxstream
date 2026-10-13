@@ -40,6 +40,10 @@ class ProcessResources {
     mutable std::atomic<uint32_t> mSequenceNumber;
 };
 
+// Alias to help make it clear this is the representative place for
+// resources associated with a guest process.
+using GuestProcessResources = ProcessResources;
+
 }  // namespace host
 }  // namespace gfxstream
 #endif
