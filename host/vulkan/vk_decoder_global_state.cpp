@@ -3827,6 +3827,9 @@ class VkDecoderGlobalState::Impl {
             needEmulatedAlpha = false;
             createInfo.image = imageInfo->compressInfo->compressedMipmap(
                 pCreateInfo->subresourceRange.baseMipLevel);
+            if (createInfo.image == VK_NULL_HANDLE) {
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
             createInfo.subresourceRange.baseMipLevel = 0;
             pCreateInfo = &createInfo;
         }
@@ -5668,10 +5671,12 @@ class VkDecoderGlobalState::Impl {
             if (srcImg->compressInfo) {
                 srcImageMip =
                     srcImg->compressInfo->compressedMipmap(pRegions[r].srcSubresource.mipLevel);
+                if (srcImageMip == VK_NULL_HANDLE) continue;
             }
             if (dstImg->compressInfo) {
                 dstImageMip =
                     dstImg->compressInfo->compressedMipmap(pRegions[r].dstSubresource.mipLevel);
+                if (dstImageMip == VK_NULL_HANDLE) continue;
             }
             VkImageCopy region = CompressedImageInfo::getCompressedMipmapsImageCopy(
                 pRegions[r], srcImg->compressInfo.get(), dstImg->compressInfo.get());
@@ -5700,8 +5705,10 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < regionCount; r++) {
             uint32_t mipLevel = pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy region = cmpInfo.getBufferImageCopy(pRegions[r]);
-            vk->vkCmdCopyImageToBuffer(commandBuffer, cmpInfo.compressedMipmap(mipLevel),
+            vk->vkCmdCopyImageToBuffer(commandBuffer, mipImage,
                                        srcImageLayout, dstBuffer, 1, &region);
         }
     }
@@ -5731,10 +5738,12 @@ class VkDecoderGlobalState::Impl {
             if (srcImg->compressInfo) {
                 srcImageMip = srcImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].srcSubresource.mipLevel);
+                if (srcImageMip == VK_NULL_HANDLE) continue;
             }
             if (dstImg->compressInfo) {
                 dstImageMip = dstImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].dstSubresource.mipLevel);
+                if (dstImageMip == VK_NULL_HANDLE) continue;
             }
 
             VkCopyImageInfo2 inf2 = *pCopyImageInfo;
@@ -5768,11 +5777,13 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < pCopyImageToBufferInfo->regionCount; r++) {
             uint32_t mipLevel = pCopyImageToBufferInfo->pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2 region = cmpInfo.getBufferImageCopy(pCopyImageToBufferInfo->pRegions[r]);
             VkCopyImageToBufferInfo2 inf = *pCopyImageToBufferInfo;
             inf.regionCount = 1;
             inf.pRegions = &region;
-            inf.srcImage = cmpInfo.compressedMipmap(mipLevel);
+            inf.srcImage = mipImage;
 
             vk->vkCmdCopyImageToBuffer2(commandBuffer, &inf);
         }
@@ -5803,10 +5814,12 @@ class VkDecoderGlobalState::Impl {
             if (srcImg->compressInfo) {
                 srcImageMip = srcImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].srcSubresource.mipLevel);
+                if (srcImageMip == VK_NULL_HANDLE) continue;
             }
             if (dstImg->compressInfo) {
                 dstImageMip = dstImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].dstSubresource.mipLevel);
+                if (dstImageMip == VK_NULL_HANDLE) continue;
             }
 
             VkCopyImageInfo2KHR inf2 = *pCopyImageInfo;
@@ -5840,11 +5853,13 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < pCopyImageToBufferInfo->regionCount; r++) {
             uint32_t mipLevel = pCopyImageToBufferInfo->pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2KHR region = cmpInfo.getBufferImageCopy(pCopyImageToBufferInfo->pRegions[r]);
             VkCopyImageToBufferInfo2KHR inf = *pCopyImageToBufferInfo;
             inf.regionCount = 1;
             inf.pRegions = &region;
-            inf.srcImage = cmpInfo.compressedMipmap(mipLevel);
+            inf.srcImage = mipImage;
 
             vk->vkCmdCopyImageToBuffer2KHR(commandBuffer, &inf);
         }
@@ -6041,8 +6056,10 @@ class VkDecoderGlobalState::Impl {
 
         for (uint32_t r = 0; r < regionCount; r++) {
             uint32_t mipLevel = pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy region = cmpInfo.getBufferImageCopy(pRegions[r]);
-            vk->vkCmdCopyBufferToImage(commandBuffer, srcBuffer, cmpInfo.compressedMipmap(mipLevel),
+            vk->vkCmdCopyBufferToImage(commandBuffer, srcBuffer, mipImage,
                                        dstImageLayout, 1, &region);
         }
 
@@ -6104,9 +6121,10 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
 
         for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
-            VkCopyBufferToImageInfo2 inf;
+            VkCopyBufferToImageInfo2 inf = *pCopyBufferToImageInfo;
             uint32_t mipLevel = pCopyBufferToImageInfo->pRegions[r].imageSubresource.mipLevel;
             inf.dstImage = cmpInfo.compressedMipmap(mipLevel);
+            if (inf.dstImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2 region = cmpInfo.getBufferImageCopy(pCopyBufferToImageInfo->pRegions[r]);
             inf.regionCount = 1;
             inf.pRegions = &region;
@@ -6161,9 +6179,10 @@ class VkDecoderGlobalState::Impl {
 
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
-            VkCopyBufferToImageInfo2KHR inf;
+            VkCopyBufferToImageInfo2KHR inf = *pCopyBufferToImageInfo;
             uint32_t mipLevel = pCopyBufferToImageInfo->pRegions[r].imageSubresource.mipLevel;
             inf.dstImage = cmpInfo.compressedMipmap(mipLevel);
+            if (inf.dstImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2KHR region = cmpInfo.getBufferImageCopy(pCopyBufferToImageInfo->pRegions[r]);
             inf.regionCount = 1;
             inf.pRegions = &region;
