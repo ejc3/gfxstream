@@ -43,6 +43,7 @@ public:
     GLboolean getNormalized() const { return m_normalize ? GL_TRUE : GL_FALSE; }
     const GLvoid* getData() const;
     GLsizei getDataSize() const { return m_dataSize; }
+    size_t getDataCapacity() const;
     unsigned int getBufferOffset() const;
     void redirectPointerData();
     void getBufferConversions(const RangeList& rl, RangeList& rlOut);
@@ -57,7 +58,7 @@ public:
     void setBuffer(GLint size,
                    GLenum type,
                    GLsizei stride,
-                   GLESbuffer* buf,
+                   ObjectDataPtr bufObj,
                    GLuint bufferName,
                    int offset,
                    bool normalize = false,
@@ -79,7 +80,7 @@ public:
     bool isIntPointer() const;
     void enable(bool b);
     void onSave(gfxstream::Stream* stream) const;
-    void restoreBufferObj(std::function<GLESbuffer*(GLuint)> getBufferObj);
+    void restoreBufferObj(std::function<ObjectDataPtr(GLuint)> getBufferObj);
 private:
     GLint m_size = 4;
     GLenum m_type = GL_FLOAT;
@@ -89,6 +90,7 @@ private:
     AttribType m_attribType = ARRAY;
     GLsizei m_dataSize = 0;
     const GLvoid* m_data = nullptr;
+    ObjectDataPtr m_bufferObject;
     GLESbuffer* m_buffer = nullptr;
     GLuint m_bufferName = 0;
     unsigned int m_buffOffset = 0;
