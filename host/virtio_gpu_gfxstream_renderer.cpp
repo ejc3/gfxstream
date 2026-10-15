@@ -23,6 +23,7 @@ extern "C" {
 
 #include "frame_buffer.h"
 #include "gfxstream/strings.h"
+#include "gfxstream/common/build_info.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/features.h"
 #include "gfxstream/host/tracing.h"
@@ -809,6 +810,9 @@ VG_EXPORT int stream_renderer_init(struct stream_renderer_param* stream_renderer
             log_callback(log_user_data, &log_info);
         });
     }
+
+    const std::string build_id = gfxstream::GetGfxstreamBuildId();
+    GFXSTREAM_INFO("Gfxstream Renderer Version: %s", build_id.c_str());
 
     GFXSTREAM_DEBUG("Finished reading parameters");
 

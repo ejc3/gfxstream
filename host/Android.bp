@@ -45,6 +45,7 @@ cc_library_host_static {
 
 gfxstream_backend_static_deps = [
     "libgfxstream_common_base",
+    "libgfxstream_common_build_info",
     "libgfxstream_common_logging",
     "libgfxstream_common_utils",
     "libgfxstream_etc",
@@ -167,6 +168,7 @@ cc_defaults {
             ],
         },
     },
+    use_version_lib: true,
 }
 
 cc_library {
