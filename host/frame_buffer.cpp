@@ -28,6 +28,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #if GFXSTREAM_ENABLE_HOST_GLES
 #include "host/gl/gles_version_detector.h"
@@ -401,7 +402,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
 
     std::unique_ptr<ProcessResources> removeGraphicsProcessResources(uint64_t puid);
 
-    void cleanupProcGLObjects(uint64_t puid);
+    void signalGuestProcessDead(uint64_t puid);
+    void waitForProcessCleanup();
 
     void readBuffer(HandleType p_buffer, uint64_t offset, uint64_t size, void* bytes);
 
@@ -805,6 +807,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
          bool useSubWindow);
 
     bool removeSubWindow_locked();
+    void cleanupGuestProcess(uint64_t puid);
     // Returns the set of ColorBuffers destroyed (for further cleanup)
     std::vector<HandleType> cleanupProcGLObjects_locked(uint64_t puid, bool forced = false);
 
@@ -938,6 +941,54 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     std::mutex m_guestProcessResourcesLock;
     std::unordered_map<uint64_t, std::unique_ptr<GuestProcessResources>> m_guestProcessResources
         GUARDED_BY(m_guestProcessResourcesLock);
+
+    // This object manages the cleanup of guest process resources when the process
+    // exits. It runs the cleanup in a separate thread to never block the main
+    // render thread for a low-priority task.
+    class ProcessCleanupThread {
+       public:
+        using GenericCleanup = std::function<void()>;
+
+        ProcessCleanupThread()
+            : mCleanupWorker(
+                  []() { GFXSTREAM_TRACE_NAME_THREAD("Gfxstream Process Cleanup Worker"); },
+                  [](Cmd cmd) {
+                      using gfxstream::base::WorkerProcessingResult;
+                      struct {
+                          WorkerProcessingResult operator()(GenericCleanup work) {
+                              work();
+                              return WorkerProcessingResult::Continue;
+                          }
+                          WorkerProcessingResult operator()(Exit) {
+                              return WorkerProcessingResult::Stop;
+                          }
+                      } visitor;
+                      return std::visit(visitor, std::move(cmd));
+                  }) {
+            mCleanupWorker.start();
+        }
+
+        ~ProcessCleanupThread() { stop(); }
+
+        void enqueueCleanup(GenericCleanup command) {
+            mCleanupWorker.enqueue(std::move(command));
+        }
+
+        void stop() {
+            mCleanupWorker.enqueue(Exit{});
+            mCleanupWorker.join();
+        }
+
+        void waitForCleanup() { mCleanupWorker.waitQueuedItems(); }
+
+       private:
+        struct Exit {};
+        using Cmd = std::variant<GenericCleanup, Exit>;
+        DISALLOW_COPY_AND_ASSIGN(ProcessCleanupThread);
+
+        gfxstream::base::WorkerThread<Cmd> mCleanupWorker;
+    };
+    ProcessCleanupThread m_processCleanupThread;
 
     // Flag set when emulator is shutting down.
     bool m_shuttingDown = false;
@@ -1538,6 +1589,8 @@ FrameBuffer::Impl::Impl(FrameBuffer* framebuffer, int p_width, int p_height,
 }
 
 FrameBuffer::Impl::~Impl() {
+    m_processCleanupThread.stop();
+
     AutoLock fbLock(m_lock);
 
     m_postThread.enqueue({PostCmd::Exit});
@@ -2374,7 +2427,19 @@ std::unique_ptr<ProcessResources> FrameBuffer::Impl::removeGraphicsProcessResour
     return res;
 }
 
-void FrameBuffer::Impl::cleanupProcGLObjects(uint64_t puid) {
+void FrameBuffer::Impl::signalGuestProcessDead(uint64_t puid) {
+    std::shared_ptr<GuestProcessResources> processResources = removeGraphicsProcessResources(puid);
+    m_processCleanupThread.enqueueCleanup(
+        [this, puid, processResources = std::move(processResources)]() {
+            this->cleanupGuestProcess(puid);
+        });
+}
+
+void FrameBuffer::Impl::waitForProcessCleanup() {
+    m_processCleanupThread.waitForCleanup();
+}
+
+void FrameBuffer::Impl::cleanupGuestProcess(uint64_t puid) {
     bool renderThreadWithThisPuidExists = false;
 
     do {
@@ -3166,6 +3231,8 @@ AsyncResult FrameBuffer::Impl::composeWithCallback(uint32_t bufferSize, void* bu
 
 bool FrameBuffer::Impl::onSave(Stream* stream,
                                const ITextureSaverPtr& textureSaver) NO_THREAD_SAFETY_ANALYSIS {
+    waitForProcessCleanup();
+
     // Things we do not need to snapshot:
     //     m_eglSurface
     //     m_eglContext
@@ -4684,7 +4751,9 @@ std::unique_ptr<ProcessResources> FrameBuffer::removeGraphicsProcessResources(ui
     return mImpl->removeGraphicsProcessResources(puid);
 }
 
-void FrameBuffer::cleanupProcGLObjects(uint64_t puid) { mImpl->cleanupProcGLObjects(puid); }
+void FrameBuffer::signalGuestProcessDead(uint64_t puid) { mImpl->signalGuestProcessDead(puid); }
+
+void FrameBuffer::waitForProcessCleanup() { mImpl->waitForProcessCleanup(); }
 
 void FrameBuffer::readBuffer(HandleType p_buffer, uint64_t offset, uint64_t size, void* bytes) {
     mImpl->readBuffer(p_buffer, offset, size, bytes);

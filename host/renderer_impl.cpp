@@ -58,69 +58,7 @@ namespace host {
 //   thread, which may in turn be blocked on something else.
 static const bool kUseSubwindowThread = false;
 
-// This object manages the cleanup of guest process resources when the process
-// exits. It runs the cleanup in a separate thread to never block the main
-// render thread for a low-priority task.
-class RendererImpl::ProcessCleanupThread {
-public:
-    ProcessCleanupThread()
-        : mCleanupWorker(
-            []() {
-                GFXSTREAM_TRACE_NAME_THREAD("Gfxstream Renderer Cleanup Worker");
-            },
-            [](Cmd cmd) {
-                using gfxstream::base::WorkerProcessingResult;
-                struct {
-                    WorkerProcessingResult operator()(CleanProcessResources resources) {
-                        FrameBuffer::getFB()->cleanupProcGLObjects(resources.puid);
-                        // resources.resource are destroyed automatically when going out of the
-                        // scope.
-                        return WorkerProcessingResult::Continue;
-                    }
-                    WorkerProcessingResult operator()(Exit) {
-                        return WorkerProcessingResult::Stop;
-                    }
-                } visitor;
-                return std::visit(visitor, std::move(cmd));
-            }) {
-        mCleanupWorker.start();
-    }
-
-    ~ProcessCleanupThread() {
-        mCleanupWorker.enqueue(Exit{});
-    }
-
-    void cleanup(uint64_t processId, std::unique_ptr<ProcessResources> resource) {
-        mCleanupWorker.enqueue(CleanProcessResources{
-            .puid = processId,
-            .resource = std::move(resource),
-        });
-    }
-
-    void stop() {
-        mCleanupWorker.enqueue(Exit{});
-        mCleanupWorker.join();
-    }
-
-    void waitForCleanup() {
-        mCleanupWorker.waitQueuedItems();
-    }
-
-private:
-    struct CleanProcessResources {
-        uint64_t puid;
-        std::unique_ptr<ProcessResources> resource;
-    };
-    struct Exit {};
-    using Cmd = std::variant<CleanProcessResources, Exit>;
-    DISALLOW_COPY_AND_ASSIGN(ProcessCleanupThread);
-
-    gfxstream::base::WorkerThread<Cmd> mCleanupWorker;
-};
-
-RendererImpl::RendererImpl() {
-    mCleanupThread.reset(new ProcessCleanupThread());
-}
+RendererImpl::RendererImpl() = default;
 
 RendererImpl::~RendererImpl() {
     stop(true);
@@ -172,9 +110,6 @@ void RendererImpl::stop(bool wait) {
     for (const auto& c : channels) {
         c->stopFromHost();
     }
-    // We're stopping the renderer, so there's no need to clean up resources
-    // of some pending processes: we'll destroy everything soon.
-    mCleanupThread->stop();
 
     mStoppedChannels.insert(mStoppedChannels.end(),
                             std::make_move_iterator(channels.begin()),
@@ -197,7 +132,7 @@ void RendererImpl::stop(bool wait) {
         return;
     }
 
-    mCleanupThread->waitForCleanup();
+    waitForProcessCleanup();
     mStoppedChannels.clear();
 }
 
@@ -236,10 +171,9 @@ void RendererImpl::cleanupRenderThreads() {
 }
 
 void RendererImpl::waitForProcessCleanup() {
-    mCleanupThread->waitForCleanup();
-    // Recreate it to make sure we've started from scratch and that we've
-    // finished all in-progress cleanups as well.
-    mCleanupThread.reset(new ProcessCleanupThread());
+    if (auto* fb = FrameBuffer::getFB()) {
+        fb->waitForProcessCleanup();
+    }
 }
 
 RenderChannelPtr RendererImpl::createRenderChannel(
@@ -566,9 +500,9 @@ void RendererImpl::onGuestGraphicsProcessCreate(uint64_t puid) {
 }
 
 void RendererImpl::cleanupProcGLObjects(uint64_t puid) {
-    std::unique_ptr<ProcessResources> resource =
-        FrameBuffer::getFB()->removeGraphicsProcessResources(puid);
-    mCleanupThread->cleanup(puid, std::move(resource));
+    if (auto* fb = FrameBuffer::getFB()) {
+        fb->signalGuestProcessDead(puid);
+    }
 }
 
 static struct AndroidVirtioGpuOps sVirtioGpuOps = {
