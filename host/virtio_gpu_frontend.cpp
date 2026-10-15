@@ -54,6 +54,8 @@ using gfxstream::base::SharedMemory;
 using gfxstream::host::snapshot::VirtioGpuContextSnapshot;
 using gfxstream::host::snapshot::VirtioGpuFrontendSnapshot;
 using gfxstream::host::snapshot::VirtioGpuResourceSnapshot;
+
+static constexpr auto kCleanupTimeout = std::chrono::milliseconds(15000);
 #endif  // ifdef GFXSTREAM_BUILD_WITH_SNAPSHOT_FRONTEND_SUPPORT
 
 // Helper for printing very detailed debug logs
@@ -109,12 +111,9 @@ class CleanupThread {
 
     void enqueueCleanup(GenericCleanup command) { mWorker.enqueue(std::move(command)); }
 
-    void waitForPendingCleanups() {
-        std::promise<void> pendingCleanupsCompletedSignal;
-        std::future<void> pendingCleanupsCompltedWaitable =
-            pendingCleanupsCompletedSignal.get_future();
-        enqueueCleanup([&]() { pendingCleanupsCompletedSignal.set_value(); });
-        pendingCleanupsCompltedWaitable.wait();
+    bool waitForPendingCleanups(
+        std::optional<std::chrono::milliseconds> timeout = std::nullopt) {
+        return mWorker.waitQueuedItems(timeout);
     }
 
     void stop() {
@@ -1143,7 +1142,19 @@ int VirtioGpuFrontend::snapshot(const char* directory) {
         GFXSTREAM_ERROR("Failed to restore renderer: renderer not available.");
         return -EINVAL;
     }
-    mRenderer->pauseAllPreSave();
+    if (mCleanupThread &&
+        !mCleanupThread->waitForPendingCleanups(kCleanupTimeout)) {
+        GFXSTREAM_ERROR("Failed to save snapshot: timed out waiting for frontend cleanups.");
+        return -ETIMEDOUT;
+    }
+    if (!mRenderer->pauseAllPreSave()) {
+        GFXSTREAM_ERROR("Failed to save snapshot: failed to pause renderer pre-save.");
+        return -ETIMEDOUT;
+    }
+    struct ScopedResume {
+        RendererPtr& renderer;
+        ~ScopedResume() { renderer->resumeAll(); }
+    } scopedResume{mRenderer};
 
     int ret = snapshotRenderer(directory);
     if (ret) {

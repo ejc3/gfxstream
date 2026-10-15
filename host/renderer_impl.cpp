@@ -57,6 +57,7 @@ namespace host {
 //   in the context of RenderWindow thread, which will become blocked on the UI
 //   thread, which may in turn be blocked on something else.
 static const bool kUseSubwindowThread = false;
+static constexpr auto kCleanupTimeout = std::chrono::milliseconds(15000);
 
 // This object manages the cleanup of guest process resources when the process
 // exits. It runs the cleanup in a separate thread to never block the main
@@ -102,8 +103,8 @@ public:
         mCleanupWorker.join();
     }
 
-    void waitForCleanup() {
-        mCleanupWorker.waitQueuedItems();
+    bool waitForCleanup(std::optional<std::chrono::milliseconds> timeout = std::nullopt) {
+        return mCleanupWorker.waitQueuedItems(timeout);
     }
 
 private:
@@ -235,11 +236,12 @@ void RendererImpl::cleanupRenderThreads() {
     }
 }
 
-void RendererImpl::waitForProcessCleanup() {
-    mCleanupThread->waitForCleanup();
-    // Recreate it to make sure we've started from scratch and that we've
-    // finished all in-progress cleanups as well.
-    mCleanupThread.reset(new ProcessCleanupThread());
+bool RendererImpl::waitForProcessCleanup() {
+    if (!mCleanupThread->waitForCleanup(kCleanupTimeout)) {
+        GFXSTREAM_ERROR("Timed out waiting for process cleanup.");
+        return false;
+    }
+    return true;
 }
 
 RenderChannelPtr RendererImpl::createRenderChannel(
@@ -333,17 +335,26 @@ void RendererImpl::addressSpaceGraphicsConsumerReloadRingConfig(void* consumer) 
     thread->addressSpaceGraphicsReloadRingConfig();
 }
 
-void RendererImpl::pauseAllPreSave() {
+bool RendererImpl::pauseAllPreSave() {
     {
         std::lock_guard<std::mutex> lock(mChannelsMutex);
         if (mStopped) {
-            return;
+            return true;
+        }
+    }
+    if (!waitForProcessCleanup()) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mChannelsMutex);
+        if (mStopped) {
+            return true;
         }
         for (const auto& c : mChannels) {
             c->renderThread()->pausePreSnapshot();
         }
     }
-    waitForProcessCleanup();
+    return true;
 }
 
 void RendererImpl::resumeAll() {
@@ -410,7 +421,10 @@ bool RendererImpl::save(gfxstream::Stream* stream,
 
 bool RendererImpl::load(gfxstream::Stream* stream,
                         const ITextureLoaderPtr& textureLoader) {
-    waitForProcessCleanup();
+    if (!waitForProcessCleanup()) {
+        GFXSTREAM_ERROR("Failed to load snapshot: timed out waiting for process cleanup.");
+        return false;
+    }
 
     mStopped = stream->getByte();
     if (mStopped) {
