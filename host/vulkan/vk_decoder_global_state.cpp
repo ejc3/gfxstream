@@ -10103,12 +10103,14 @@ class VkDecoderGlobalState::Impl {
         const uint32_t availableCount = static_cast<uint32_t>(info.poolIds.size());
 
         if (pPoolIdCount) {
-            *pPoolIdCount = availableCount;
-        }
-
-        if (pPoolIdCount && pPoolIds) {
-            for (uint32_t i = 0; i < std::min(requestedCount, availableCount); ++i) {
-                pPoolIds[i] = info.poolIds[i];
+            if (pPoolIds) {
+                const uint32_t writtenCount = std::min(requestedCount, availableCount);
+                for (uint32_t i = 0; i < writtenCount; ++i) {
+                    pPoolIds[i] = info.poolIds[i];
+                }
+                *pPoolIdCount = writtenCount;
+            } else {
+                *pPoolIdCount = availableCount;
             }
         }
     }
