@@ -24,9 +24,11 @@
 #include <time.h>
 
 #include <iomanip>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #if GFXSTREAM_ENABLE_HOST_GLES
 #include "host/gl/gles_version_detector.h"
@@ -41,6 +43,7 @@
 #endif
 
 #include "color_buffer.h"
+#include "gfxstream/ThreadAnnotations.h"
 #include "gfxstream/Tracing.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/containers/Lookup.h"
@@ -418,7 +421,9 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
 
     std::unique_ptr<ProcessResources> removeGraphicsProcessResources(uint64_t puid);
 
-    void cleanupProcGLObjects(uint64_t puid);
+    void signalGuestProcessDead(uint64_t puid);
+    bool waitForProcessCleanup(
+        std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
     void readBuffer(HandleType p_buffer, uint64_t offset, uint64_t size, void* bytes);
 
@@ -822,6 +827,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
          bool useSubWindow);
 
     bool removeSubWindow_locked();
+    void cleanupGuestProcess(uint64_t puid);
     // Returns the set of ColorBuffers destroyed (for further cleanup)
     std::vector<HandleType> cleanupProcGLObjects_locked(uint64_t puid, bool forced = false);
 
@@ -952,8 +958,60 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     std::string m_graphicsApiVersion;
     std::string m_graphicsApiExtensions;
     std::string m_graphicsDeviceExtensions;
-    gfxstream::base::Lock m_procOwnedResourcesLock;
-    std::unordered_map<uint64_t, std::unique_ptr<ProcessResources>> m_procOwnedResources;
+    std::mutex m_guestProcessResourcesLock;
+    std::unordered_map<uint64_t, std::unique_ptr<GuestProcessResources>> m_guestProcessResources
+        GUARDED_BY(m_guestProcessResourcesLock);
+
+    // This object manages the cleanup of guest process resources when the process
+    // exits. It runs the cleanup in a separate thread to never block the main
+    // render thread for a low-priority task.
+    class ProcessCleanupThread {
+       public:
+        using GenericCleanup = std::function<void()>;
+
+        ProcessCleanupThread()
+            : mCleanupWorker(
+                  []() { GFXSTREAM_TRACE_NAME_THREAD("Gfxstream Process Cleanup Worker"); },
+                  [](Cmd cmd) {
+                      using gfxstream::base::WorkerProcessingResult;
+                      struct {
+                          WorkerProcessingResult operator()(GenericCleanup work) {
+                              work();
+                              return WorkerProcessingResult::Continue;
+                          }
+                          WorkerProcessingResult operator()(Exit) {
+                              return WorkerProcessingResult::Stop;
+                          }
+                      } visitor;
+                      return std::visit(visitor, std::move(cmd));
+                  }) {
+            mCleanupWorker.start();
+        }
+
+        ~ProcessCleanupThread() { stop(); }
+
+        void enqueueCleanup(GenericCleanup command) {
+            mCleanupWorker.enqueue(std::move(command));
+        }
+
+        void stop() {
+            mCleanupWorker.enqueue(Exit{});
+            mCleanupWorker.join();
+        }
+
+        bool waitForCleanup(
+            std::optional<std::chrono::milliseconds> timeout = std::nullopt) {
+            return mCleanupWorker.waitQueuedItems(timeout);
+        }
+
+       private:
+        struct Exit {};
+        using Cmd = std::variant<GenericCleanup, Exit>;
+        DISALLOW_COPY_AND_ASSIGN(ProcessCleanupThread);
+
+        gfxstream::base::WorkerThread<Cmd> mCleanupWorker;
+    };
+    ProcessCleanupThread m_processCleanupThread;
 
     // Flag set when emulator is shutting down.
     std::atomic_bool m_shuttingDown = false;
@@ -1355,8 +1413,6 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
         .useVulkanComposition = impl->m_useVulkanComposition,
         .useVulkanNativeSwapchain = impl->m_features.VulkanNativeSwapchain.enabled(),
         .guestRenderDoc = std::move(renderDocMultipleVkInstances),
-        .astcLdrEmulationMode = AstcEmulationMode::Gpu,
-        .enableEtc2Emulation = true,
         .enableYcbcrEmulation = false,
         .guestVulkanOnly = impl->m_features.GuestVulkanOnly.enabled(),
         .useDedicatedAllocations = false,  // Set later.
@@ -1556,6 +1612,8 @@ FrameBuffer::Impl::Impl(FrameBuffer* framebuffer, int p_width, int p_height,
 }
 
 FrameBuffer::Impl::~Impl() {
+    m_processCleanupThread.stop();
+
     AutoLock fbLock(m_lock);
 
     m_postThread.enqueue({PostCmd::Exit});
@@ -2369,8 +2427,8 @@ void FrameBuffer::Impl::eraseDelayedCloseColorBufferLocked(HandleType cb, uint64
 void FrameBuffer::Impl::createGraphicsProcessResources(uint64_t puid) {
     bool inserted = false;
     {
-        AutoLock mutex(m_procOwnedResourcesLock);
-        inserted = m_procOwnedResources.try_emplace(puid, ProcessResources::create()).second;
+        std::lock_guard<std::mutex> lock(m_guestProcessResourcesLock);
+        inserted = m_guestProcessResources.try_emplace(puid, GuestProcessResources::create()).second;
     }
     if (!inserted) {
         GFXSTREAM_WARNING("Failed to create process resource for puid %" PRIu64 ".", puid);
@@ -2380,8 +2438,8 @@ void FrameBuffer::Impl::createGraphicsProcessResources(uint64_t puid) {
 std::unique_ptr<ProcessResources> FrameBuffer::Impl::removeGraphicsProcessResources(uint64_t puid) {
     std::unique_ptr<ProcessResources> res;
     {
-        AutoLock mutex(m_procOwnedResourcesLock);
-        if (auto node = m_procOwnedResources.extract(puid)) {
+        std::lock_guard<std::mutex> lock(m_guestProcessResourcesLock);
+        if (auto node = m_guestProcessResources.extract(puid)) {
             res = std::move(node.mapped());
         }
     }
@@ -2392,7 +2450,20 @@ std::unique_ptr<ProcessResources> FrameBuffer::Impl::removeGraphicsProcessResour
     return res;
 }
 
-void FrameBuffer::Impl::cleanupProcGLObjects(uint64_t puid) {
+void FrameBuffer::Impl::signalGuestProcessDead(uint64_t puid) {
+    std::shared_ptr<GuestProcessResources> processResources = removeGraphicsProcessResources(puid);
+    m_processCleanupThread.enqueueCleanup(
+        [this, puid, processResources = std::move(processResources)]() {
+            this->cleanupGuestProcess(puid);
+        });
+}
+
+bool FrameBuffer::Impl::waitForProcessCleanup(
+    std::optional<std::chrono::milliseconds> timeout) {
+    return m_processCleanupThread.waitForCleanup(timeout);
+}
+
+void FrameBuffer::Impl::cleanupGuestProcess(uint64_t puid) {
     bool renderThreadWithThisPuidExists = false;
 
     do {
@@ -3186,6 +3257,8 @@ AsyncResult FrameBuffer::Impl::composeWithCallback(uint32_t bufferSize, void* bu
 
 bool FrameBuffer::Impl::onSave(Stream* stream,
                                const ITextureSaverPtr& textureSaver) NO_THREAD_SAFETY_ANALYSIS {
+    waitForProcessCleanup();
+
     // Things we do not need to snapshot:
     //     m_eglSurface
     //     m_eglContext
@@ -3318,8 +3391,8 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
 
     // save process owned resources
     {
-        AutoLock procResourceLock(m_procOwnedResourcesLock);
-        size_t procResourceCount = m_procOwnedResources.size();
+        std::lock_guard<std::mutex> lock(m_guestProcessResourcesLock);
+        size_t procResourceCount = m_guestProcessResources.size();
         if (procResourceCount > kNumMaxProcessResources) {
             GFXSTREAM_ERROR("snapshot save: too many process owned resources: %zu",
                             procResourceCount);
@@ -3327,7 +3400,7 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
         }
         GFXSTREAM_DEBUG("snapshot save: save %zu process owned resources", procResourceCount);
         stream->putBe64(procResourceCount);
-        for (const auto& element : m_procOwnedResources) {
+        for (const auto& element : m_guestProcessResources) {
             stream->putBe64(element.first);
             stream->putBe32(element.second->getSequenceNumberPtr()->load());
         }
@@ -3445,8 +3518,8 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
             }
 
             {
-                AutoLock mutex(m_procOwnedResourcesLock);
-                m_procOwnedResources.clear();
+                std::lock_guard<std::mutex> lockGuestProcessResources(m_guestProcessResourcesLock);
+                m_guestProcessResources.clear();
             }
 
             performDelayedColorBufferCloseLocked(true);
@@ -3596,11 +3669,11 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         for (uint64_t i = 0; i < resourceCount; i++) {
             uint64_t puid = stream->getBe64();
             uint32_t sequenceNumber = stream->getBe32();
-            std::unique_ptr<ProcessResources> processResources = ProcessResources::create();
+            std::unique_ptr<GuestProcessResources> processResources = GuestProcessResources::create();
             processResources->getSequenceNumberPtr()->store(sequenceNumber);
             {
-                AutoLock mutex(m_procOwnedResourcesLock);
-                m_procOwnedResources.emplace(puid, std::move(processResources));
+                std::lock_guard<std::mutex> lockGuestProcessResources(m_guestProcessResourcesLock);
+                m_guestProcessResources.emplace(puid, std::move(processResources));
             }
         }
         GFXSTREAM_DEBUG("snapshot load: loaded %zu process resources", resourceCount);
@@ -3780,9 +3853,9 @@ CancelableFuture FrameBuffer::Impl::scheduleAsyncWork(std::function<void()> work
 
 const ProcessResources* FrameBuffer::Impl::getProcessResources(uint64_t puid) {
     {
-        AutoLock mutex(m_procOwnedResourcesLock);
-        auto i = m_procOwnedResources.find(puid);
-        if (i != m_procOwnedResources.end()) {
+        std::lock_guard<std::mutex> lock(m_guestProcessResourcesLock);
+        auto i = m_guestProcessResources.find(puid);
+        if (i != m_guestProcessResources.end()) {
             return i->second.get();
         }
     }
@@ -4704,7 +4777,12 @@ std::unique_ptr<ProcessResources> FrameBuffer::removeGraphicsProcessResources(ui
     return mImpl->removeGraphicsProcessResources(puid);
 }
 
-void FrameBuffer::cleanupProcGLObjects(uint64_t puid) { mImpl->cleanupProcGLObjects(puid); }
+void FrameBuffer::signalGuestProcessDead(uint64_t puid) { mImpl->signalGuestProcessDead(puid); }
+
+bool FrameBuffer::waitForProcessCleanup(
+    std::optional<std::chrono::milliseconds> timeout) {
+    return mImpl->waitForProcessCleanup(timeout);
+}
 
 void FrameBuffer::readBuffer(HandleType p_buffer, uint64_t offset, uint64_t size, void* bytes) {
     mImpl->readBuffer(p_buffer, offset, size, bytes);

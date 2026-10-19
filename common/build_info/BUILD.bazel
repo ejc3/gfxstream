@@ -1,0 +1,21 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
+
+package(
+    default_applicable_licenses = ["//:gfxstream_license"],
+    default_visibility = ["//:gfxstream"],
+)
+
+cc_library(
+    name = "gfxstream_common_build_info",
+    srcs = ["build_info.cpp"],
+    hdrs = glob(["include/**/*.h"]),
+    copts = GFXSTREAM_HOST_COPTS,
+    defines = GFXSTREAM_HOST_DEFINES,
+    includes = ["include"],
+    linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = [
+        "GFXSTREAM_BUILD_INFO_USE_CUSTOM_STRING=1",
+        "GFXSTREAM_BUILD_INFO_CUSTOM_STRING_VALUE=\"\\\"Bazel_Build\\\"\"",
+    ],
+)

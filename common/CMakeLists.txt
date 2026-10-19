@@ -15,6 +15,7 @@
 add_subdirectory(logging)
 
 add_subdirectory(base)
+add_subdirectory(build_info)
 add_subdirectory(detector)
 add_subdirectory(etc)
 add_subdirectory(image)

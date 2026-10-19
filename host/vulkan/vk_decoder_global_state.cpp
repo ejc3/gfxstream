@@ -1323,11 +1323,43 @@ class VkDecoderGlobalState::Impl {
                                                    VkSnapshotApiCallHandle, const char* pLayerName,
                                                    uint32_t* pPropertyCount,
                                                    VkExtensionProperties* pProperties) {
+        if (pPropertyCount == nullptr) {
+            return VK_INCOMPLETE;
+        }
+
 #if defined(__linux__)
         // TODO(b/401005629) always lock before the call on linux
         std::lock_guard<std::mutex> lock(mMutex);
 #endif
-        return m_vk->vkEnumerateInstanceExtensionProperties(pLayerName, pPropertyCount, pProperties);
+        // Start with host extensions:
+        std::vector<VkExtensionProperties> properties;
+        VkResult result = enumerateInstanceExtensionProperties(m_vk, pLayerName, properties);
+        if (result != VK_SUCCESS) {
+            GFXSTREAM_ERROR("Failed to query host instance extensions.");
+            return result;
+        }
+
+        // Remove all extensions that are not supported by the host codegen to prevent
+        // guest to host compatibility issues:
+        const auto& supportedInstanceExtensions = GetInstanceExtensionsSupportedByCodegen();
+        properties.erase(
+            std::remove_if(properties.begin(), properties.end(),
+                           [&](const VkExtensionProperties& extension) {
+                               return supportedInstanceExtensions.find(extension.extensionName) ==
+                                      supportedInstanceExtensions.end();
+                           }),
+            properties.end());
+
+        if (pProperties == nullptr) {
+            *pPropertyCount = properties.size();
+        } else {
+            // return number of structures actually written to pProperties.
+            *pPropertyCount = std::min((uint32_t)properties.size(), *pPropertyCount);
+            if (*pPropertyCount > 0) {
+                std::memcpy(pProperties, properties.data(), *pPropertyCount * sizeof(VkExtensionProperties));
+            }
+        }
+        return *pPropertyCount < properties.size() ? VK_INCOMPLETE : VK_SUCCESS;
     }
 
     VkResult on_vkCreateInstance(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -1892,10 +1924,35 @@ class VkDecoderGlobalState::Impl {
         auto* extImageFormatInfo =
             vk_find_struct<VkPhysicalDeviceExternalImageFormatInfo>(pImageFormatInfo);
 
-        if (extImageFormatInfo &&
-            extImageFormatInfo->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
-            const_cast<VkPhysicalDeviceExternalImageFormatInfo*>(extImageFormatInfo)->handleType =
-                m_vkEmulation->getDefaultExternalMemoryHandleType();
+        if (extImageFormatInfo) {
+            if (extImageFormatInfo->handleType &
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
+                VkFormat resolvedFormat = resolveAhbFormat(pImageFormatInfo->format);
+                std::unique_ptr<VkImageCreateInfo> colorBufferVkImageCi =
+                    m_vkEmulation->generateColorBufferVkImageCreateInfo(
+                        resolvedFormat, 1, 1, pImageFormatInfo->tiling, 1);
+                if (colorBufferVkImageCi) {
+                    if (pImageFormatInfo != &imageFormatInfo) {
+                        imageFormatInfo = *pImageFormatInfo;
+                        pImageFormatInfo = &imageFormatInfo;
+                    }
+                    imageFormatInfo.format = resolvedFormat;
+                    imageFormatInfo.flags |= colorBufferVkImageCi->flags;
+                    imageFormatInfo.usage |= colorBufferVkImageCi->usage;
+                }
+            }
+
+            auto* mutExtImageFormatInfo =
+                const_cast<VkPhysicalDeviceExternalImageFormatInfo*>(extImageFormatInfo);
+            mutExtImageFormatInfo->handleType =
+                static_cast<VkExternalMemoryHandleTypeFlagBits>(
+                    m_vkEmulation->transformExternalMemoryHandleTypeFlags_tohost(
+                        mutExtImageFormatInfo->handleType));
+            if (mutExtImageFormatInfo->handleType ==
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
+                mutExtImageFormatInfo->handleType =
+                    m_vkEmulation->getDefaultExternalMemoryHandleType();
+            }
         }
         VkResult res = VK_ERROR_INITIALIZATION_FAILED;
 
@@ -2599,6 +2656,7 @@ class VkDecoderGlobalState::Impl {
 
         // Filter device memory report as callbacks can not be passed between guest and host.
         vk_struct_chain_filter<VkDeviceDeviceMemoryReportCreateInfoEXT>(&createInfoFiltered);
+        vk_struct_chain_filter<VkPhysicalDeviceDeviceMemoryReportFeaturesEXT>(&createInfoFiltered);
 
         // Filter device groups as they are effectively disabled.
         vk_struct_chain_filter<VkDeviceGroupDeviceCreateInfo>(&createInfoFiltered);
@@ -7541,6 +7599,20 @@ class VkDecoderGlobalState::Impl {
         return false;
     }
 
+    // Convenience function to call vkEnumerateInstanceExtensionProperties and get the results as an
+    // std::vector
+    VkResult enumerateInstanceExtensionProperties(VulkanDispatch* vk, const char* pLayerName,
+                                                  std::vector<VkExtensionProperties>& properties) {
+        uint32_t propertyCount = 0;
+        VkResult result =
+            vk->vkEnumerateInstanceExtensionProperties(pLayerName, &propertyCount, nullptr);
+        if (result != VK_SUCCESS) return result;
+
+        properties.resize(propertyCount);
+        return vk->vkEnumerateInstanceExtensionProperties(pLayerName, &propertyCount,
+                                                          properties.data());
+    }
+
     // Convenience function to call vkEnumerateDeviceExtensionProperties and get the results as an
     // std::vector
     VkResult enumerateDeviceExtensionProperties(VulkanDispatch* vk, VkPhysicalDevice physicalDevice,
@@ -10491,6 +10563,22 @@ class VkDecoderGlobalState::Impl {
         }
     }
 
+    VkFormat resolveAhbFormat(VkFormat format) {
+        // Use UNORM formats for SRGB format requests.
+        switch (format) {
+            case VK_FORMAT_R8G8B8A8_SRGB:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case VK_FORMAT_R8G8B8_SRGB:
+                return VK_FORMAT_R8G8B8_UNORM;
+            case VK_FORMAT_B8G8R8A8_SRGB:
+                return VK_FORMAT_B8G8R8A8_UNORM;
+            case VK_FORMAT_R8_SRGB:
+                return VK_FORMAT_R8_UNORM;
+            default:
+                return format;
+        }
+    }
+
     void transformImpl_VkImageCreateInfo_tohost(const VkImageCreateInfo* pImageCreateInfos,
                                                 uint32_t count) {
         for (uint32_t i = 0; i < count; i++) {
@@ -10525,24 +10613,7 @@ class VkDecoderGlobalState::Impl {
             // the contents of the memory differently, ...
             std::unique_ptr<VkImageCreateInfo> colorBufferVkImageCi = nullptr;
             const char* importSourceDebug = "";
-            VkFormat resolvedFormat = VK_FORMAT_UNDEFINED;
-            // Use UNORM formats for SRGB format requests.
-            switch (imageCreateInfo.format) {
-                case VK_FORMAT_R8G8B8A8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8G8B8A8_UNORM;
-                    break;
-                case VK_FORMAT_R8G8B8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8G8B8_UNORM;
-                    break;
-                case VK_FORMAT_B8G8R8A8_SRGB:
-                    resolvedFormat = VK_FORMAT_B8G8R8A8_UNORM;
-                    break;
-                case VK_FORMAT_R8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8_UNORM;
-                    break;
-                default:
-                    resolvedFormat = imageCreateInfo.format;
-            }
+            VkFormat resolvedFormat = resolveAhbFormat(imageCreateInfo.format);
             if (importAndroidHardwareBuffer) {
                 // For AHardwareBufferImage binding, we can't know which ColorBuffer this
                 // to-be-created VkImage will bind to, so we try our best to infer the creation
@@ -10709,7 +10780,10 @@ class VkDecoderGlobalState::Impl {
         }                                                                                 \
     }
 
-    DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkPhysicalDeviceExternalImageFormatInfo, handleType)
+    void transformImpl_VkPhysicalDeviceExternalImageFormatInfo_tohost(
+        const VkPhysicalDeviceExternalImageFormatInfo*, uint32_t) {}
+    void transformImpl_VkPhysicalDeviceExternalImageFormatInfo_fromhost(
+        const VkPhysicalDeviceExternalImageFormatInfo*, uint32_t) {}
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkPhysicalDeviceExternalBufferInfo, handleType)
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkExternalMemoryImageCreateInfo, handleTypes)
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkExternalMemoryBufferCreateInfo, handleTypes)
@@ -11230,6 +11304,36 @@ class VkDecoderGlobalState::Impl {
         pFormatProp->formatProperties.bufferFeatures &= kEmulatedTextureBufferFeatureMask;
     }
 
+    static const VkFormatFeatureFlags kUnsupportedFormatFeatureFlags =
+        VK_FORMAT_FEATURE_VIDEO_DECODE_OUTPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_VIDEO_DECODE_DPB_BIT_KHR |
+        VK_FORMAT_FEATURE_VIDEO_ENCODE_INPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_VIDEO_ENCODE_DPB_BIT_KHR;
+
+    static const VkFormatFeatureFlags2 kUnsupportedFormatFeatureFlags2 =
+        VK_FORMAT_FEATURE_2_VIDEO_DECODE_OUTPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_DECODE_DPB_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_INPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_DPB_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_EMPHASIS_MAP_BIT_KHR;
+
+    void maskFormatPropertiesForUnsupportedExtensions(VkFormatProperties* pFormatProp) {
+        pFormatProp->linearTilingFeatures &= ~kUnsupportedFormatFeatureFlags;
+        pFormatProp->optimalTilingFeatures &= ~kUnsupportedFormatFeatureFlags;
+        pFormatProp->bufferFeatures &= ~kUnsupportedFormatFeatureFlags;
+    }
+
+    void maskFormatPropertiesForUnsupportedExtensions(VkFormatProperties2* pFormatProp) {
+        maskFormatPropertiesForUnsupportedExtensions(&pFormatProp->formatProperties);
+        VkFormatProperties3* formatProps3 = vk_find_struct<VkFormatProperties3>(pFormatProp);
+        if (formatProps3) {
+            formatProps3->linearTilingFeatures &= ~kUnsupportedFormatFeatureFlags2;
+            formatProps3->optimalTilingFeatures &= ~kUnsupportedFormatFeatureFlags2;
+            formatProps3->bufferFeatures &= ~kUnsupportedFormatFeatureFlags2;
+        }
+    }
+
     void maskImageFormatPropertiesForEmulatedTextures(VkImageFormatProperties* pProperties) {
         // dEQP-VK.api.info.image_format_properties.2d.optimal#etc2_r8g8b8_unorm_block
         pProperties->sampleCounts &= VK_SAMPLE_COUNT_1_BIT;
@@ -11246,9 +11350,11 @@ class VkDecoderGlobalState::Impl {
                 physicalDevice, CompressedImageInfo::getOutputFormat(format),
                 pFormatProperties);
             maskFormatPropertiesForEmulatedTextures(pFormatProperties);
+            maskFormatPropertiesForUnsupportedExtensions(pFormatProperties);
             return;
         }
         getPhysicalDeviceFormatPropertiesFunc(physicalDevice, format, pFormatProperties);
+        maskFormatPropertiesForUnsupportedExtensions(pFormatProperties);
     }
 
     template <typename VkHandleToInfoMap,

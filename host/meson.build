@@ -23,6 +23,7 @@ subdir('native_window')
 
 inc_gfxstream_backend = [
   inc_common_base,
+  inc_common_build_info,
   inc_common_logging,
   inc_common_utils,
   inc_drm_headers,
@@ -44,6 +45,7 @@ inc_gfxstream_backend = [
 
 link_gfxstream_backend = [
   lib_common_base,
+  lib_common_build_info,
   lib_common_logging,
   lib_common_utils,
   lib_host_address_space,
