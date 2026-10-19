@@ -561,7 +561,7 @@ AddressSpaceGraphicsContext::AddressSpaceGraphicsContext(
 AddressSpaceGraphicsContext::~AddressSpaceGraphicsContext() {
     if (mCurrentConsumer) {
         mExiting = 1;
-        mConsumerMessages.send(ConsumerCommand::Exit);
+        mConsumerMessages.stop();
         mConsumerInterface.destroy(mCurrentConsumer);
     }
 
@@ -621,7 +621,9 @@ void AddressSpaceGraphicsContext::perform(AddressSpaceDevicePingInfo* info) {
 
 AsgOnUnavailableReadStatus AddressSpaceGraphicsContext::onUnavailableRead() {
     ConsumerCommand cmd;
-    mConsumerMessages.receive(&cmd);
+    if (!mConsumerMessages.receive(&cmd)) {
+        return AsgOnUnavailableReadStatus::kExit;
+    }
     switch (cmd) {
         case ConsumerCommand::Wakeup:
             return AsgOnUnavailableReadStatus::kContinue;

@@ -956,7 +956,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     std::unordered_map<uint64_t, std::unique_ptr<ProcessResources>> m_procOwnedResources;
 
     // Flag set when emulator is shutting down.
-    bool m_shuttingDown = false;
+    std::atomic_bool m_shuttingDown = false;
 
     // When this feature is enabled, open/close operations from gralloc in guest
     // will no longer control the reference counting of color buffers on host.
@@ -2403,8 +2403,10 @@ void FrameBuffer::Impl::cleanupProcGLObjects(uint64_t puid) {
                 renderThreadWithThisPuidExists = true;
             }
         });
-        gfxstream::base::sleepUs(10000);
-    } while (renderThreadWithThisPuidExists);
+        if (renderThreadWithThisPuidExists && !m_shuttingDown) {
+            gfxstream::base::sleepUs(10000);
+        }
+    } while (renderThreadWithThisPuidExists && !m_shuttingDown);
 
 
     AutoLock mutex(m_lock);
