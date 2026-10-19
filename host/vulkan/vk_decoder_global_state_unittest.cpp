@@ -152,7 +152,7 @@ struct VkDecoderGlobalStateTestPeer {
     void registerDescriptorPool(VkDescriptorPool pool, std::vector<uint64_t> poolIds = {}) {
         std::lock_guard<std::mutex> lock(impl.mMutex);
         DescriptorPoolInfo info;
-        info.poolIds = std::move(poolIds);
+        info.preallocatedBoxedSets = std::move(poolIds);
         impl.mDescriptorPoolInfo[pool] = std::move(info);
     }
 
