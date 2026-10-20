@@ -8999,7 +8999,8 @@ class VkDecoderGlobalState::Impl {
 
         auto timeoutDeadline = gfxstream::base::getUnixTimeUs() + 5000000;  // 5 s
 
-        OrderMaintenanceInfo* order = ordmaint_VkCommandBuffer(boxed_commandBuffer);
+        std::shared_ptr<OrderMaintenanceInfo> order =
+            ordmaint_VkCommandBuffer(boxed_commandBuffer);
         if (!order) return;
 
         AutoLock lock(order->lock);
@@ -9018,7 +9019,6 @@ class VkDecoderGlobalState::Impl {
 
         __atomic_store_n(&order->sequenceNumber, sequenceNumber, __ATOMIC_RELEASE);
         order->cv.signal();
-        releaseOrderMaintInfo(order);
     }
 
     void on_vkCommandBufferHostSyncGOOGLE(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -9035,7 +9035,7 @@ class VkDecoderGlobalState::Impl {
 
         auto timeoutDeadline = gfxstream::base::getUnixTimeUs() + 5000000;  // 5 s
 
-        OrderMaintenanceInfo* order = ordmaint_VkQueue(boxed_queue);
+        std::shared_ptr<OrderMaintenanceInfo> order = ordmaint_VkQueue(boxed_queue);
         if (!order) return;
 
         AutoLock lock(order->lock);
@@ -9054,7 +9054,6 @@ class VkDecoderGlobalState::Impl {
 
         __atomic_store_n(&order->sequenceNumber, sequenceNumber, __ATOMIC_RELEASE);
         order->cv.signal();
-        releaseOrderMaintInfo(order);
     }
 
     void on_vkQueueHostSyncGOOGLE(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -10866,8 +10865,8 @@ class VkDecoderGlobalState::Impl {
     DEFINE_EXTERNAL_MEMORY_PROPERTIES_TRANSFORM(VkExternalImageFormatProperties)
     DEFINE_EXTERNAL_MEMORY_PROPERTIES_TRANSFORM(VkExternalBufferProperties)
 
-    BoxedHandle newGlobalHandle(const BoxedHandleInfo& item, BoxedHandleTypeTag typeTag) {
-        return sBoxedHandleManager.add(item, typeTag);
+    BoxedHandle newGlobalHandle(BoxedHandleInfo item, BoxedHandleTypeTag typeTag) {
+        return sBoxedHandleManager.add(std::move(item), typeTag);
     }
 
     VkDecoderSnapshot* snapshot() { return &mSnapshot; }
@@ -12098,7 +12097,7 @@ bool VkDecoderGlobalState::batchedDescriptorSetUpdateEnabled() const { return mI
 
 uint64_t VkDecoderGlobalState::newGlobalVkGenericHandle(BoxedHandleTypeTag typeTag) {
     BoxedHandleInfo item;
-    return mImpl->newGlobalHandle(item, typeTag);
+    return mImpl->newGlobalHandle(std::move(item), typeTag);
 }
 
 bool VkDecoderGlobalState::isSnapshotCurrentlyLoading() const {

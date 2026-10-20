@@ -40,34 +40,36 @@ uint64_t BoxedHandleManager::getHandlesCount() const {
     return mReverseMap.size();
 }
 
-BoxedHandle BoxedHandleManager::add(const BoxedHandleInfo& item, BoxedHandleTypeTag tag) {
+BoxedHandle BoxedHandleManager::add(BoxedHandleInfo item, BoxedHandleTypeTag tag) {
     BoxedHandle handle;
+    UnboxedHandle underlying = item.underlying;
 
     if (mHandleReplay) {
         handle = mHandleReplayQueue.front();
         mHandleReplayQueue.pop_front();
         mHandleReplay = !mHandleReplayQueue.empty();
 
-        handle = (BoxedHandle)mStore.addFixed(handle, item, (size_t)tag);
+        handle = (BoxedHandle)mStore.addFixed(handle, std::move(item), (size_t)tag);
     } else {
-        handle = (BoxedHandle)mStore.add(item, (size_t)tag);
+        handle = (BoxedHandle)mStore.add(std::move(item), (size_t)tag);
     }
 
     std::lock_guard<std::mutex> lock(mMutex);
-    mReverseMap[(BoxedHandle)(item.underlying)] = handle;
+    mReverseMap[underlying] = handle;
     return handle;
 }
 
-void BoxedHandleManager::update(BoxedHandle handle, const BoxedHandleInfo& item,
+void BoxedHandleManager::update(BoxedHandle handle, BoxedHandleInfo item,
                                 BoxedHandleTypeTag tag) {
     auto storedItem = mStore.get(handle);
     UnboxedHandle oldHandle = (UnboxedHandle)storedItem->underlying;
-    *storedItem = item;
+    UnboxedHandle newHandle = (UnboxedHandle)item.underlying;
+    *storedItem = std::move(item);
     std::lock_guard<std::mutex> lock(mMutex);
     if (oldHandle) {
         mReverseMap.erase(oldHandle);
     }
-    mReverseMap[(UnboxedHandle)(item.underlying)] = handle;
+    mReverseMap[newHandle] = handle;
 }
 
 void BoxedHandleManager::remove(BoxedHandle h) {
@@ -112,6 +114,17 @@ void BoxedHandleManager::processDelayedRemoves(VkDevice device) {
 
 BoxedHandleInfo* BoxedHandleManager::get(BoxedHandle handle) {
     return (BoxedHandleInfo*)mStore.get_const(handle);
+}
+
+std::shared_ptr<OrderMaintenanceInfo> BoxedHandleManager::getOrderMaintenanceInfo(
+    BoxedHandle handle) {
+    return mStore.withLocked(
+        handle, [](BoxedHandleInfo* info) -> std::shared_ptr<OrderMaintenanceInfo> {
+            if (info == nullptr) {
+                return nullptr;
+            }
+            return info->ordMaintInfo;
+        });
 }
 
 BoxedHandle BoxedHandleManager::getBoxedFromUnboxed(UnboxedHandle unboxed) {
@@ -319,10 +332,9 @@ VkObjectT new_boxed_VkType(VkObjectT underlying, bool dispatchable = false, Vulk
             info.dispatch = new VulkanDispatch();
             info.ownDispatch = true;
         }
-        info.ordMaintInfo = new OrderMaintenanceInfo();
-        info.readStream = nullptr;
+        info.ordMaintInfo = std::make_shared<OrderMaintenanceInfo>();
     }
-    return (VkObjectT)sBoxedHandleManager.add(info, GetTag<VkObjectT>());
+    return (VkObjectT)sBoxedHandleManager.add(std::move(info), GetTag<VkObjectT>());
 }
 
 template <typename VkObjectT>
@@ -336,16 +348,9 @@ void delete_VkType(VkObjectT boxed) {
         return;
     }
 
-    releaseOrderMaintInfo(info->ordMaintInfo);
-
     if (info->ownDispatch) {
         delete info->dispatch;
         info->dispatch = nullptr;
-    }
-
-    if (info->readStream) {
-        delete info->readStream;
-        info->readStream = nullptr;
     }
 
     sBoxedHandleManager.remove((uint64_t)boxed);
@@ -460,23 +465,12 @@ template <typename VkObjectT>
 void set_boxed_non_dispatchable_VkType(VkObjectT boxed, VkObjectT new_unboxed) {
     BoxedHandleInfo info;
     info.underlying = (uint64_t)new_unboxed;
-    sBoxedHandleManager.update((uint64_t)boxed, info, GetTag<VkObjectT>());
+    sBoxedHandleManager.update((uint64_t)boxed, std::move(info), GetTag<VkObjectT>());
 }
 
 template <typename VkObjectT>
-OrderMaintenanceInfo* get_order_maintenance_info_VkType(VkObjectT boxed) {
-    BoxedHandleInfo* info = sBoxedHandleManager.get((uint64_t)(uintptr_t)boxed);
-    if (info == nullptr) {
-        return nullptr;
-    }
-
-    if (info->ordMaintInfo == nullptr) {
-        return nullptr;
-    }
-
-    acquireOrderMaintInfo(info->ordMaintInfo);
-
-    return info->ordMaintInfo;
+std::shared_ptr<OrderMaintenanceInfo> get_order_maintenance_info_VkType(VkObjectT boxed) {
+    return sBoxedHandleManager.getOrderMaintenanceInfo((uint64_t)(uintptr_t)boxed);
 }
 
 template <typename VkObjectT>
@@ -487,11 +481,11 @@ VulkanMemReadingStream* get_read_stream_VkType(VkObjectT boxed) {
     }
 
     if (info->readStream == nullptr) {
-        info->readStream =
-            new VulkanMemReadingStream(nullptr, VkDecoderGlobalState::get()->getFeatures());
+        info->readStream = std::make_unique<VulkanMemReadingStream>(
+            nullptr, VkDecoderGlobalState::get()->getFeatures());
     }
 
-    return info->readStream;
+    return info->readStream.get();
 }
 
 template <typename VkObjectT>
@@ -531,7 +525,7 @@ VkInstance unboxed_to_boxed_VkInstance(VkInstance unboxed) {
     return unboxed_to_boxed_non_dispatchable_VkType<VkInstance>(unboxed);
 }
 
-OrderMaintenanceInfo* ordmaint_VkInstance(VkInstance boxed) {
+std::shared_ptr<OrderMaintenanceInfo> ordmaint_VkInstance(VkInstance boxed) {
     return get_order_maintenance_info_VkType<VkInstance>(boxed);
 }
 
@@ -563,7 +557,7 @@ VkPhysicalDevice unboxed_to_boxed_VkPhysicalDevice(VkPhysicalDevice unboxed) {
     return unboxed_to_boxed_non_dispatchable_VkType<VkPhysicalDevice>(unboxed);
 }
 
-OrderMaintenanceInfo* ordmaint_VkPhysicalDevice(VkPhysicalDevice boxed) {
+std::shared_ptr<OrderMaintenanceInfo> ordmaint_VkPhysicalDevice(VkPhysicalDevice boxed) {
     return get_order_maintenance_info_VkType<VkPhysicalDevice>(boxed);
 }
 
@@ -595,7 +589,7 @@ VkDevice unboxed_to_boxed_VkDevice(VkDevice unboxed) {
     return unboxed_to_boxed_non_dispatchable_VkType<VkDevice>(unboxed);
 }
 
-OrderMaintenanceInfo* ordmaint_VkDevice(VkDevice boxed) {
+std::shared_ptr<OrderMaintenanceInfo> ordmaint_VkDevice(VkDevice boxed) {
     return get_order_maintenance_info_VkType<VkDevice>(boxed);
 }
 
@@ -627,7 +621,7 @@ VkCommandBuffer unboxed_to_boxed_VkCommandBuffer(VkCommandBuffer unboxed) {
     return unboxed_to_boxed_non_dispatchable_VkType<VkCommandBuffer>(unboxed);
 }
 
-OrderMaintenanceInfo* ordmaint_VkCommandBuffer(VkCommandBuffer boxed) {
+std::shared_ptr<OrderMaintenanceInfo> ordmaint_VkCommandBuffer(VkCommandBuffer boxed) {
     return get_order_maintenance_info_VkType<VkCommandBuffer>(boxed);
 }
 
@@ -659,7 +653,7 @@ VkQueue unboxed_to_boxed_VkQueue(VkQueue unboxed) {
     return unboxed_to_boxed_non_dispatchable_VkType<VkQueue>(unboxed);
 }
 
-OrderMaintenanceInfo* ordmaint_VkQueue(VkQueue boxed) {
+std::shared_ptr<OrderMaintenanceInfo> ordmaint_VkQueue(VkQueue boxed) {
     return get_order_maintenance_info_VkType<VkQueue>(boxed);
 }
 
