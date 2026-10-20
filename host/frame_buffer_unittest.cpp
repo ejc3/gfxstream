@@ -71,6 +71,9 @@ class FrameBufferTest : public ::testing::Test {
     }
 
     void SetUp() override {
+        if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+            GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+        }
         const EGLDispatch* egl = LazyLoadedEGLDispatch::get();
         ASSERT_NE(nullptr, egl);
         ASSERT_NE(nullptr, LazyLoadedGLESv2Dispatch::get());
@@ -111,6 +114,9 @@ class FrameBufferTest : public ::testing::Test {
     }
 
     virtual void TearDown() override {
+        if (!mFb) {
+            return;
+        }
         FrameBuffer::finalize();
         mFb = nullptr;
 
@@ -943,6 +949,9 @@ class RenderThreadDeadlockTest : public ::testing::Test {
     }
 
     void SetUp() override {
+        if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+            GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+        }
         const EGLDispatch* egl = LazyLoadedEGLDispatch::get();
         ASSERT_NE(nullptr, egl);
         ASSERT_NE(nullptr, LazyLoadedGLESv2Dispatch::get());
@@ -959,6 +968,9 @@ class RenderThreadDeadlockTest : public ::testing::Test {
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         FrameBuffer::finalize();
     }
 };
