@@ -146,9 +146,6 @@ private:
     std::vector<std::shared_ptr<RenderChannelImpl>> mStoppedChannels;
     bool mStopped = false;
 
-    class ProcessCleanupThread;
-    std::unique_ptr<ProcessCleanupThread> mCleanupThread;
-
     std::unique_ptr<RenderThread> mLoaderRenderThread;
 
     std::vector<RenderThread*> mAdditionalPostLoadRenderThreads;

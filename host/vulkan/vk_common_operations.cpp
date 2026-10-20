@@ -81,18 +81,6 @@ constexpr size_t kPageSize = 1u << kPageBits;
 
 static std::optional<std::string> sMemoryLogPath = std::nullopt;
 
-const char* string_AstcEmulationMode(AstcEmulationMode mode) {
-    switch (mode) {
-        case AstcEmulationMode::Disabled:
-            return "Disabled";
-        case AstcEmulationMode::Cpu:
-            return "Cpu";
-        case AstcEmulationMode::Gpu:
-            return "Gpu";
-    }
-    return "Unknown";
-}
-
 static bool readbackFromR8G8B8A8WithFormatChange(const uint8_t* srcRgba, GfxstreamFormat dstFormat, int width,
                                  int height, void* outPixels) {
     if (dstFormat == GfxstreamFormat::R8G8B8_UNORM) {
@@ -1697,10 +1685,6 @@ void VkEmulation::initFeatures(Features features) {
         GFXSTREAM_INFO("    useVulkanNativeSwapchain: %s",
                        features.useVulkanNativeSwapchain ? "true" : "false");
         GFXSTREAM_INFO("    enable guestRenderDoc: %s", features.guestRenderDoc ? "true" : "false");
-        GFXSTREAM_INFO("    ASTC LDR emulation mode: %s",
-                       string_AstcEmulationMode(features.astcLdrEmulationMode));
-        GFXSTREAM_INFO("    enable ETC2 emulation: %s",
-                       features.enableEtc2Emulation ? "true" : "false");
         GFXSTREAM_INFO("    enable Ycbcr emulation: %s",
                        features.enableYcbcrEmulation ? "true" : "false");
         GFXSTREAM_INFO("    guestVulkanOnly: %s", features.guestVulkanOnly ? "true" : "false");
@@ -1718,8 +1702,6 @@ void VkEmulation::initFeatures(Features features) {
     mUseDeferredCommands = features.deferredCommands;
     mUseCreateResourcesWithRequirements = features.createResourceWithRequirements;
     mGuestRenderDoc = std::move(features.guestRenderDoc);
-    mAstcLdrEmulationMode = features.astcLdrEmulationMode;
-    mEnableEtc2Emulation = features.enableEtc2Emulation;
     mEnableYcbcrEmulation = features.enableYcbcrEmulation;
     mGuestVulkanOnly = features.guestVulkanOnly;
     mUseDedicatedAllocations = features.useDedicatedAllocations;
@@ -1908,6 +1890,10 @@ const gfxstream::host::FeatureSet& VkEmulation::getFeatures() const { return mFe
 
 void VkEmulation::setFeatures(const gfxstream::host::FeatureSet& features) {
     mFeatures = features;
+    mAstcLdrEmulationMode = mFeatures.VulkanAstcEmulation.enabled()
+                                ? AstcEmulationMode::Gpu
+                                : AstcEmulationMode::Disabled;
+    mEnableEtc2Emulation = mFeatures.VulkanEtc2Emulation.enabled();
 
     // Some features may require changes based on other features, system and drivers
 
