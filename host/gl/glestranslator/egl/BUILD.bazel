@@ -19,7 +19,7 @@ objc_library(
         # objc_library enables by default.
         "-fno-objc-arc",
     ],
-    defines = GFXSTREAM_HOST_DEFINES,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     sdk_frameworks = [
         "IOSurface",
         "AppKit",
@@ -62,9 +62,9 @@ cc_library(
         "//conditions:default": [],
     }),
     copts = GFXSTREAM_HOST_COPTS,
-    defines = GFXSTREAM_HOST_DEFINES,
     includes = ["glestranslator/egl"],
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         "//common/base:gfxstream_common_base",
         "//host:gfxstream_backend_headers",
@@ -139,8 +139,8 @@ cc_library(
         "-Wno-inconsistent-missing-override",
         "-Wno-return-type-c-linkage",
     ],
-    defines = GFXSTREAM_HOST_DEFINES,
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     textual_hdrs = [
         "client_api_exts.in",
     ],
