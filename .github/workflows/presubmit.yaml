@@ -6,9 +6,6 @@ on:
     branches-ignore:
       - main  # push events to main branch occur after PRs are merged, when the same checks were run
 
-permissions:
-  contents: read
-
 concurrency:
   # limits the workflow to a single run per branch/PR
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,14 +18,10 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      with:
-        # No step needs the token afterwards, so do not leave it
-        # behind in .git/config.
-        persist-credentials: false
     - name: Install go
-      uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      uses: actions/setup-go@v6
       with:
-        go-version: 'stable'
+        go-version: '1.23.1'
     - name: Install buildozer
       run: go install github.com/bazelbuild/buildtools/buildozer@latest
     - name: Validate formatting
@@ -47,16 +40,9 @@ jobs:
           exit 1;
         fi
 
-  run-gfxstream-bazel-lavapipe-tests:
+  run-gfxstream-bazel-tests:
     uses: ./.github/workflows/presubmit_bazel.yml
     with:
-      additional-bazel-args: --graphics_drivers=gles_angle_vulkan_lavapipe
-      runner: ubuntu-22.04
-
-  run-gfxstream-bazel-swiftshader-tests:
-    uses: ./.github/workflows/presubmit_bazel.yml
-    with:
-      additional-bazel-args: --graphics_drivers=gles_angle_vulkan_swiftshader
       runner: ubuntu-22.04
 
   run-gfxstream-bazel-tests-asan:
@@ -64,7 +50,7 @@ jobs:
     with:
       # TODO(b/475886246): fix and remove `detect_leaks=0`
       # TODO(b/475885975): fix and remove `detect_odr_violation=0`
-      additional-bazel-args: --graphics_drivers=gles_angle_vulkan_swiftshader --config=asan --test_env=ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0
+      additional-bazel-args: --config=asan --test_env="ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0"
       runner: ubuntu-22.04
 
   run-gfxstream-bazel-tests-arm:
@@ -74,59 +60,17 @@ jobs:
       # The arm runner is too slow:
       run-tests: false
 
-  run-gfxstream-bazel-build-macos:
-    uses: ./.github/workflows/presubmit_bazel.yml
-    with:
-      runner: macos-26
-      # macOS can not build the full target graph: the Linux-only mesa/libdrm
-      # guest dependencies and swiftshader's bundled LLVM (which has no macOS
-      # config) do not build on Darwin. Build the host backend libraries, which
-      # are the macOS deliverable and mirror the CMake/Meson host builds below.
-      build-targets: >-
-        //host:gfxstream_backend_static
-        //host:gfxstream_backend_shared
-        //host:gfxstream_backend
-      # Nothing is run yet: this job exists to keep the macOS host build
-      # compiling. Tests need a graphics driver environment that macOS does not
-      # have here yet.
-      run-tests: false
-
   run-gfxstream-cmake-build:
     runs-on: ubuntu-22.04
     steps:
     - name: Free disk space
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+      uses: jlumbroso/free-disk-space@v1.3.1
       with:
         tool-cache: true
     - name: Checkout repository
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      with:
-        # No step needs the token afterwards, so do not leave it
-        # behind in .git/config.
-        persist-credentials: false
     - name: Install toolchain dependencies
       run: sudo bash toolchain/cmake/install_toolchain_dependencies.sh
-    - name: Configure Build
-      run: |
-        mkdir build && \
-        cd build && \
-        cmake .. -G Ninja
-    - name: Build
-      run: |
-        cd build && \
-        ninja
-
-  run-gfxstream-cmake-build-macos:
-    runs-on: macos-26
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      with:
-        # No step needs the token afterwards, so do not leave it
-        # behind in .git/config.
-        persist-credentials: false
-    - name: Install toolchain dependencies
-      run: brew install cmake ninja
     - name: Configure Build
       run: |
         mkdir build && \
@@ -141,38 +85,13 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: Free disk space
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+      uses: jlumbroso/free-disk-space@v1.3.1
       with:
         tool-cache: true
     - name: Checkout repository
       uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      with:
-        # No step needs the token afterwards, so do not leave it
-        # behind in .git/config.
-        persist-credentials: false
     - name: Install toolchain dependencies
       run: sudo bash toolchain/meson/install_toolchain_dependencies.sh
-    - name: Configure Build
-      run: |
-        meson setup \
-          -Ddefault_library=static \
-          -Dgfxstream-build=host \
-          build
-    - name: Build
-      run: |
-        meson compile -C build
-
-  run-gfxstream-meson-build-macos:
-    runs-on: macos-26
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      with:
-        # No step needs the token afterwards, so do not leave it
-        # behind in .git/config.
-        persist-credentials: false
-    - name: Install toolchain dependencies
-      run: brew install meson ninja molten-vk vulkan-loader
     - name: Configure Build
       run: |
         meson setup \
@@ -190,13 +109,10 @@ jobs:
         shell: msys2 {0}
     steps:
       - name: Checkout current PR branch
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          # No step needs the token afterwards, so do not leave it
-          # behind in .git/config.
-          persist-credentials: false
-      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2.32.0
+      - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           update: true

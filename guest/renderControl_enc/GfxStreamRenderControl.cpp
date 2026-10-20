@@ -115,7 +115,6 @@ int32_t renderControlInit(GfxStreamConnectionManager* mgr, void* vkInfo) {
         rcEnc->queryAndSetReadColorBufferDma();
         rcEnc->queryAndSetHWCMultiConfigs();
         rcEnc->queryAndSetHWCColorTransform();
-        rcEnc->queryAndSetHWCPowerDisplayModeSupport();
         rcEnc->queryAndSetVulkanAuxCommandBufferMemory();
         rcEnc->queryVersion();
 

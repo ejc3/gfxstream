@@ -40,7 +40,6 @@ void signalSemaphore(StateBlock* stateBlock, VkSemaphore unboxed_semaphore);
 
 bool loadBufferContent(gfxstream::Stream* stream, StateBlock* stateBlock, VkBuffer buffer,
                        const BufferInfo* bufferInfo);
-bool loadMappedMemoryContent(gfxstream::Stream* stream, MemoryInfo* memoryInfo, VkDeviceSize size);
 }  // namespace vk
 }  // namespace host
 }  // namespace gfxstream

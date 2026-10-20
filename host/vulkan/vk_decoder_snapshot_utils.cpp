@@ -14,11 +14,6 @@
 
 #include "vk_decoder_snapshot_utils.h"
 
-#include <algorithm>
-#include <cstring>
-#include <utility>
-#include <vector>
-
 #include "gfxstream/common/logging.h"
 #include "vk_common_operations.h"
 #include "vk_utils.h"
@@ -58,9 +53,9 @@ uint32_t GetMemoryType(const PhysicalDeviceInfo& physicalDevice,
 
 VkExtent3D getMipmapExtent(VkExtent3D baseExtent, uint32_t mipLevel) {
     return VkExtent3D{
-        .width = std::max<uint32_t>(baseExtent.width >> mipLevel, 1u),
-        .height = std::max<uint32_t>(baseExtent.height >> mipLevel, 1u),
-        .depth = std::max<uint32_t>(baseExtent.depth >> mipLevel, 1u),
+        .width = baseExtent.width >> mipLevel,
+        .height = baseExtent.height >> mipLevel,
+        .depth = baseExtent.depth,
     };
 }
 
@@ -710,16 +705,6 @@ bool loadBufferContent(gfxstream::Stream* stream, StateBlock* stateBlock, VkBuff
     dispatch->vkFreeMemory(stateBlock->device, stagingMemory, nullptr);
     dispatch->vkFreeCommandBuffers(stateBlock->device, stateBlock->commandPool, 1, &commandBuffer);
     return true;
-}
-
-bool loadMappedMemoryContent(gfxstream::Stream* stream, MemoryInfo* memoryInfo, VkDeviceSize size) {
-    if (!memoryInfo || size != memoryInfo->size || !memoryInfo->ptr) {
-        return false;
-    }
-
-    stream->read(memoryInfo->ptr, size);
-
-    return !stream->hasErrors();
 }
 
 }  // namespace vk

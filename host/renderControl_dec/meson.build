@@ -21,6 +21,7 @@ lib_composer = static_library(
   ],
   link_with: [
     lib_common_base,
+    lib_host_iostream,
     lib_common_logging,
   ],
 )

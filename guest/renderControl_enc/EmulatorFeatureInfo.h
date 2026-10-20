@@ -144,8 +144,6 @@ static const char kHWCMultiConfigs[] = "ANDROID_EMU_hwc_multi_configs";
 // HWC color transform support
 static const char kHWCColorTransform[] = "ANDROID_EMU_hwc_color_transform";
 
-static const char kHWCDisplayPowerMode[] = "ANDROID_EMU_hwc_display_power_mode";
-
 // Vulkan auxiliary command memory
 static const char kVulkanAuxCommandMemory[] = "ANDROID_EMU_vulkan_aux_command_memory";
 
@@ -180,7 +178,6 @@ struct EmulatorFeatureInfo {
         hasReadColorBufferDma(false),
         hasHWCMultiConfigs(false),
         hasHWCColorTransform(false),
-        hasHWCDisplayPowerMode(false),
         hasVulkanAuxCommandMemory(false)
     { }
 
@@ -211,7 +208,6 @@ struct EmulatorFeatureInfo {
     bool hasReadColorBufferDma;
     bool hasHWCMultiConfigs;
     bool hasHWCColorTransform;
-    bool hasHWCDisplayPowerMode;
     bool hasVulkanAuxCommandMemory; // This feature tracks if vulkan command buffers should be stored in an auxiliary shared memory
 };
 

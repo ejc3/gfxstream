@@ -420,37 +420,32 @@ bool TextureDraw::drawImpl(GLuint texture, float rotation, float dx, float dy, f
         s_gles2.glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     }
 
-    const bool hasGuestDisplay = (scaleX > 0.0f && scaleY > 0.0f);
-    if (hasGuestDisplay) {
-        // setup the |texture| and uniform values.
-        s_gles2.glActiveTexture(GL_TEXTURE0);
-        s_gles2.glBindTexture(GL_TEXTURE_2D, texture);
-        s_gles2.glUniform1i(mTextureSlot, 0);
-        s_gles2.glUniform1i(mComposeMode, HWC2_COMPOSITION_DEVICE);
-        s_gles2.glUniform2f(mTranslationSlot, dx, dy);
-        s_gles2.glUniform2f(mScaleSlot, scaleX, scaleY);
+    // setup the |texture| and uniform values.
+    s_gles2.glActiveTexture(GL_TEXTURE0);
+    s_gles2.glBindTexture(GL_TEXTURE_2D, texture);
+    s_gles2.glUniform1i(mTextureSlot, 0);
+    s_gles2.glUniform1i(mComposeMode, HWC2_COMPOSITION_DEVICE);
+    s_gles2.glUniform2f(mTranslationSlot, dx, dy);
+    s_gles2.glUniform2f(mScaleSlot, scaleX, scaleY);
 
-        if (colorTransform.has_value()) {
-            s_gles2.glUniformMatrix4fv(mColorTransform, 1, GL_FALSE, &(colorTransform.value()[0]));
-        } else {
-            s_gles2.glUniformMatrix4fv(mColorTransform, 1, GL_FALSE, kIdentityMatrix);
-        }
+    if (colorTransform.has_value()) {
+        s_gles2.glUniformMatrix4fv(mColorTransform, 1, GL_FALSE, &(colorTransform.value()[0]));
+    } else {
+        s_gles2.glUniformMatrix4fv(mColorTransform, 1, GL_FALSE, kIdentityMatrix);
+    }
 
-        s_gles2.glDrawElements(GL_TRIANGLES, kIndicesPerDraw, GL_UNSIGNED_BYTE,
-                               (const GLvoid*)indexShift);
+    s_gles2.glDrawElements(GL_TRIANGLES, kIndicesPerDraw, GL_UNSIGNED_BYTE,
+                           (const GLvoid*)indexShift);
 
-        if (colorTransform.has_value()) {
-            // Reset color transform to identity, if set
-            s_gles2.glUniformMatrix4fv(mColorTransform, 1, GL_FALSE, kIdentityMatrix);
-        }
+    if (colorTransform.has_value()) {
+        // Reset color transform to identity, if set
+        s_gles2.glUniformMatrix4fv(mColorTransform, 1, GL_FALSE, kIdentityMatrix);
     }
 
     if (wantOverlay) {
         mMaskLayer.draw(mProgram, mScaleSlot, indexShift);
         // Reset to the "normal" texture
-        if (hasGuestDisplay) {
-            s_gles2.glBindTexture(GL_TEXTURE_2D, texture);
-        }
+        s_gles2.glBindTexture(GL_TEXTURE_2D, texture);
     }
 
 #ifdef DEBUG_TEXTURE_DRAW

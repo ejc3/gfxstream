@@ -149,9 +149,9 @@ class GfxstreamEnd2EndVkTest : public GfxstreamEnd2EndTest {
         const vkhpp::CommandBufferBeginInfo commandBufferBeginInfo = {
             .flags = vkhpp::CommandBufferUsageFlagBits::eOneTimeSubmit,
         };
-        GFXSTREAM_EXPECT_VKHPP_RESULT(commandBuffer->begin(commandBufferBeginInfo));
+        commandBuffer->begin(commandBufferBeginInfo);
         GFXSTREAM_EXPECT(func(commandBuffer));
-        GFXSTREAM_EXPECT_VKHPP_RESULT(commandBuffer->end());
+        commandBuffer->end();
 
         std::vector<vkhpp::CommandBuffer> commandBufferHandles;
         commandBufferHandles.push_back(*commandBuffer);
@@ -180,8 +180,8 @@ class GfxstreamEnd2EndVkTest : public GfxstreamEnd2EndTest {
             submitInfo.signalSemaphoreCount = static_cast<uint32_t>(semaphoreHandlesSignal.size());
             submitInfo.pSignalSemaphores = semaphoreHandlesSignal.data();
         }
-        GFXSTREAM_EXPECT_VKHPP_RESULT(vk.queue.submit(submitInfo));
-        GFXSTREAM_EXPECT_VKHPP_RESULT(vk.queue.waitIdle());
+        vk.queue.submit(submitInfo);
+        vk.queue.waitIdle();
         return Ok{};
     }
 
@@ -233,12 +233,11 @@ class GfxstreamEnd2EndVkTest : public GfxstreamEnd2EndTest {
             std::memcpy(mapped, data, dataSize);
 
             if (!(bufferMemoryProperties & vkhpp::MemoryPropertyFlagBits::eHostVisible)) {
-                GFXSTREAM_EXPECT_VKHPP_RESULT(
-                    vk.device->flushMappedMemoryRanges(vkhpp::MappedMemoryRange{
-                        .memory = *bufferMemory,
-                        .offset = 0,
-                        .size = VK_WHOLE_SIZE,
-                    }));
+                vk.device->flushMappedMemoryRanges(vkhpp::MappedMemoryRange{
+                    .memory = *bufferMemory,
+                    .offset = 0,
+                    .size = VK_WHOLE_SIZE,
+                });
             }
 
             vk.device->unmapMemory(*bufferMemory);
@@ -396,7 +395,7 @@ class GfxstreamEnd2EndVkTest : public GfxstreamEnd2EndTest {
         };
         auto imageMemory =
             GFXSTREAM_EXPECT_VKHPP_RV(vk.device->allocateMemoryUnique(imageMemoryAllocateInfo));
-        GFXSTREAM_EXPECT_VKHPP_RESULT(vk.device->bindImageMemory(*image, *imageMemory, 0));
+        vk.device->bindImageMemory(*image, *imageMemory, 0);
 
         const vkhpp::ImageViewCreateInfo imageViewCreateInfo = {
             .pNext = ahbIsYuv ? &*samplerConversionInfo : nullptr,
@@ -497,7 +496,7 @@ class GfxstreamEnd2EndVkTest : public GfxstreamEnd2EndTest {
         auto imageMemory =
             GFXSTREAM_EXPECT_VKHPP_RV(vk.device->allocateMemoryUnique(imageMemoryAllocateInfo));
 
-        GFXSTREAM_EXPECT_VKHPP_RESULT(vk.device->bindImageMemory(*image, *imageMemory, 0));
+        vk.device->bindImageMemory(*image, *imageMemory, 0);
 
         const vkhpp::ImageViewCreateInfo imageViewCreateInfo = {
             .image = *image,
@@ -1391,8 +1390,8 @@ TEST_P(GfxstreamEnd2EndVkTest, ImportAHB) {
     const vkhpp::CommandBufferBeginInfo commandBufferBeginInfo = {
         .flags = vkhpp::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
-    ASSERT_THAT(commandBuffer->begin(commandBufferBeginInfo), IsVkSuccess());
-    ASSERT_THAT(commandBuffer->end(), IsVkSuccess());
+    commandBuffer->begin(commandBufferBeginInfo);
+    commandBuffer->end();
 
     std::vector<vkhpp::CommandBuffer> commandBufferHandles;
     commandBufferHandles.push_back(*commandBuffer);
@@ -1404,7 +1403,7 @@ TEST_P(GfxstreamEnd2EndVkTest, ImportAHB) {
         .commandBufferCount = static_cast<uint32_t>(commandBufferHandles.size()),
         .pCommandBuffers = commandBufferHandles.data(),
     };
-    ASSERT_THAT(queue.submit(submitInfo, *transferFence), IsVkSuccess());
+    queue.submit(submitInfo, *transferFence);
 
     auto waitResult = device->waitForFences(*transferFence, VK_TRUE, AsVkTimeout(3s));
     ASSERT_THAT(waitResult, IsVkSuccess());
@@ -1596,8 +1595,8 @@ TEST_P(GfxstreamEnd2EndVkTest, HostMemory) {
         .offset = 0,
         .size = kSize,
     };
-    ASSERT_THAT(device->flushMappedMemoryRanges({range}), IsVkSuccess());
-    ASSERT_THAT(device->invalidateMappedMemoryRanges({range}), IsVkSuccess());
+    device->flushMappedMemoryRanges({range});
+    device->invalidateMappedMemoryRanges({range});
 
     for (uint32_t i = 0; i < kSize; ++i) {
         EXPECT_THAT(bytes[i], Eq(0xFF));
@@ -1749,7 +1748,7 @@ TEST_P(GfxstreamEnd2EndVkTest, DescriptorSetAllocFreeReset) {
 
     auto bundle = GFXSTREAM_ASSERT(AllocateDescriptorBundle(*device, kNumSets));
 
-    ASSERT_THAT(device->resetDescriptorPool(*bundle.descriptorPool), IsVkSuccess());
+    device->resetDescriptorPool(*bundle.descriptorPool);
 
     // The double free should also work
     auto descriptorSetHandles = AsHandles(bundle.descriptorSets);
@@ -1758,7 +1757,7 @@ TEST_P(GfxstreamEnd2EndVkTest, DescriptorSetAllocFreeReset) {
     // Alloc/reset/free again should also work
     GFXSTREAM_ASSERT(ReallocateDescriptorBundleSets(*device, kNumSets, &bundle));
 
-    ASSERT_THAT(device->resetDescriptorPool(*bundle.descriptorPool), IsVkSuccess());
+    device->resetDescriptorPool(*bundle.descriptorPool);
 
     descriptorSetHandles = AsHandles(bundle.descriptorSets);
     EXPECT_THAT(device->freeDescriptorSets(*bundle.descriptorPool, kNumSets, descriptorSetHandles.data()), IsVkSuccess());
@@ -2193,13 +2192,13 @@ TEST_P(GfxstreamEnd2EndVkTest, MultiThreadedResetCommandBuffer) {
 
             constexpr const int kNumIterations = 1000;
             for (int i = 0; i < kNumIterations; i++) {
-                ASSERT_THAT(commandBuffer->reset(), IsVkSuccess());
+                commandBuffer->reset();
                 const vkhpp::CommandBufferBeginInfo commandBufferBeginInfo = {
                     .flags = vkhpp::CommandBufferUsageFlagBits::eOneTimeSubmit,
                 };
-                ASSERT_THAT(commandBuffer->begin(commandBufferBeginInfo), IsVkSuccess());
+                commandBuffer->begin(commandBufferBeginInfo);
 
-                ASSERT_THAT(commandBuffer->end(), IsVkSuccess());
+                commandBuffer->end();
 
                 std::vector<vkhpp::CommandBuffer> commandBufferHandles;
                 commandBufferHandles.push_back(*commandBuffer);
@@ -2210,11 +2209,11 @@ TEST_P(GfxstreamEnd2EndVkTest, MultiThreadedResetCommandBuffer) {
                 };
                 {
                     std::lock_guard<std::mutex> qm(queue_mutex);
-                    ASSERT_THAT(queue.submit(submitInfo, *transferFence), IsVkSuccess());
+                    queue.submit(submitInfo, *transferFence);
                 }
                 auto waitResult = device->waitForFences(*transferFence, VK_TRUE, AsVkTimeout(3s));
                 ASSERT_THAT(waitResult, IsVkSuccess());
-                ASSERT_THAT(device->resetFences(*transferFence), IsVkSuccess());
+                device->resetFences(*transferFence);
             }
         });
     }
@@ -2292,6 +2291,8 @@ TEST_P(GfxstreamEnd2EndVkTest, UseDoubleQueuesAndSynchronizeCorrectly) {
         .pNext = nullptr,
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &deviceQueueCreateInfo,
+        .enabledLayerCount = 0,
+        .ppEnabledLayerNames = nullptr,
         .enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
         .ppEnabledExtensionNames = deviceExtensions.data(),
     };
@@ -2353,7 +2354,7 @@ TEST_P(GfxstreamEnd2EndVkTest, UseDoubleQueuesAndSynchronizeCorrectly) {
     const vkhpp::CommandBufferBeginInfo commandBufferBeginInfo = {
         .flags = vkhpp::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
-    ASSERT_THAT(commandBufferWriteInto->begin(commandBufferBeginInfo), IsVkSuccess());
+    commandBufferWriteInto->begin(commandBufferBeginInfo);
     std::vector<uint8_t> dataToWrite = utils::getRandomNByteData(100);
     commandBufferWriteInto->updateBuffer(sourceBufferWithMemory.buffer.get(), 0, dataToWrite.size(),
                                          dataToWrite.data());
@@ -2368,9 +2369,9 @@ TEST_P(GfxstreamEnd2EndVkTest, UseDoubleQueuesAndSynchronizeCorrectly) {
     commandBufferWriteInto->pipelineBarrier(vkhpp::PipelineStageFlagBits::eTransfer,
                                             vkhpp::PipelineStageFlagBits::eTransfer,
                                             vkhpp::DependencyFlags(), {}, bufferBarrier, {});
-    ASSERT_THAT(commandBufferWriteInto->end(), IsVkSuccess());
+    commandBufferWriteInto->end();
 
-    ASSERT_THAT(commandBufferCopy->begin(commandBufferBeginInfo), IsVkSuccess());
+    commandBufferCopy->begin(commandBufferBeginInfo);
     vkhpp::BufferCopy copyRegion{};
     copyRegion.srcOffset = 0;
     copyRegion.dstOffset = 0;
@@ -2378,10 +2379,10 @@ TEST_P(GfxstreamEnd2EndVkTest, UseDoubleQueuesAndSynchronizeCorrectly) {
     vkhpp::ArrayProxy<const vkhpp::BufferCopy> copyRegions = copyRegion;
     commandBufferCopy->copyBuffer(sourceBufferWithMemory.buffer.get(),
                                   destBufferWithMemory.buffer.get(), copyRegions);
-    ASSERT_THAT(commandBufferCopy->end(), IsVkSuccess());
-    ASSERT_THAT(queue1.submit(submitInfoWrite, nullptr), IsVkSuccess());
-    ASSERT_THAT(queue2.submit(submitInfoCopy, nullptr), IsVkSuccess());
-    ASSERT_THAT(queue2.waitIdle(), IsVkSuccess());
+    commandBufferCopy->end();
+    queue1.submit(submitInfoWrite, nullptr);
+    queue2.submit(submitInfoCopy, nullptr);
+    queue2.waitIdle();
     void* mappedMemory = GFXSTREAM_ASSERT_VKHPP_RV(
         device->mapMemory(*destBufferWithMemory.bufferMemory, 0, kBufferSize));
     uint8_t* readData = static_cast<uint8_t*>(mappedMemory);

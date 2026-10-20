@@ -17,11 +17,7 @@ else
   inc_glm = include_directories('glm/include')
 endif
 
-if host_machine.system() != 'darwin'
-  inc_x11_headers = include_directories('x11/include')
-else
-  inc_x11_headers = include_directories()
-endif
+inc_x11_headers = include_directories('x11/include')
 
 inc_opengl_headers = include_directories('opengl/include')
 inc_common_opengl = include_directories('opengl/include')

@@ -56,7 +56,7 @@ class Compositor {
     };
     std::optional<DisplayLayout> getDisplayLayout() const { return m_displayLayout; }
     void setDisplayLayout(int screenWidth, int screenHeight, const Rect& displayRect) {
-        if (screenWidth > 0 && screenHeight > 0) {
+        if (displayRect.size.w > 0 && displayRect.size.h > 0) {
             DisplayLayout layout;
             layout.screenWidth = screenWidth;
             layout.screenHeight = screenHeight;

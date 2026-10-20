@@ -175,10 +175,9 @@ std::optional<VirtioGpuResource> VirtioGpuResource::Create(
             return std::nullopt;
         }
         auto format = *formatOpt;
-        const bool linear = (args->bind & VIRGL_BIND_LINEAR) != 0;
 
         if (!FrameBuffer::getFB()->createColorBufferWithResourceHandle(args->width, args->height,
-                                                                       format, args->handle, linear)) {
+                                                                       format, args->handle)) {
             const std::string formatString = ToString(format);
             GFXSTREAM_ERROR("Failed to create color buffer with resource handle %d. (%dx%d, format: %s)",
                             args->handle, args->width, args->height, formatString.c_str());
@@ -239,9 +238,6 @@ std::optional<VirtioGpuResource> VirtioGpuResource::Create(
 
     resource.mId = resourceId;
     resource.mCreateBlobArgs = *createBlobArgs;
-    if (contextId != 0) {
-        resource.mCreateContextId = contextId;
-    }
 
     if (createBlobArgs->blob_id == 0) {
         RingBlobMemory memory;
@@ -255,42 +251,42 @@ std::optional<VirtioGpuResource> VirtioGpuResource::Create(
             return std::nullopt;
         }
         resource.mBlobMemory.emplace(std::move(memory));
-    } else if (features.ExternalBlob.enabled() &&
-               createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST &&
-               (createBlobArgs->blob_flags & STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE)) {
+    } else if (features.ExternalBlob.enabled()) {
+        if (createBlobArgs->blob_mem == STREAM_BLOB_MEM_GUEST &&
+            (createBlobArgs->blob_flags & STREAM_BLOB_FLAG_CREATE_GUEST_HANDLE)) {
 #if defined(__ANDROID__)
-        ExternalObjectManager::get()->addBlobDescriptorInfo(
-            contextId, createBlobArgs->blob_id, handle->os_handle, handle->handle_type, 0,
-            std::nullopt);
+            ExternalObjectManager::get()->addBlobDescriptorInfo(
+                contextId, createBlobArgs->blob_id, handle->os_handle, handle->handle_type, 0,
+                std::nullopt);
 #elif defined(__linux__) || defined(__QNX__)
-        ManagedDescriptor managedHandle(handle->os_handle);
-        ExternalObjectManager::get()->addBlobDescriptorInfo(
-            contextId, createBlobArgs->blob_id, std::move(managedHandle), handle->handle_type, 0,
-            std::nullopt);
+            ManagedDescriptor managedHandle(handle->os_handle);
+            ExternalObjectManager::get()->addBlobDescriptorInfo(
+                contextId, createBlobArgs->blob_id, std::move(managedHandle), handle->handle_type,
+                0, std::nullopt);
 #else
-        GFXSTREAM_ERROR("Failed to create blob: unimplemented external blob.");
-        return std::nullopt;
+            GFXSTREAM_ERROR("Failed to create blob: unimplemented external blob.");
+            return std::nullopt;
 #endif
-    } else {
-        // ExternalBlob picks the map_blob transport (descriptor vs. host-visible mapping); it
-        // does not gate scanout, so a ColorBuffer's descriptor may be registered regardless of
-        // the feature. Probe for it before falling back to a mapping.
-        if (!descriptorInfoOpt) {
-            descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
-                contextId, createBlobArgs->blob_id);
-        }
-        if (descriptorInfoOpt) {
-            resource.mBlobMemory.emplace(
-                std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
         } else {
-            auto memoryMappingOpt =
-                ExternalObjectManager::get()->removeMapping(contextId, createBlobArgs->blob_id);
-            if (!memoryMappingOpt) {
-                GFXSTREAM_ERROR("Failed to create blob: no external blob descriptor or mapping.");
+            if (!descriptorInfoOpt) {
+                descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
+                    contextId, createBlobArgs->blob_id);
+            }
+            if (!descriptorInfoOpt) {
+                GFXSTREAM_ERROR("Failed to create blob: no external blob descriptor.");
                 return std::nullopt;
             }
-            resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
+            resource.mBlobMemory.emplace(
+                std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
         }
+    } else {
+        auto memoryMappingOpt =
+            ExternalObjectManager::get()->removeMapping(contextId, createBlobArgs->blob_id);
+        if (!memoryMappingOpt) {
+            GFXSTREAM_ERROR("Failed to create blob: no external blob mapping.");
+            return std::nullopt;
+        }
+        resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
     }
 
     return resource;
@@ -890,26 +886,28 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
             }
             resourceSnapshot.mutable_ring_blob()->Swap(&*snapshotRingBlobOpt);
         } else if (std::holds_alternative<ExternalMemoryInfo>(*mBlobMemory)) {
+            if (!mLatestAttachedContext) {
+                GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob context?", mId);
+                return std::nullopt;
+            }
             if (!mCreateBlobArgs) {
                 GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob args?", mId);
                 return std::nullopt;
             }
             auto snapshotDescriptorInfo = resourceSnapshot.mutable_external_memory_descriptor();
-            auto contextId = mCreateContextId ? mCreateContextId : mLatestAttachedContext;
-            if (contextId) {
-                snapshotDescriptorInfo->set_context_id(*contextId);
-            }
+            snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
             snapshotDescriptorInfo->set_blob_id(mCreateBlobArgs->blob_id);
         } else if (std::holds_alternative<ExternalMemoryMapping>(*mBlobMemory)) {
+            if (!mLatestAttachedContext) {
+                GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob context?", mId);
+                return std::nullopt;
+            }
             if (!mCreateBlobArgs) {
                 GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob args?", mId);
                 return std::nullopt;
             }
             auto snapshotDescriptorInfo = resourceSnapshot.mutable_external_memory_mapping();
-            auto contextId = mCreateContextId ? mCreateContextId : mLatestAttachedContext;
-            if (contextId) {
-                snapshotDescriptorInfo->set_context_id(*contextId);
-            }
+            snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
             snapshotDescriptorInfo->set_blob_id(mCreateBlobArgs->blob_id);
         }
     }
@@ -966,53 +964,30 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
         resource.mBlobMemory.emplace(std::move(*resourceRingBlobOpt));
     } else if (resourceSnapshot.has_external_memory_descriptor()) {
         const auto& snapshotDescriptorInfo = resourceSnapshot.external_memory_descriptor();
-        if (snapshotDescriptorInfo.has_context_id()) {
-            resource.mCreateContextId = snapshotDescriptorInfo.context_id();
-            auto descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
-                snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
-            if (!descriptorInfoOpt) {
-                GFXSTREAM_ERROR("Failed to restore resource: failed to find blob descriptor info.");
-                return std::nullopt;
-            }
 
-            resource.mBlobMemory.emplace(
-                std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
+        auto descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
+            snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
+        if (!descriptorInfoOpt) {
+            GFXSTREAM_ERROR("Failed to restore resource: failed to find blob descriptor info.");
+            return std::nullopt;
         }
+
+        resource.mBlobMemory.emplace(
+            std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
     } else if (resourceSnapshot.has_external_memory_mapping()) {
         const auto& snapshotDescriptorInfo = resourceSnapshot.external_memory_mapping();
-        if (snapshotDescriptorInfo.has_context_id()) {
-            resource.mCreateContextId = snapshotDescriptorInfo.context_id();
-            auto memoryMappingOpt = ExternalObjectManager::get()->removeMapping(
-                snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
-            if (memoryMappingOpt) {
-                resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
-            }
+
+        auto memoryMappingOpt = ExternalObjectManager::get()->removeMapping(
+            snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
+        if (!memoryMappingOpt) {
+            GFXSTREAM_ERROR("Failed to restore resource: failed to find mapping info.");
+            return std::nullopt;
         }
-        if (!resource.mBlobMemory && resource.mCreateBlobArgs && resource.mCreateBlobArgs->size > 0) {
-            GFXSTREAM_WARNING(
-                "Restoring fallback host memory (size=%llu) for orphaned blob resource %d "
-                "(ctx=%d, blob=%llu)",
-                static_cast<unsigned long long>(resource.mCreateBlobArgs->size), resource.mId,
-                snapshotDescriptorInfo.has_context_id()
-                    ? static_cast<int>(snapshotDescriptorInfo.context_id())
-                    : -1,
-                static_cast<unsigned long long>(snapshotDescriptorInfo.blob_id()));
-            resource.mOrphanedBlobMemory =
-                std::make_shared<AlignedMemory>(65536, resource.mCreateBlobArgs->size);
-            if (resource.mOrphanedBlobMemory->addr) {
-                std::memset(resource.mOrphanedBlobMemory->addr, 0, resource.mCreateBlobArgs->size);
-                resource.mBlobMemory.emplace(HostMemInfo{
-                    .addr = resource.mOrphanedBlobMemory->addr,
-                    .caching = STREAM_RENDERER_MAP_CACHE_CACHED,
-                });
-            }
-        }
+        resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
     }
 
     if (resourceSnapshot.has_latest_attached_context()) {
         resource.mLatestAttachedContext = resourceSnapshot.latest_attached_context();
-    } else {
-        resource.mLatestAttachedContext = std::nullopt;
     }
 
     resource.mAttachedToContexts.insert(resourceSnapshot.attached_contexts().begin(),

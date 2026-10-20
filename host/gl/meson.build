@@ -1,6 +1,12 @@
 # Copyright 2023 Android Open Source Project
 # SPDX-License-Identifier: Apache-2.0
 
+inc_gl_server = include_directories('.')
+inc_gl_snapshot = include_directories('glsnapshot')
+
+# Needs forward declaration.
+inc_gl_openglesdispatch = include_directories('OpenGLESDispatch/include')
+
 # GLES translator
 subdir('glestranslator')
 
@@ -73,6 +79,7 @@ lib_gl_server = static_library(
     lib_host_common,
     lib_host_decoder_common,
     lib_host_features,
+    lib_host_iostream,
     lib_host_library,
   ],
 )

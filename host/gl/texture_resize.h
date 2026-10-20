@@ -72,11 +72,10 @@ private:
     unsigned int mFactor;
     Framebuffer mFBWidth;
     Framebuffer mFBHeight;
-    GLuint mVertexBuffer = 0;
+    GLuint mVertexBuffer;
     GLenum mTextureDataType;
     GLenum mTextureFilteringMode = GL_LINEAR;
     std::unique_ptr<GenericResizer> mGenericResizer;
-    bool mIsInitialized = false;
 };
 
 }  // namespace gl

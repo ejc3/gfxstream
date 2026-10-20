@@ -265,9 +265,6 @@ static const char* kHWCMultiConfigs= "ANDROID_EMU_hwc_multi_configs";
 // HWC color transform support
 static const char kHWCColorTransform[] = "ANDROID_EMU_hwc_color_transform";
 
-// Display Power Mode support
-static const char* kHWCDisplayPowerMode = "ANDROID_EMU_hwc_display_power_mode";
-
 static constexpr const uint64_t kInvalidPUID = std::numeric_limits<uint64_t>::max();
 
 static void rcTriggerWait(uint64_t glsync_ptr,
@@ -476,7 +473,6 @@ static EGLint rcGetGLString(EGLenum name, void* buffer, EGLint bufferSize) {
     bool readColorBufferDma = directMemEnabled && hasSharedSlotsHostMemoryAllocatorEnabled;
     bool hwcMultiConfigs = features.HwcMultiConfigs.enabled();
     bool hwcColorTransform = true;  // To ensure old host emulators won't advertise the support
-    bool hwcDisplayPowerMode = true;
 
     if (isChecksumEnabled && name == GL_EXTENSIONS) {
         glStr += ChecksumCalculator::getMaxVersionStr();
@@ -622,11 +618,6 @@ static EGLint rcGetGLString(EGLenum name, void* buffer, EGLint bufferSize) {
 
     if (hwcColorTransform && name == GL_EXTENSIONS) {
         glStr += kHWCColorTransform;
-        glStr += " ";
-    }
-
-    if (hwcDisplayPowerMode && name == GL_EXTENSIONS) {
-        glStr += kHWCDisplayPowerMode;
         glStr += " ";
     }
 
@@ -1243,9 +1234,7 @@ static void rcSetPuid(uint64_t puid) {
     }
 
     RenderThreadInfo *tInfo = RenderThreadInfo::get();
-    tInfo->setPuid(puid);
-
-    // TODO(b/560140165): remove RenderThreadInfoVk::get and separate thread local storage
+    tInfo->m_puid = puid;
     auto* renderThreadInfoVk = vk::RenderThreadInfoVk::get();
     if (renderThreadInfoVk) {
         renderThreadInfoVk->ctx_id = puid;

@@ -742,10 +742,7 @@ DisplayVk::PostResult DisplayVk::postImpl(const Post& postCmd) {
                 }
             }
 
-            if (drawParams.displayFrame.right > drawParams.displayFrame.left &&
-                drawParams.displayFrame.bottom > drawParams.displayFrame.top) {
-                m_compositorVk->drawImage(drawParams, sourceImageInfoVk->imageView);
-            }
+            m_compositorVk->drawImage(drawParams, sourceImageInfoVk->imageView);
 
             // Draw Mask only if mask is allowed (single display mode)
             if (i == 0 && m_compositorVk->hasScreenMask() && !disableMask) {

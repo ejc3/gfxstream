@@ -57,7 +57,6 @@ std::shared_future<void> PostWorkerVk::postImpl(
     }
 
     std::vector<std::unique_ptr<ColorBufferVkImageInfo>> borrowedImages;
-    std::vector<IColorBufferRef> colorBufferRefs;
     DisplayVk::Post postCmd;
 
     auto addPostImage = [&](IColorBuffer* colorBuffer, int32_t x, int32_t y, int32_t w, int32_t h,
@@ -160,15 +159,10 @@ std::shared_future<void> PostWorkerVk::postImpl(
                     continue;
                 }
 
-                IColorBuffer* currentCb = nullptr;
-                if (currentDisplayId == 0) {
-                    currentCb = cb;
-                } else {
-                    if (auto ref = m_globalState->findColorBuffer(currentDisplayColorBufferHandle)) {
-                        currentCb = ref.get();
-                        colorBufferRefs.push_back(std::move(ref));
-                    }
-                }
+                IColorBuffer* currentCb =
+                    currentDisplayId == 0
+                        ? cb
+                        : m_globalState->findColorBuffer(currentDisplayColorBufferHandle).get();
                 if (!currentCb) {
                     continue;
                 }

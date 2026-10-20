@@ -16,7 +16,6 @@ objc_library(
     ],
     copts = GFXSTREAM_HOST_COPTS + [
         "-Wno-deprecated-declarations",
-        "-fno-objc-arc",
         "-std=c++20",
     ],
     defines = GFXSTREAM_HOST_DEFINES,

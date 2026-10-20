@@ -1432,17 +1432,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
             return sizeof(VkVideoDecodeAV1InlineSessionParametersInfoKHR);
         }
 #endif
-#ifdef VK_KHR_video_encode_feedback2
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_FEEDBACK_2_FEATURES_KHR: {
-            return sizeof(VkPhysicalDeviceVideoEncodeFeedback2FeaturesKHR);
-        }
-        case VK_STRUCTURE_TYPE_VIDEO_ENCODE_FEEDBACK_2_CAPABILITIES_KHR: {
-            return sizeof(VkVideoEncodeFeedback2CapabilitiesKHR);
-        }
-        case VK_STRUCTURE_TYPE_QUERY_POOL_VIDEO_ENCODE_PER_PARTITION_FEEDBACK_CREATE_INFO_KHR: {
-            return sizeof(VkQueryPoolVideoEncodePerPartitionFeedbackCreateInfoKHR);
-        }
-#endif
 #ifdef VK_KHR_depth_clamp_zero_one
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLAMP_ZERO_ONE_FEATURES_KHR: {
             return sizeof(VkPhysicalDeviceDepthClampZeroOneFeaturesKHR);
@@ -1451,20 +1440,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
 #ifdef VK_KHR_present_mode_fifo_latest_ready
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR: {
             return sizeof(VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR);
-        }
-#endif
-#ifdef VK_KHR_opacity_micromap
-        case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR: {
-            return sizeof(VkAccelerationStructureGeometryMicromapDataKHR);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_KHR: {
-            return sizeof(VkPhysicalDeviceOpacityMicromapFeaturesKHR);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_PROPERTIES_KHR: {
-            return sizeof(VkPhysicalDeviceOpacityMicromapPropertiesKHR);
-        }
-        case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_TRIANGLES_OPACITY_MICROMAP_KHR: {
-            return sizeof(VkAccelerationStructureTrianglesOpacityMicromapKHR);
         }
 #endif
 #ifdef VK_KHR_maintenance10
@@ -1481,40 +1456,12 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
             return sizeof(VkResolveImageModeInfoKHR);
         }
 #endif
-#ifdef VK_KHR_pipeline_library_group_handles
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_KHR: {
-            return sizeof(VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR);
-        }
-#endif
 #ifdef VK_KHR_maintenance11
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_11_FEATURES_KHR: {
             return sizeof(VkPhysicalDeviceMaintenance11FeaturesKHR);
         }
         case VK_STRUCTURE_TYPE_QUEUE_FAMILY_OPTIMAL_IMAGE_TRANSFER_GRANULARITY_PROPERTIES_KHR: {
             return sizeof(VkQueueFamilyOptimalImageTransferGranularityPropertiesKHR);
-        }
-#endif
-#ifdef VK_KHR_extended_flags
-        case VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_4_KHR: {
-            return sizeof(VkFormatProperties4KHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageUsageFlags2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_CREATE_FLAGS_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageCreateFlags2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageViewUsage2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_FLAGS_FEATURES_KHR: {
-            return sizeof(VkPhysicalDeviceExtendedFlagsFeaturesKHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_STENCIL_USAGE_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageStencilUsage2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_SHARED_PRESENT_SURFACE_CAPABILITIES_2_KHR: {
-            return sizeof(VkSharedPresentSurfaceCapabilities2KHR);
         }
 #endif
 #ifdef VK_AMD_rasterization_order
@@ -1637,17 +1584,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
 #ifdef VK_IMG_relaxed_line_rasterization
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RELAXED_LINE_RASTERIZATION_FEATURES_IMG: {
             return sizeof(VkPhysicalDeviceRelaxedLineRasterizationFeaturesIMG);
-        }
-#endif
-#ifdef VK_AMD_gpa_interface
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GPA_FEATURES_AMD: {
-            return sizeof(VkPhysicalDeviceGpaFeaturesAMD);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GPA_PROPERTIES_AMD: {
-            return sizeof(VkPhysicalDeviceGpaPropertiesAMD);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GPA_PROPERTIES_2_AMD: {
-            return sizeof(VkPhysicalDeviceGpaProperties2AMD);
         }
 #endif
 #ifdef VK_AMDX_shader_enqueue
@@ -1779,11 +1715,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
 #ifdef VK_QCOM_cooperative_matrix_conversion
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_CONVERSION_FEATURES_QCOM: {
             return sizeof(VkPhysicalDeviceCooperativeMatrixConversionFeaturesQCOM);
-        }
-#endif
-#ifdef VK_QCOM_elapsed_timer_query
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ELAPSED_TIMER_QUERY_FEATURES_QCOM: {
-            return sizeof(VkPhysicalDeviceElapsedTimerQueryFeaturesQCOM);
         }
 #endif
 #ifdef VK_AMD_pipeline_compiler_control
@@ -2023,27 +1954,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
         }
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_QUEUE_PERF_HINT_PROPERTIES_QCOM: {
             return sizeof(VkPhysicalDeviceQueuePerfHintPropertiesQCOM);
-        }
-#endif
-#ifdef VK_QCOM_image_processing3
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_PROCESSING_3_FEATURES_QCOM: {
-            return sizeof(VkPhysicalDeviceImageProcessing3FeaturesQCOM);
-        }
-#endif
-#ifdef VK_QCOM_shader_multiple_wait_queues
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MULTIPLE_WAIT_QUEUES_FEATURES_QCOM: {
-            return sizeof(VkPhysicalDeviceShaderMultipleWaitQueuesFeaturesQCOM);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MULTIPLE_WAIT_QUEUES_PROPERTIES_QCOM: {
-            return sizeof(VkPhysicalDeviceShaderMultipleWaitQueuesPropertiesQCOM);
-        }
-#endif
-#ifdef VK_EXT_shader_split_barrier
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SPLIT_BARRIER_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceShaderSplitBarrierFeaturesEXT);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SPLIT_BARRIER_PROPERTIES_EXT: {
-            return sizeof(VkPhysicalDeviceShaderSplitBarrierPropertiesEXT);
         }
 #endif
 #ifdef VK_NV_cuda_kernel_launch
@@ -2659,6 +2569,11 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
             return sizeof(VkPhysicalDeviceShaderCoreBuiltinsPropertiesARM);
         }
 #endif
+#ifdef VK_EXT_pipeline_library_group_handles
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT: {
+            return sizeof(VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT);
+        }
+#endif
 #ifdef VK_EXT_dynamic_rendering_unused_attachments
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT);
@@ -2809,14 +2724,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
 #ifdef VK_EXT_shader_replicated_composites
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_REPLICATED_COMPOSITES_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceShaderReplicatedCompositesFeaturesEXT);
-        }
-#endif
-#ifdef VK_ARM_tensor_controls
-        case VK_STRUCTURE_TYPE_TENSOR_ROLLING_BACKING_CREATE_INFO_ARM: {
-            return sizeof(VkTensorRollingBackingCreateInfoARM);
-        }
-        case VK_STRUCTURE_TYPE_TENSOR_EXPLICIT_TILING_FORMAT_PROPERTIES_ARM: {
-            return sizeof(VkTensorExplicitTilingFormatPropertiesARM);
         }
 #endif
 #ifdef VK_EXT_shader_float8
@@ -2975,14 +2882,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
             return sizeof(VkPhysicalDevicePresentMeteringFeaturesNV);
         }
 #endif
-#ifdef VK_EXT_multisampled_render_to_swapchain
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SWAPCHAIN_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceMultisampledRenderToSwapchainFeaturesEXT);
-        }
-        case VK_STRUCTURE_TYPE_SWAPCHAIN_FLAGS_SURFACE_CAPABILITIES_EXT: {
-            return sizeof(VkSwapchainFlagsSurfaceCapabilitiesEXT);
-        }
-#endif
 #ifdef VK_EXT_zero_initialize_device_memory
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_DEVICE_MEMORY_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT);
@@ -3052,19 +2951,9 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
             return sizeof(VkPhysicalDeviceComputeOccupancyPriorityFeaturesNV);
         }
 #endif
-#ifdef VK_EXT_cooperative_matrix_maintenance1
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT);
-        }
-#endif
 #ifdef VK_EXT_shader_subgroup_partitioned
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_PARTITIONED_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceShaderSubgroupPartitionedFeaturesEXT);
-        }
-#endif
-#ifdef VK_EXT_shader_ocp_microscaling_types
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OCP_MICROSCALING_TYPES_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceShaderOCPMicroscalingTypesFeaturesEXT);
         }
 #endif
 #ifdef VK_VALVE_shader_mixed_float_dot_product
@@ -3094,40 +2983,6 @@ size_t goldfish_vk_extension_struct_size(VkStructureType rootType, const void* s
 #ifdef VK_EXT_primitive_restart_index
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_RESTART_INDEX_FEATURES_EXT: {
             return sizeof(VkPhysicalDevicePrimitiveRestartIndexFeaturesEXT);
-        }
-#endif
-#ifdef VK_EXT_image_tiling_control
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_TILING_CONTROL_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceImageTilingControlFeaturesEXT);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_TILING_CONTROL_CREATE_INFO_EXT: {
-            return sizeof(VkImageTilingControlCreateInfoEXT);
-        }
-#endif
-#ifdef VK_NV_cooperative_matrix_decode_vector
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_DECODE_VECTOR_FEATURES_NV: {
-            return sizeof(VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV);
-        }
-#endif
-#ifdef VK_NV_private_data_base_handle
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_BASE_HANDLE_FEATURES_NV: {
-            return sizeof(VkPhysicalDevicePrivateDataBaseHandleFeaturesNV);
-        }
-#endif
-#ifdef VK_INTEL_device_info
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INFO_PROPERTIES_INTEL: {
-            return sizeof(VkPhysicalDeviceInfoPropertiesINTEL);
-        }
-#endif
-#ifdef VK_VALVE_buffer_device_address_allocation_alignment
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_FEATURES_VALVE: {
-            return sizeof(VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentFeaturesVALVE);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_PROPERTIES_VALVE: {
-            return sizeof(VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentPropertiesVALVE);
-        }
-        case VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_ALIGNMENT_ALLOCATE_INFO_VALVE: {
-            return sizeof(VkBufferDeviceAddressAlignmentAllocateInfoVALVE);
         }
 #endif
 #ifdef VK_KHR_acceleration_structure
@@ -4564,17 +4419,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
             return sizeof(VkVideoDecodeAV1InlineSessionParametersInfoKHR);
         }
 #endif
-#ifdef VK_KHR_video_encode_feedback2
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_FEEDBACK_2_FEATURES_KHR: {
-            return sizeof(VkPhysicalDeviceVideoEncodeFeedback2FeaturesKHR);
-        }
-        case VK_STRUCTURE_TYPE_VIDEO_ENCODE_FEEDBACK_2_CAPABILITIES_KHR: {
-            return sizeof(VkVideoEncodeFeedback2CapabilitiesKHR);
-        }
-        case VK_STRUCTURE_TYPE_QUERY_POOL_VIDEO_ENCODE_PER_PARTITION_FEEDBACK_CREATE_INFO_KHR: {
-            return sizeof(VkQueryPoolVideoEncodePerPartitionFeedbackCreateInfoKHR);
-        }
-#endif
 #ifdef VK_KHR_depth_clamp_zero_one
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLAMP_ZERO_ONE_FEATURES_KHR: {
             return sizeof(VkPhysicalDeviceDepthClampZeroOneFeaturesKHR);
@@ -4583,20 +4427,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
 #ifdef VK_KHR_present_mode_fifo_latest_ready
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR: {
             return sizeof(VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR);
-        }
-#endif
-#ifdef VK_KHR_opacity_micromap
-        case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR: {
-            return sizeof(VkAccelerationStructureGeometryMicromapDataKHR);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_KHR: {
-            return sizeof(VkPhysicalDeviceOpacityMicromapFeaturesKHR);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_PROPERTIES_KHR: {
-            return sizeof(VkPhysicalDeviceOpacityMicromapPropertiesKHR);
-        }
-        case VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_TRIANGLES_OPACITY_MICROMAP_KHR: {
-            return sizeof(VkAccelerationStructureTrianglesOpacityMicromapKHR);
         }
 #endif
 #ifdef VK_KHR_maintenance10
@@ -4613,40 +4443,12 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
             return sizeof(VkResolveImageModeInfoKHR);
         }
 #endif
-#ifdef VK_KHR_pipeline_library_group_handles
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_KHR: {
-            return sizeof(VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesKHR);
-        }
-#endif
 #ifdef VK_KHR_maintenance11
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_11_FEATURES_KHR: {
             return sizeof(VkPhysicalDeviceMaintenance11FeaturesKHR);
         }
         case VK_STRUCTURE_TYPE_QUEUE_FAMILY_OPTIMAL_IMAGE_TRANSFER_GRANULARITY_PROPERTIES_KHR: {
             return sizeof(VkQueueFamilyOptimalImageTransferGranularityPropertiesKHR);
-        }
-#endif
-#ifdef VK_KHR_extended_flags
-        case VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_4_KHR: {
-            return sizeof(VkFormatProperties4KHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_USAGE_FLAGS_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageUsageFlags2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_CREATE_FLAGS_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageCreateFlags2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageViewUsage2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_FLAGS_FEATURES_KHR: {
-            return sizeof(VkPhysicalDeviceExtendedFlagsFeaturesKHR);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_STENCIL_USAGE_2_CREATE_INFO_KHR: {
-            return sizeof(VkImageStencilUsage2CreateInfoKHR);
-        }
-        case VK_STRUCTURE_TYPE_SHARED_PRESENT_SURFACE_CAPABILITIES_2_KHR: {
-            return sizeof(VkSharedPresentSurfaceCapabilities2KHR);
         }
 #endif
 #ifdef VK_AMD_rasterization_order
@@ -4769,17 +4571,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
 #ifdef VK_IMG_relaxed_line_rasterization
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RELAXED_LINE_RASTERIZATION_FEATURES_IMG: {
             return sizeof(VkPhysicalDeviceRelaxedLineRasterizationFeaturesIMG);
-        }
-#endif
-#ifdef VK_AMD_gpa_interface
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GPA_FEATURES_AMD: {
-            return sizeof(VkPhysicalDeviceGpaFeaturesAMD);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GPA_PROPERTIES_AMD: {
-            return sizeof(VkPhysicalDeviceGpaPropertiesAMD);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GPA_PROPERTIES_2_AMD: {
-            return sizeof(VkPhysicalDeviceGpaProperties2AMD);
         }
 #endif
 #ifdef VK_AMDX_shader_enqueue
@@ -4911,11 +4702,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
 #ifdef VK_QCOM_cooperative_matrix_conversion
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_CONVERSION_FEATURES_QCOM: {
             return sizeof(VkPhysicalDeviceCooperativeMatrixConversionFeaturesQCOM);
-        }
-#endif
-#ifdef VK_QCOM_elapsed_timer_query
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ELAPSED_TIMER_QUERY_FEATURES_QCOM: {
-            return sizeof(VkPhysicalDeviceElapsedTimerQueryFeaturesQCOM);
         }
 #endif
 #ifdef VK_AMD_pipeline_compiler_control
@@ -5155,27 +4941,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
         }
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_QUEUE_PERF_HINT_PROPERTIES_QCOM: {
             return sizeof(VkPhysicalDeviceQueuePerfHintPropertiesQCOM);
-        }
-#endif
-#ifdef VK_QCOM_image_processing3
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_PROCESSING_3_FEATURES_QCOM: {
-            return sizeof(VkPhysicalDeviceImageProcessing3FeaturesQCOM);
-        }
-#endif
-#ifdef VK_QCOM_shader_multiple_wait_queues
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MULTIPLE_WAIT_QUEUES_FEATURES_QCOM: {
-            return sizeof(VkPhysicalDeviceShaderMultipleWaitQueuesFeaturesQCOM);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MULTIPLE_WAIT_QUEUES_PROPERTIES_QCOM: {
-            return sizeof(VkPhysicalDeviceShaderMultipleWaitQueuesPropertiesQCOM);
-        }
-#endif
-#ifdef VK_EXT_shader_split_barrier
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SPLIT_BARRIER_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceShaderSplitBarrierFeaturesEXT);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SPLIT_BARRIER_PROPERTIES_EXT: {
-            return sizeof(VkPhysicalDeviceShaderSplitBarrierPropertiesEXT);
         }
 #endif
 #ifdef VK_NV_cuda_kernel_launch
@@ -5791,6 +5556,11 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
             return sizeof(VkPhysicalDeviceShaderCoreBuiltinsPropertiesARM);
         }
 #endif
+#ifdef VK_EXT_pipeline_library_group_handles
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_LIBRARY_GROUP_HANDLES_FEATURES_EXT: {
+            return sizeof(VkPhysicalDevicePipelineLibraryGroupHandlesFeaturesEXT);
+        }
+#endif
 #ifdef VK_EXT_dynamic_rendering_unused_attachments
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceDynamicRenderingUnusedAttachmentsFeaturesEXT);
@@ -5941,14 +5711,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
 #ifdef VK_EXT_shader_replicated_composites
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_REPLICATED_COMPOSITES_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceShaderReplicatedCompositesFeaturesEXT);
-        }
-#endif
-#ifdef VK_ARM_tensor_controls
-        case VK_STRUCTURE_TYPE_TENSOR_ROLLING_BACKING_CREATE_INFO_ARM: {
-            return sizeof(VkTensorRollingBackingCreateInfoARM);
-        }
-        case VK_STRUCTURE_TYPE_TENSOR_EXPLICIT_TILING_FORMAT_PROPERTIES_ARM: {
-            return sizeof(VkTensorExplicitTilingFormatPropertiesARM);
         }
 #endif
 #ifdef VK_EXT_shader_float8
@@ -6107,14 +5869,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
             return sizeof(VkPhysicalDevicePresentMeteringFeaturesNV);
         }
 #endif
-#ifdef VK_EXT_multisampled_render_to_swapchain
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SWAPCHAIN_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceMultisampledRenderToSwapchainFeaturesEXT);
-        }
-        case VK_STRUCTURE_TYPE_SWAPCHAIN_FLAGS_SURFACE_CAPABILITIES_EXT: {
-            return sizeof(VkSwapchainFlagsSurfaceCapabilitiesEXT);
-        }
-#endif
 #ifdef VK_EXT_zero_initialize_device_memory
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_DEVICE_MEMORY_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT);
@@ -6184,19 +5938,9 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
             return sizeof(VkPhysicalDeviceComputeOccupancyPriorityFeaturesNV);
         }
 #endif
-#ifdef VK_EXT_cooperative_matrix_maintenance1
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT);
-        }
-#endif
 #ifdef VK_EXT_shader_subgroup_partitioned
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_PARTITIONED_FEATURES_EXT: {
             return sizeof(VkPhysicalDeviceShaderSubgroupPartitionedFeaturesEXT);
-        }
-#endif
-#ifdef VK_EXT_shader_ocp_microscaling_types
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OCP_MICROSCALING_TYPES_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceShaderOCPMicroscalingTypesFeaturesEXT);
         }
 #endif
 #ifdef VK_VALVE_shader_mixed_float_dot_product
@@ -6226,40 +5970,6 @@ size_t goldfish_vk_extension_struct_size_with_stream_features(uint32_t streamFea
 #ifdef VK_EXT_primitive_restart_index
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVE_RESTART_INDEX_FEATURES_EXT: {
             return sizeof(VkPhysicalDevicePrimitiveRestartIndexFeaturesEXT);
-        }
-#endif
-#ifdef VK_EXT_image_tiling_control
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_TILING_CONTROL_FEATURES_EXT: {
-            return sizeof(VkPhysicalDeviceImageTilingControlFeaturesEXT);
-        }
-        case VK_STRUCTURE_TYPE_IMAGE_TILING_CONTROL_CREATE_INFO_EXT: {
-            return sizeof(VkImageTilingControlCreateInfoEXT);
-        }
-#endif
-#ifdef VK_NV_cooperative_matrix_decode_vector
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_DECODE_VECTOR_FEATURES_NV: {
-            return sizeof(VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV);
-        }
-#endif
-#ifdef VK_NV_private_data_base_handle
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIVATE_DATA_BASE_HANDLE_FEATURES_NV: {
-            return sizeof(VkPhysicalDevicePrivateDataBaseHandleFeaturesNV);
-        }
-#endif
-#ifdef VK_INTEL_device_info
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INFO_PROPERTIES_INTEL: {
-            return sizeof(VkPhysicalDeviceInfoPropertiesINTEL);
-        }
-#endif
-#ifdef VK_VALVE_buffer_device_address_allocation_alignment
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_FEATURES_VALVE: {
-            return sizeof(VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentFeaturesVALVE);
-        }
-        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT_PROPERTIES_VALVE: {
-            return sizeof(VkPhysicalDeviceBufferDeviceAddressAllocationAlignmentPropertiesVALVE);
-        }
-        case VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_ALIGNMENT_ALLOCATE_INFO_VALVE: {
-            return sizeof(VkBufferDeviceAddressAlignmentAllocateInfoVALVE);
         }
 #endif
 #ifdef VK_KHR_acceleration_structure

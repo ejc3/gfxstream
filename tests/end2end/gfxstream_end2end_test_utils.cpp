@@ -99,7 +99,7 @@ void readImageData(vkhpp::Image image, uint32_t width, uint32_t height,
     const vkhpp::CommandBufferBeginInfo commandBufferBeginInfo = {
         .flags = vkhpp::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
-    ASSERT_THAT(readbackCommandBuffer->begin(commandBufferBeginInfo), IsVkSuccess());
+    readbackCommandBuffer->begin(commandBufferBeginInfo);
     const vkhpp::ImageMemoryBarrier readbackBarrier{
         .oldLayout = currentLayout,
         .newLayout = vkhpp::ImageLayout::eTransferSrcOptimal,
@@ -152,7 +152,7 @@ void readImageData(vkhpp::Image image, uint32_t width, uint32_t height,
         vkhpp::PipelineStageFlagBits::eAllCommands, vkhpp::PipelineStageFlagBits::eAllCommands,
         vkhpp::DependencyFlags(), nullptr, nullptr, restoreBarrier);
 
-    ASSERT_THAT(readbackCommandBuffer->end(), IsVkSuccess());
+    readbackCommandBuffer->end();
 
     auto readbackFence = device->createFenceUnique(vkhpp::FenceCreateInfo()).value;
     ASSERT_THAT(readbackCommandBuffer, IsValidHandle());
@@ -162,7 +162,7 @@ void readImageData(vkhpp::Image image, uint32_t width, uint32_t height,
         .commandBufferCount = 1,
         .pCommandBuffers = &readbackCommandBuffer.get(),
     };
-    ASSERT_THAT(queue.submit(readbackSubmitInfo, *readbackFence), IsVkSuccess());
+    queue.submit(readbackSubmitInfo, *readbackFence);
 
     auto readbackWaitResult = device->waitForFences(*readbackFence, VK_TRUE, 3000000000L);
     ASSERT_THAT(readbackWaitResult, IsVkSuccess());

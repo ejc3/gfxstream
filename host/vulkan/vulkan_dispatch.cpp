@@ -395,43 +395,33 @@ void ensureVulkanValidationLayersEnabled() {
     GFXSTREAM_INFO("Enabling Vulkan validation layers.");
 
     // Our VkLayer_khronos_validation.json expects the VVL .so file to be present in the same directory.
-    std::vector<std::string> candidateDirs;
-    const std::string testdataPath =
-        gfxstream::base::getEnvironmentVariable("GFXSTREAM_TESTDATA_PATH");
-    if (!testdataPath.empty()) {
-        candidateDirs.push_back(testdataPath);
+    std::string vvlPath =
+        pj({gfxstream::base::getProgramDirectory(), "lib64", "vulkan", "layers"});
+    if (!pathExists(vvlPath.c_str())) {
+        vvlPath =
+            pj({gfxstream::base::getLauncherDirectory(), "lib64", "vulkan", "layers"});
     }
-    candidateDirs.push_back(pj({gfxstream::base::getProgramDirectory(), "lib64", "vulkan", "layers"}));
-    candidateDirs.push_back(pj({gfxstream::base::getLauncherDirectory(), "lib64", "vulkan", "layers"}));
-    candidateDirs.push_back(pj({gfxstream::base::getProgramDirectory(), "testlib64", "layers"}));
-    candidateDirs.push_back(pj({gfxstream::base::getLauncherDirectory(), "testlib64", "layers"}));
-    candidateDirs.push_back(gfxstream::base::getProgramDirectory());
-    candidateDirs.push_back(gfxstream::base::getLauncherDirectory());
-
-    std::string vvlPath;
-    for (const auto& dir : candidateDirs) {
-        if (pathExists(pj({dir, "VkLayer_khronos_validation.json"}).c_str())) {
-            vvlPath = dir;
-            break;
-        }
+    if (!pathExists(vvlPath.c_str())) {
+        vvlPath =
+            pj({gfxstream::base::getProgramDirectory(), "testlib64", "layers"});
+    }
+    if (!pathExists(vvlPath.c_str())) {
+        vvlPath =
+            pj({gfxstream::base::getLauncherDirectory(), "testlib64", "layers"});
     }
 
-    if (!vvlPath.empty()) {
+    if (pathExists(vvlPath.c_str())) {
 #ifdef _WIN32
         const char kPathSeparator = ';';
 #else
         const char kPathSeparator = ':';
 #endif
         const char* const kVkAddLayerPathEnvVar = "VK_ADD_LAYER_PATH";
-        const char* const kVkLayerPathEnvVar = "VK_LAYER_PATH";
         const char* const kVkInstanceLayersEnvVar = "VK_INSTANCE_LAYERS";
         const char* const kEnableVVLEnvVar = "VK_LAYER_KHRONOS_validation";
 
         if (gfxstream::base::getEnvironmentVariable(kVkAddLayerPathEnvVar).empty()) {
             gfxstream::base::setEnvironmentVariable(kVkAddLayerPathEnvVar, vvlPath);
-        }
-        if (gfxstream::base::getEnvironmentVariable(kVkLayerPathEnvVar).empty()) {
-            gfxstream::base::setEnvironmentVariable(kVkLayerPathEnvVar, vvlPath);
         }
         auto layersEnvVar = gfxstream::base::getEnvironmentVariable(kVkInstanceLayersEnvVar);
         if (layersEnvVar.empty()) {

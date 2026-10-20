@@ -115,22 +115,16 @@ bool SetupGraphicsTestEnvironment() {
     GFXSTREAM_INFO("GraphicsTestEnvironment: not changing host EGL/GLES driver configuration.");
 #endif  // defined(GFXSTREAM_TESTING_USE_GLES_ANGLE)
 
-#if defined(GFXSTREAM_TESTING_USE_VULKAN_LAVAPIPE)
-    GFXSTREAM_INFO("GraphicsTestEnvironment: configuring Lavapipe as Vulkan driver.");
-#elif defined(GFXSTREAM_TESTING_USE_VULKAN_SWIFTSHADER)
-    GFXSTREAM_INFO("GraphicsTestEnvironment: configuring Swiftshader as Vulkan driver.");
-#else
-    GFXSTREAM_INFO("GraphicsTestEnvironment: not changing Vulkan driver configuration.");
-#endif
-
 #if defined(GFXSTREAM_TESTING_USE_VULKAN_LAVAPIPE) || defined(GFXSTREAM_TESTING_USE_VULKAN_SWIFTSHADER)
+    GFXSTREAM_INFO("GraphicsTestEnvironment: configuring locally built Vulkan driver.");
+
     const std::string driverBasename =
 #if defined(GFXSTREAM_TESTING_USE_VULKAN_LAVAPIPE)
-        "libvulkan_lvp.so";
+        "libvk_lavapipe.so";
 #elif defined(GFXSTREAM_TESTING_USE_VULKAN_SWIFTSHADER)
         "libvk_swiftshader.so";
 #else
-#error "Unhandled driver."
+#error "Supported host vulkan driver in GraphicsTestEnvironment!"
 #endif
 
     const std::string driverIcdBasename =
@@ -139,22 +133,24 @@ bool SetupGraphicsTestEnvironment() {
 #elif defined(GFXSTREAM_TESTING_USE_VULKAN_SWIFTSHADER)
         "vk_swiftshader_icd.json";
 #else
-#error "Unhandled driver."
+#error "Supported host vulkan driver in GraphicsTestEnvironment!"
 #endif
 
-    const auto driverOpt = GetGraphicsDriverPath(driverBasename);
-    if (!driverOpt) {
+    const auto driverLavapipeOpt = GetGraphicsDriverPath(driverBasename);
+    if (!driverLavapipeOpt) {
         GFXSTREAM_ERROR("Failed to find %s", driverBasename.c_str());
         return false;
     }
-    const auto driverIcdOpt = GetGraphicsDriverPath(driverIcdBasename);
-    if (!driverIcdOpt) {
+    const auto driverLavapipeIcdOpt = GetGraphicsDriverPath(driverIcdBasename);
+    if (!driverLavapipeIcdOpt) {
         GFXSTREAM_ERROR("Failed to find %s", driverIcdBasename.c_str());
         return false;
     }
-    const std::string driverIcd = driverIcdOpt->string();
-    gfxstream::base::setEnvironmentVariable("VK_DRIVER_FILES", driverIcd);
-    gfxstream::base::setEnvironmentVariable("VK_ICD_FILENAMES", driverIcd);
+    const std::string driverLavapipeIcd = driverLavapipeIcdOpt->string();
+    gfxstream::base::setEnvironmentVariable("VK_DRIVER_FILES", driverLavapipeIcd);
+    gfxstream::base::setEnvironmentVariable("VK_ICD_FILENAMES", driverLavapipeIcd);
+#else
+    GFXSTREAM_INFO("GraphicsTestEnvironment: not changing host Vulkan driver configuration.");
 #endif  // defined(GFXSTREAM_TESTING_USE_VULKAN_LAVAPIPE) || defined(GFXSTREAM_TESTING_USE_VULKAN_SWIFTSHADER)
 
     return true;

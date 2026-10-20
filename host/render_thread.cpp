@@ -90,15 +90,15 @@ uint32_t RenderThread::getActiveRenderThreadsCount() {
     return sActiveRenderThreads.load();
 }
 
-RenderThread::RenderThread(RenderChannelImpl* channel, gfxstream::Stream* load,
+RenderThread::RenderThread(RenderChannelImpl* channel,
+                           gfxstream::Stream* load,
                            uint32_t virtioGpuContextId)
     : gfxstream::base::Thread(gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
-                              virtioGpuContextId == INVALID_CONTEXT_ID
-                                  ? "RenderThread"
-                                  : "RenderThread-" + std::to_string(virtioGpuContextId)),
+                            "RenderThread"),
       mChannel(channel),
       mRunInLimitedMode(gfxstream::base::getCpuCoreCount() < kMinThreadsToRunUnlimited),
-      mContextId(virtioGpuContextId) {
+      mContextId(virtioGpuContextId)
+{
     incrementAndCheckRenderThreadCount();
     if (load) {
         const bool success = load->getByte();
@@ -113,15 +113,11 @@ RenderThread::RenderThread(RenderChannelImpl* channel, gfxstream::Stream* load,
 }
 
 RenderThread::RenderThread(const AsgConsumerCreateInfo& info, Stream* load)
-    : gfxstream::base::Thread(
-          gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
-          (info.virtioGpuContextId && *info.virtioGpuContextId != INVALID_CONTEXT_ID)
-              ? "RenderThread-" + std::to_string(*info.virtioGpuContextId)
-              : "RenderThread"),
+    : gfxstream::base::Thread(gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
+                              info.virtioGpuContextName ? *info.virtioGpuContextName : ""),
       mRingStream(new RingStream(info, kStreamBufferSize)),
       mContextId(info.virtioGpuContextId ? *info.virtioGpuContextId : 0),
-      mCapsetId(info.virtioGpuCapsetId ? *info.virtioGpuCapsetId : 0),
-      mContextName(info.virtioGpuContextName) {
+      mCapsetId(info.virtioGpuCapsetId ? *info.virtioGpuCapsetId : 0) {
     incrementAndCheckRenderThreadCount();
     if (load) {
         const bool success = load->getByte();
@@ -453,12 +449,12 @@ intptr_t RenderThread::main() {
             anyProgress |= progress;
 
             const char* contextName = nullptr;
-            if (mContextName) {
-                contextName = mContextName->c_str();
+            if (mNameOpt) {
+                contextName = (*mNameOpt).c_str();
             }
 
             if (!tInfo->m_puid) {
-                tInfo->setPuid(mContextId);
+                tInfo->m_puid = mContextId;
             }
 
             if (!processResources && tInfo->m_puid && tInfo->m_puid != INVALID_CONTEXT_ID) {
@@ -466,7 +462,7 @@ intptr_t RenderThread::main() {
             }
 
             progress = false;
-            size_t last = 0;
+            size_t last;
 
             //
             // try to process some of the command buffer using the
@@ -475,6 +471,9 @@ intptr_t RenderThread::main() {
             // Note: It's risky to limit Vulkan decoding to one thread,
             // so we do it outside the limiter
             if (tInfo->m_vkInfo) {
+                if (tInfo->m_vkInfo->ctx_id == 0) {
+                    tInfo->m_vkInfo->ctx_id = mContextId;
+                }
                 VkDecoderContext context = {
                     .processName = contextName,
                     .gfxApiLogger = &gfxLogger,

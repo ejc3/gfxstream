@@ -28,8 +28,6 @@ copy_to_directory(
         "//guest/rendercontrol:gfxstream_guest_rendercontrol",
         "@mesa//:mesa_gfxstream_guest_vulkan",
         "@rutabaga//:rutabaga_gfx_kumquat_server",
-        "@vulkan_validation_layers//:VkLayer_khronos_validation",
-        "@vulkan_validation_layers//:VkLayer_khronos_validation_json",
     ],
     include_external_repositories = ["*"],
     # Effectively, all of the "prefixes" to flatten.
@@ -92,7 +90,7 @@ cc_test(
         "//third_party/vulkan:gfxstream_vulkan_headers",
         "@com_google_googletest//:gtest",
         "@com_google_googletest//:gtest_main",
-        "@libdrm",
+        "@drm//:libdrm",
         "@mesa//:mesa_gfxstream_guest_android",
         "@mesa//:mesa_gfxstream_guest_platform",
         "@mesa//:mesa_virtgpu_kumquat_ffi",

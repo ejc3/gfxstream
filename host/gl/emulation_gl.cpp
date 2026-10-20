@@ -25,7 +25,6 @@
 #include "OpenGLESDispatch/OpenGLDispatchLoader.h"
 #include "common/gles_context.h"
 #include "display_surface_gl.h"
-#include "glestranslator/egl/egl_global_info.h"
 #include "gfxstream/ThreadAnnotations.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/color_buffer_interface.h"
@@ -41,6 +40,10 @@
 #include "render-utils/RenderLib.h"
 #include "render_thread_info_gl.h"
 #include "yuv_converter.h"
+
+#ifdef __APPLE__
+#include "glestranslator/egl/egl_global_info.h"
+#endif
 
 namespace gfxstream {
 namespace host {
@@ -999,8 +1002,6 @@ HandleType EmulationGl::createEmulatedEglContext(uint32_t emulatedConfigIndex,
     uint64_t puid = tinfo->m_puid;
     if (puid) {
         mProcOwnedEmulatedEglContexts[puid].insert(handle);
-    } else {
-        tinfo->m_contextSet.insert(handle);
     }
     return handle;
 }
@@ -1246,43 +1247,26 @@ void EmulationGl::saveProcOwnedImages(Stream* stream) {
 }
 
 bool EmulationGl::loadContexts(Stream* stream) {
-    bool loadOk = true;
-    loadCollection(stream, &mContexts, [this, &loadOk](Stream* stream) -> EmulatedEglContextMap::value_type {
+    loadCollection(stream, &mContexts, [this](Stream* stream) -> EmulatedEglContextMap::value_type {
         auto context = loadEmulatedEglContext(stream);
         auto contextHandle = context ? context->getHndl() : 0;
-        if (!context) {
-            // Do not return, keep reading the stream
-            loadOk = false;
-        }
         return {contextHandle, std::move(context)};
     });
-    if (!loadOk) {
-        GFXSTREAM_ERROR("Could not load contexts");
-        return false;
-    }
+    assert(!gfxstream::base::find(mContexts, 0));
     return true;
 }
 
 bool EmulationGl::loadWindowSurfaces(
     Stream* stream, const std::function<IColorBufferRef(uint32_t)>& colorBufferLookup) {
-    bool loadOk = true;
     loadCollection(
         stream, &mWindows,
-        [this, &colorBufferLookup, &loadOk](Stream* stream) -> EmulatedEglWindowSurfaceMap::value_type {
+        [this, &colorBufferLookup](Stream* stream) -> EmulatedEglWindowSurfaceMap::value_type {
             auto window = loadEmulatedEglWindowSurface(stream, colorBufferLookup, mContexts);
-            HandleType colorBufferHandle = stream->getBe32();
-            if (!window) {
-                // Do not return, keep reading the stream
-                loadOk = false;
-            }
 
-            HandleType handle = window ? window->getHndl() : 0;
+            HandleType handle = window->getHndl();
+            HandleType colorBufferHandle = stream->getBe32();
             return {handle, {std::move(window), colorBufferHandle}};
         });
-    if (!loadOk) {
-        GFXSTREAM_ERROR("Could not load window surfaces");
-        return false;
-    }
     return true;
 }
 
@@ -1342,46 +1326,40 @@ HandleType EmulationGl::getWindowSurfaceColorBufferHandle(HandleType surfaceHand
 }
 
 std::vector<HandleType> EmulationGl::cleanupProcGLObjects(uint64_t puid) {
+    RecursiveScopedContextBind bind(getColorBufferContextHelper());
     std::vector<HandleType> colorBuffersToCleanUp;
-    {
-        RecursiveScopedContextBind bind(getColorBufferContextHelper());
 
-        // Clean up window surfaces
-        auto procWindowsIt = mProcOwnedEmulatedEglWindowSurfaces.find(puid);
-        if (procWindowsIt != mProcOwnedEmulatedEglWindowSurfaces.end()) {
-            for (auto whndl : procWindowsIt->second) {
-                auto w = mWindows.find(whndl);
-                if (w != mWindows.end()) {
-                    if (w->second.second != 0) {
-                        colorBuffersToCleanUp.push_back(w->second.second);
-                    }
-                    mWindows.erase(w);
+    // Clean up window surfaces
+    auto procWindowsIt = mProcOwnedEmulatedEglWindowSurfaces.find(puid);
+    if (procWindowsIt != mProcOwnedEmulatedEglWindowSurfaces.end()) {
+        for (auto whndl : procWindowsIt->second) {
+            auto w = mWindows.find(whndl);
+            if (w != mWindows.end()) {
+                if (w->second.second != 0) {
+                    colorBuffersToCleanUp.push_back(w->second.second);
                 }
+                mWindows.erase(w);
             }
-            mProcOwnedEmulatedEglWindowSurfaces.erase(procWindowsIt);
         }
-
-        // Cleanup EGLImages
-        auto procImagesIt = mProcOwnedEmulatedEglImages.find(puid);
-        if (procImagesIt != mProcOwnedEmulatedEglImages.end()) {
-            for (auto image : procImagesIt->second) {
-                mImages.erase(image);
-            }
-            mProcOwnedEmulatedEglImages.erase(procImagesIt);
-        }
+        mProcOwnedEmulatedEglWindowSurfaces.erase(procWindowsIt);
     }
 
-    // Unbind before cleaning up contexts
     // Cleanup render contexts
-    {
-        gfxstream::base::AutoWriteLock contextLock(mContextStructureLock);
-        auto procContextsIt = mProcOwnedEmulatedEglContexts.find(puid);
-        if (procContextsIt != mProcOwnedEmulatedEglContexts.end()) {
-            for (auto ctx : procContextsIt->second) {
-                mContexts.erase(ctx);
-            }
-            mProcOwnedEmulatedEglContexts.erase(procContextsIt);
+    auto procContextsIt = mProcOwnedEmulatedEglContexts.find(puid);
+    if (procContextsIt != mProcOwnedEmulatedEglContexts.end()) {
+        for (auto ctx : procContextsIt->second) {
+            mContexts.erase(ctx);
         }
+        mProcOwnedEmulatedEglContexts.erase(procContextsIt);
+    }
+
+    // Cleanup EGLImages
+    auto procImagesIt = mProcOwnedEmulatedEglImages.find(puid);
+    if (procImagesIt != mProcOwnedEmulatedEglImages.end()) {
+        for (auto image : procImagesIt->second) {
+            mImages.erase(image);
+        }
+        mProcOwnedEmulatedEglImages.erase(procImagesIt);
     }
     return colorBuffersToCleanUp;
 }

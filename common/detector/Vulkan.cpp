@@ -334,7 +334,7 @@ gfxstream::expected<Vk::ImageWithMemory, vkhpp::Result> Vk::CreateImage(
     };
     auto imageMemory = VK_EXPECT_RV(mDevice->allocateMemoryUnique(imageMemoryAllocateInfo));
 
-    VK_EXPECT_RESULT(mDevice->bindImageMemory(*image, *imageMemory, 0));
+    mDevice->bindImageMemory(*image, *imageMemory, 0);
 
     const vkhpp::ImageViewCreateInfo imageViewCreateInfo = {
         .image = *image,
@@ -582,7 +582,7 @@ gfxstream::expected<Vk::YuvImageWithMemory, vkhpp::Result> Vk::CreateYuvImage(
     };
     auto imageMemory = VK_EXPECT_RV(mDevice->allocateMemoryUnique(imageMemoryAllocateInfo));
 
-    VK_EXPECT_RESULT(mDevice->bindImageMemory(*image, *imageMemory, 0));
+    mDevice->bindImageMemory(*image, *imageMemory, 0);
 
     const vkhpp::ImageViewCreateInfo imageViewCreateInfo = {
         .pNext = &samplerConversionInfo,
@@ -954,9 +954,9 @@ vkhpp::Result Vk::DoCommandsImmediate(
     const vkhpp::CommandBufferBeginInfo commandBufferBeginInfo = {
         .flags = vkhpp::CommandBufferUsageFlagBits::eOneTimeSubmit,
     };
-    VK_TRY(commandBuffer->begin(commandBufferBeginInfo));
+    commandBuffer->begin(commandBufferBeginInfo);
     VK_TRY(func(commandBuffer));
-    VK_TRY(commandBuffer->end());
+    commandBuffer->end();
 
     std::vector<vkhpp::CommandBuffer> commandBufferHandles;
     commandBufferHandles.push_back(*commandBuffer);
@@ -985,8 +985,8 @@ vkhpp::Result Vk::DoCommandsImmediate(
         submitInfo.signalSemaphoreCount = static_cast<uint32_t>(semaphoreHandlesSignal.size());
         submitInfo.pSignalSemaphores = semaphoreHandlesSignal.data();
     }
-    VK_TRY(mQueue.submit(submitInfo));
-    VK_TRY(mQueue.waitIdle());
+    mQueue.submit(submitInfo);
+    mQueue.waitIdle();
 
     return vkhpp::Result::eSuccess;
 }

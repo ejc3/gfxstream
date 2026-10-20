@@ -16,9 +16,6 @@
 
 #include <stdio.h>
 
-#include <atomic>
-#include <mutex>
-#include <thread>
 #include <vector>
 
 #include "OpenGLESDispatch/DispatchTables.h"
@@ -36,20 +33,12 @@ struct PreviousContextInfo {
     EGLSurface drawSurface = EGL_NO_SURFACE;
 };
 
-// Permanently wraps a single (mDisplay, mSurface, mContext) triple and manages
-// temporary scoped binds via setupContext() / teardownContext().
-//
-// This addresses two requirements (b/320319509, b/561516389):
-// 1. Cross-thread safety: EGL only allows mContext/mSurface to be current on
-//    ONE thread at a time (concurrent eglMakeCurrent on another thread fails
-//    with EGL_BAD_ACCESS). mMutex serializes threads so a second thread waits
-//    until the owning thread finishes its outermost teardownContext() and
-//    unbinds mContext.
-// 2. Same-thread recursion: Because mMutex is a std::recursive_mutex, the
-//    owning thread can nest multiple setupContext() calls without deadlocking.
-//    Each setupContext() pushes the active context onto this helper's
-//    mPreviousContexts stack, and the original context is restored when the
-//    outermost teardownContext() pops the last entry.
+struct ThreadState {
+    std::vector<PreviousContextInfo> previousContexts;
+};
+
+static thread_local ThreadState sThreadState;
+
 class DisplaySurfaceGlContextHelper : public ContextHelper {
   public:
     DisplaySurfaceGlContextHelper(EGLDisplay display,
@@ -69,24 +58,8 @@ class DisplaySurfaceGlContextHelper : public ContextHelper {
         }
     }
 
-    ~DisplaySurfaceGlContextHelper() override {
-        const std::thread::id owner = mOwnerThread.load(std::memory_order_relaxed);
-        if (owner != std::thread::id()) {
-            GFXSTREAM_ERROR("DisplaySurfaceGlContextHelper context=%p destroyed while still bound.",
-                            mContext);
-            if (owner == std::this_thread::get_id()) {
-                while (!mPreviousContexts.empty()) {
-                    mPreviousContexts.pop_back();
-                    mMutex.unlock();
-                }
-                releaseOwnership();
-            }
-        }
-    }
-
     bool setupContext() override {
-        mMutex.lock();
-        mOwnerThread.store(std::this_thread::get_id(), std::memory_order_relaxed);
+        auto& previousContexts = sThreadState.previousContexts;
 
         EGLContext currentContext = s_egl.eglGetCurrentContext();
         EGLSurface currentDrawSurface = s_egl.eglGetCurrentSurface(EGL_DRAW);
@@ -97,15 +70,12 @@ class DisplaySurfaceGlContextHelper : public ContextHelper {
                             currentReadSurface != mSurface);
 
         if (needsUpdate) {
-            // If mPreviousContexts is non-empty, an outer setupContext() on this
-            // thread already bound mContext, so currentContext != mContext means
-            // some code in between switched the thread's EGL context behind this
-            // helper's back. Log and re-bind mContext to recover.
-            if (!mPreviousContexts.empty()) {
+            if (!previousContexts.empty()) {
                 GFXSTREAM_ERROR(
                     "DisplaySurfaceGlContextHelper context was preempted by others, "
-                    "current=%p, needed=%p",
-                    currentContext, mContext);
+                    "current=%p, needed=%p, thread=%p",
+                    currentContext, mContext, &sThreadState);
+                // Fall through to attempt to recover from error.
             }
 
             if (!s_egl.eglMakeCurrent(mDisplay, mSurface, mSurface, mContext)) {
@@ -113,15 +83,11 @@ class DisplaySurfaceGlContextHelper : public ContextHelper {
                 // Legacy swiftshader logspam on exit with this line.
                 GFXSTREAM_DEBUG("Failed to make display surface context current: %d",
                                 s_egl.eglGetError());
-                if (mPreviousContexts.empty()) {
-                    releaseOwnership();
-                }
-                mMutex.unlock();
-                return false;
+                // Fall through to allow adding previous context to stack.
             }
         }
 
-        mPreviousContexts.push_back(
+        previousContexts.push_back(
             {.context = currentContext,
              .readSurface = currentReadSurface,
              .drawSurface = currentDrawSurface});
@@ -129,75 +95,40 @@ class DisplaySurfaceGlContextHelper : public ContextHelper {
     }
 
     void teardownContext() override {
-        if (mOwnerThread.load(std::memory_order_relaxed) != std::this_thread::get_id()) {
-            GFXSTREAM_ERROR(
-                "DisplaySurfaceGlContextHelper context=%p teardown from a thread that did not "
-                "bind it, ignoring.",
-                mContext);
-            return;
-        }
-        if (mPreviousContexts.empty()) {
-            GFXSTREAM_ERROR(
-                "DisplaySurfaceGlContextHelper context=%p teardown without a matching setup.",
-                mContext);
-            releaseOwnership();
-            return;
-        }
-
-        const PreviousContextInfo previous = mPreviousContexts.back();
-        mPreviousContexts.pop_back();
-        // True only when unwinding the very first (outermost) setupContext()
-        // call on this thread; false when unwinding a nested inner bind.
-        const bool outermost = mPreviousContexts.empty();
+        auto& previousContexts = sThreadState.previousContexts;
 
         EGLContext currentContext = s_egl.eglGetCurrentContext();
         EGLSurface currentDrawSurface = s_egl.eglGetCurrentSurface(EGL_DRAW);
         EGLSurface currentReadSurface = s_egl.eglGetCurrentSurface(EGL_READ);
 
-        bool needsUpdate = (currentContext != previous.context ||
-                            currentDrawSurface != previous.drawSurface ||
-                            currentReadSurface != previous.readSurface);
-
-        if (needsUpdate) {
-            if (!s_egl.eglMakeCurrent(mDisplay,
-                                      previous.drawSurface,
-                                      previous.readSurface,
-                                      previous.context)) {
-                GFXSTREAM_ERROR("Failed to restore previous context: %d", s_egl.eglGetError());
-                if (outermost) {
-                    // Ensure mContext/mSurface are not left stranded on this thread,
-                    // otherwise subsequent threads will fail with EGL_BAD_ACCESS (12290).
-                    s_egl.eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-                }
-            }
+        PreviousContextInfo newContext;
+        if (!previousContexts.empty()) {
+            newContext = previousContexts.back();
+            previousContexts.pop_back();
         }
 
-        // Release ownership and unlock only after the previous context is restored
-        // so another waiting thread can safely bind mContext.
-        if (outermost) {
-            releaseOwnership();
+        bool needsUpdate = (currentContext != newContext.context ||
+                            currentDrawSurface != newContext.drawSurface ||
+                            currentReadSurface != newContext.readSurface);
+
+        if (!needsUpdate) {
+            return;
         }
-        mMutex.unlock();
+
+        if (!s_egl.eglMakeCurrent(mDisplay,
+                                  newContext.drawSurface,
+                                  newContext.readSurface,
+                                  newContext.context)) {
+            GFXSTREAM_ERROR("Failed to restore previous context: %d", s_egl.eglGetError());
+        }
     }
 
-    // Whether this helper is currently bound on the calling thread.
-    bool isBound() const override {
-        return mOwnerThread.load(std::memory_order_relaxed) == std::this_thread::get_id();
-    }
+    bool isBound() const override { return !sThreadState.previousContexts.empty(); }
 
   private:
-    void releaseOwnership() { mOwnerThread.store(std::thread::id(), std::memory_order_relaxed); }
-
     EGLDisplay mDisplay = EGL_NO_DISPLAY;
     EGLSurface mSurface = EGL_NO_SURFACE;
     EGLContext mContext = EGL_NO_CONTEXT;
-
-    // Serializes cross-thread access to mContext/mSurface while permitting
-    // nested setupContext() calls on the owning thread.
-    std::recursive_mutex mMutex;
-    std::atomic<std::thread::id> mOwnerThread{};
-    // Per-helper LIFO stack of saved contexts for nested binds on mOwnerThread.
-    std::vector<PreviousContextInfo> mPreviousContexts;
 };
 
 }  // namespace
