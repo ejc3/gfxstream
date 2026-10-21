@@ -1058,6 +1058,7 @@ class VkDecoderGlobalState {
     LIST_TRANSFORMED_TYPES(DEFINE_TRANSFORMED_TYPE_PROTOTYPE)
 
    private:
+    friend struct VkDecoderGlobalStateTestPeer;
     class Impl;
     std::unique_ptr<Impl> mImpl;
 };

@@ -127,6 +127,46 @@ void validateNewHandleInfoEntry(const std::unordered_map<T, K>& vkObjectMap, con
     }
 }
 
+bool isValidImageLayoutForSnapshot(uint32_t layout) {
+    // TODO(b/535587757): some of these don't make sense in snapshot (e.g. undefined).
+    // For the layouts that don't make sense, we should skip or transition before saving.
+    switch (layout) {
+        case VK_IMAGE_LAYOUT_UNDEFINED: return true;
+        case VK_IMAGE_LAYOUT_GENERAL: return true;
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_PREINITIALIZED: return true;
+        case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL: return true;
+        case VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ: return true;
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: return true;
+        case VK_IMAGE_LAYOUT_VIDEO_DECODE_DST_KHR: return true;
+        case VK_IMAGE_LAYOUT_VIDEO_DECODE_SRC_KHR: return true;
+        case VK_IMAGE_LAYOUT_VIDEO_DECODE_DPB_KHR: return true;
+        case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR: return true;
+        case VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT: return true;
+        case VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR: return true;
+        case VK_IMAGE_LAYOUT_VIDEO_ENCODE_DST_KHR: return true;
+        case VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR: return true;
+        case VK_IMAGE_LAYOUT_VIDEO_ENCODE_DPB_KHR: return true;
+        case VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT: return true;
+        case VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM: return true;
+        case VK_IMAGE_LAYOUT_VIDEO_ENCODE_QUANTIZATION_MAP_KHR: return true;
+        case VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT: return true;
+        default: return false;
+    }
+}
+
 VK_EXT_SYNC_HANDLE dupExternalSync(VK_EXT_SYNC_HANDLE h) {
 #ifdef _WIN32
     auto myProcessHandle = GetCurrentProcess();
@@ -178,6 +218,10 @@ static std::atomic<uint64_t> sUniqueShmemId = 0;
 
 class VkDecoderGlobalState::Impl {
    public:
+    friend struct VkDecoderGlobalStateTestPeer;
+
+    Impl() : m_vk(vkDispatch()), m_vkEmulation(nullptr) {}
+
     Impl(VkEmulation* emulation)
         : m_vk(vkDispatch()) {
         if (!emulation || !m_vk) {
@@ -507,6 +551,38 @@ class VkDecoderGlobalState::Impl {
         // Set up VK structs to snapshot other Vulkan objects
         // TODO(b/323064243): group all images from the same device and reuse queue / command pool
 
+        // snapshot buffers before images so that on load, loadImageContent (vkCmdCopyBufferToImage)
+        // is always the final write to any unified/shared VkDeviceMemory.
+        GFXSTREAM_DEBUG("snapshot save: buffers");
+        std::vector<VkBuffer> sortedBoxedBuffers;
+        for (const auto& bufferIte : mBufferInfo) {
+            sortedBoxedBuffers.push_back(
+                unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
+        }
+        sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
+        for (const auto& boxedBuffer : sortedBoxedBuffers) {
+            auto unboxedBuffer = try_unbox_VkBuffer(boxedBuffer);
+            if (unboxedBuffer == VK_NULL_HANDLE) {
+                GFXSTREAM_ERROR("Failed to unbox VkBuffer %p when saving snapshot.", boxedBuffer);
+                return false;
+            }
+            const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
+            const bool hasContentToSave = (bufferInfo.memory != VK_NULL_HANDLE);
+            stream->putBe32(hasContentToSave ? 1 : 0);
+            if (!hasContentToSave) {
+                continue;
+            }
+            // TODO: add a special case for host mapped memory
+            StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
+
+            // TODO(b/294277842): make sure the queue is empty before using.
+            if (!saveBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
+                releaseSnapshotStateBlock(&stateBlock);
+                return false;
+            }
+            releaseSnapshotStateBlock(&stateBlock);
+        }
+
         GFXSTREAM_DEBUG("snapshot save: image content");
         std::vector<VkImage> sortedBoxedImages;
         for (const auto& imageIte : mImageInfo) {
@@ -518,52 +594,31 @@ class VkDecoderGlobalState::Impl {
         for (const auto& boxedImage : sortedBoxedImages) {
             auto unboxedImage = try_unbox_VkImage(boxedImage);
             if (unboxedImage == VK_NULL_HANDLE) {
-                // TODO(b/294277842): should return an error here.
-                continue;
+                GFXSTREAM_ERROR("Failed to unbox VkImage %p when saving snapshot.", boxedImage);
+                return false;
             }
             const ImageInfo& imageInfo = mImageInfo[unboxedImage];
-            if (imageInfo.memory == VK_NULL_HANDLE) {
+
+            // Color buffer is saved in ColorBufferVk already
+            const bool hasContentToSave =
+                (imageInfo.memory != VK_NULL_HANDLE) && !isMemoryBoundToColorBuffer(imageInfo.memory);
+            stream->putBe32(hasContentToSave ? 1 : 0);
+            if (!hasContentToSave) {
                 continue;
             }
-            if (isMemoryBoundToColorBuffer(imageInfo.memory)) {
-                // color buffer is saved in ColorBufferVk already
-                continue;
+
+            uint32_t layoutVal = static_cast<uint32_t>(imageInfo.layout);
+            if (!isValidImageLayoutForSnapshot(layoutVal)) {
+                GFXSTREAM_ERROR("Snapshot save: image %p layout %s [%u] is invalid", boxedImage,
+                                string_VkImageLayout(imageInfo.layout), layoutVal);
+                return false;
             }
             // Vulkan command playback doesn't recover image layout. We need to do it here.
-            stream->putBe32(imageInfo.layout);
+            stream->putBe32(layoutVal);
 
             StateBlock stateBlock = createSnapshotStateBlock(imageInfo.device);
             // TODO(b/294277842): make sure the queue is empty before using.
             if (!saveImageContent(stream, &stateBlock, unboxedImage, &imageInfo)) {
-                releaseSnapshotStateBlock(&stateBlock);
-                return false;
-            }
-            releaseSnapshotStateBlock(&stateBlock);
-        }
-
-        // snapshot buffers
-        GFXSTREAM_DEBUG("snapshot save: buffers");
-        std::vector<VkBuffer> sortedBoxedBuffers;
-        for (const auto& bufferIte : mBufferInfo) {
-            sortedBoxedBuffers.push_back(
-                unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
-        }
-        sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
-        for (const auto& boxedBuffer : sortedBoxedBuffers) {
-            auto unboxedBuffer = try_unbox_VkBuffer(boxedBuffer);
-            if (unboxedBuffer == VK_NULL_HANDLE) {
-                // TODO(b/294277842): should return an error here.
-                continue;
-            }
-            const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
-            if (bufferInfo.memory == VK_NULL_HANDLE) {
-                continue;
-            }
-            // TODO: add a special case for host mapped memory
-            StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
-
-            // TODO(b/294277842): make sure the queue is empty before using.
-            if (!saveBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
                 releaseSnapshotStateBlock(&stateBlock);
                 return false;
             }
@@ -918,6 +973,40 @@ class VkDecoderGlobalState::Impl {
             // TODO(b/323064243): group all images from the same device and reuse queue / command
             // pool
 
+            // snapshot buffers before images so that loadImageContent (vkCmdCopyBufferToImage)
+            // is always the final write to any unified/shared VkDeviceMemory.
+            GFXSTREAM_DEBUG("snapshot load: buffers");
+            std::vector<VkBuffer> sortedBoxedBuffers;
+            for (const auto& bufferIte : mBufferInfo) {
+                sortedBoxedBuffers.push_back(
+                    unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
+            }
+            sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
+            for (const auto& boxedBuffer : sortedBoxedBuffers) {
+                auto unboxedBuffer = try_unbox_VkBuffer(boxedBuffer);
+                if (unboxedBuffer == VK_NULL_HANDLE) {
+                    GFXSTREAM_ERROR("Failed to unbox VkBuffer %p when loading snapshot.", boxedBuffer);
+                    return false;
+                }
+                const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
+                const bool hasContentToLoad = stream->getBe32() == 1;
+                if (!hasContentToLoad) {
+                    continue;
+                }
+                if (bufferInfo.memory == VK_NULL_HANDLE) {
+                    GFXSTREAM_ERROR("Snapshot load failure: buffer %p has content to load but no memory.", boxedBuffer);
+                    return false;
+                }
+                // TODO: add a special case for host mapped memory
+                StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
+                // TODO(b/294277842): make sure the queue is empty before using.
+                if (!loadBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
+                    releaseSnapshotStateBlock(&stateBlock);
+                    return false;
+                }
+                releaseSnapshotStateBlock(&stateBlock);
+            }
+
             GFXSTREAM_DEBUG("snapshot load: image content");
             std::vector<VkImage> sortedBoxedImages;
             for (const auto& imageIte : mImageInfo) {
@@ -926,15 +1015,28 @@ class VkDecoderGlobalState::Impl {
             }
             sort(sortedBoxedImages.begin(), sortedBoxedImages.end());
             for (const auto& boxedImage : sortedBoxedImages) {
-                auto unboxedImage = unbox_VkImage(boxedImage);
+                auto unboxedImage = try_unbox_VkImage(boxedImage);
+                if (unboxedImage == VK_NULL_HANDLE) {
+                    GFXSTREAM_ERROR(
+                        "Failed to unbox VkImage %p when loading snapshot.", boxedImage);
+                    return false;
+                }
+
                 ImageInfo& imageInfo = mImageInfo[unboxedImage];
-                if (imageInfo.memory == VK_NULL_HANDLE) {
+
+                const bool hasContentToLoad = (stream->getBe32() == 1);
+                if (!hasContentToLoad) {
                     continue;
                 }
-                if (isMemoryBoundToColorBuffer(imageInfo.memory)) {
-                    // color buffer is loaded in ColorBufferVk already
-                    continue;
+
+                if (imageInfo.memory == VK_NULL_HANDLE || isMemoryBoundToColorBuffer(imageInfo.memory)) {
+                    // Color buffer should have been handled by ColorBufferVk already
+                    // and saved with 'hasContentToSave' set to false.
+                    GFXSTREAM_ERROR("Cannot load image %p with content in the snapshot",
+                                    boxedImage);
+                    return false;
                 }
+
                 // Playback doesn't recover image layout. We need to do it here.
                 //
                 // Layout transform was done by vkCmdPipelineBarrier but we don't record such
@@ -944,36 +1046,19 @@ class VkDecoderGlobalState::Impl {
                 // We do the layout transform in loadImageContent. There are still use cases where
                 // it should recover the layout but does not.
                 //
-                // TODO(b/323059453): fix corner cases when image contents cannot be properly
-                // loaded.
-                imageInfo.layout = static_cast<VkImageLayout>(stream->getBe32());
+                uint32_t layoutRead = stream->getBe32();
+                if (!isValidImageLayoutForSnapshot(layoutRead)) {
+                    // We check this when saving the layout, so it should never happen here unless
+                    // the stream is corrupted.
+                    GFXSTREAM_ERROR("Snapshot load: image %p layout %s [%u] is invalid", boxedImage,
+                                    string_VkImageLayout(static_cast<VkImageLayout>(layoutRead)),
+                                    layoutRead);
+                    return false;
+                }
+                imageInfo.layout = static_cast<VkImageLayout>(layoutRead);
                 StateBlock stateBlock = createSnapshotStateBlock(imageInfo.device);
                 // TODO(b/294277842): make sure the queue is empty before using.
                 if (!loadImageContent(stream, &stateBlock, unboxedImage, &imageInfo)) {
-                    releaseSnapshotStateBlock(&stateBlock);
-                    return false;
-                }
-                releaseSnapshotStateBlock(&stateBlock);
-            }
-
-            // snapshot buffers
-            GFXSTREAM_DEBUG("snapshot load: buffers");
-            std::vector<VkBuffer> sortedBoxedBuffers;
-            for (const auto& bufferIte : mBufferInfo) {
-                sortedBoxedBuffers.push_back(
-                    unboxed_to_boxed_non_dispatchable_VkBuffer(bufferIte.first));
-            }
-            sort(sortedBoxedBuffers.begin(), sortedBoxedBuffers.end());
-            for (const auto& boxedBuffer : sortedBoxedBuffers) {
-                auto unboxedBuffer = unbox_VkBuffer(boxedBuffer);
-                const BufferInfo& bufferInfo = mBufferInfo[unboxedBuffer];
-                if (bufferInfo.memory == VK_NULL_HANDLE) {
-                    continue;
-                }
-                // TODO: add a special case for host mapped memory
-                StateBlock stateBlock = createSnapshotStateBlock(bufferInfo.device);
-                // TODO(b/294277842): make sure the queue is empty before using.
-                if (!loadBufferContent(stream, &stateBlock, unboxedBuffer, &bufferInfo)) {
                     releaseSnapshotStateBlock(&stateBlock);
                     return false;
                 }
@@ -1328,8 +1413,10 @@ class VkDecoderGlobalState::Impl {
                        info.applicationName.c_str(), info.engineName.c_str());
 
 #ifdef CONFIG_AEMU
-        m_vkEmulation->getGlobalState()->registerVulkanInstance((uint64_t)*pInstance,
-                                                                info.applicationName.c_str());
+        if (m_vkEmulation->getGlobalState()) {
+            m_vkEmulation->getGlobalState()->registerVulkanInstance((uint64_t)*pInstance,
+                                                                    info.applicationName.c_str());
+        }
 #endif
         // Box it up
         VkInstance boxed = new_boxed_VkInstance(*pInstance, nullptr);
@@ -1367,7 +1454,7 @@ class VkDecoderGlobalState::Impl {
 
         *pInstance = (VkInstance)boxed;
 
-        if (vkCleanupEnabled()) {
+        if (vkCleanupEnabled() && m_vkEmulation->getGlobalState()) {
             m_vkEmulation->getGlobalState()->registerProcessCleanupCallback(
                 unbox_VkInstance(boxed), contextId, [this, boxed] {
                     if (snapshotsEnabled()) {
@@ -1427,7 +1514,9 @@ class VkDecoderGlobalState::Impl {
         }
         // The instance should not be used after vkDestroyInstanceImpl is called,
         // remove it from the cleanup callback mapping.
-        m_vkEmulation->getGlobalState()->unregisterProcessCleanupCallback(instance);
+        if (m_vkEmulation->getGlobalState()) {
+            m_vkEmulation->getGlobalState()->unregisterProcessCleanupCallback(instance);
+        }
 
         vkDestroyInstanceImpl(instance);
     }
@@ -1643,7 +1732,7 @@ class VkDecoderGlobalState::Impl {
 
         // Disable a set of Vulkan features if BypassVulkanDeviceFeatureOverrides is NOT enabled.
         if (!m_vkEmulation->getFeatures().BypassVulkanDeviceFeatureOverrides.enabled()) {
-            VkPhysicalDeviceVulkan11Features* vk11Features =
+            VkPhysicalDeviceVulkan11Features* vulkan11Features =
                 vk_find_struct<VkPhysicalDeviceVulkan11Features>(pFeatures);
             VkPhysicalDeviceVulkan13Features* vulkan13Features =
                 vk_find_struct<VkPhysicalDeviceVulkan13Features>(pFeatures);
@@ -1653,13 +1742,23 @@ class VkDecoderGlobalState::Impl {
                 vk_find_struct<VkPhysicalDeviceProtectedMemoryFeatures>(pFeatures);
             VkPhysicalDevicePipelineProtectedAccessFeatures* pipelineAccessFeatures =
                 vk_find_struct<VkPhysicalDevicePipelineProtectedAccessFeatures>(pFeatures);
+            VkPhysicalDeviceHostImageCopyFeaturesEXT* hostImageCopyFeatures =
+                vk_find_struct<VkPhysicalDeviceHostImageCopyFeaturesEXT>(pFeatures);
+
+            // TODO(b/569943457): Implement support for host image copy extension
+            if (hostImageCopyFeatures) {
+                hostImageCopyFeatures->hostImageCopy = VK_FALSE;
+            }
+            if (vulkan14Features) {
+                vulkan14Features->hostImageCopy = VK_FALSE;
+            }
 
             if (enableProtectedMemoryEmulation() ) {
                 if (protectedMemoryFeatures) {
                     protectedMemoryFeatures->protectedMemory = VK_TRUE;
                 }
-                if (vk11Features) {
-                    vk11Features->protectedMemory = VK_TRUE;
+                if (vulkan11Features) {
+                    vulkan11Features->protectedMemory = VK_TRUE;
                 }
                 if (pipelineAccessFeatures) {
                     pipelineAccessFeatures->pipelineProtectedAccess = VK_TRUE;
@@ -1671,8 +1770,8 @@ class VkDecoderGlobalState::Impl {
                 if (protectedMemoryFeatures) {
                     protectedMemoryFeatures->protectedMemory = VK_FALSE;
                 }
-                if (vk11Features) {
-                    vk11Features->protectedMemory = VK_FALSE;
+                if (vulkan11Features) {
+                    vulkan11Features->protectedMemory = VK_FALSE;
                 }
                 // No need to change pipelineProtectedAccess features as they
                 // can be enabled without enabling 'protectedMemory'
@@ -2312,9 +2411,9 @@ class VkDecoderGlobalState::Impl {
                 protectedMemoryFeatureRequested = true;
             }
 
-            VkPhysicalDeviceVulkan11Features* vk11Features =
+            VkPhysicalDeviceVulkan11Features* vulkan11Features =
                 vk_find_struct<VkPhysicalDeviceVulkan11Features>(&createInfoFiltered);
-            if (vk11Features != nullptr && vk11Features->protectedMemory) {
+            if (vulkan11Features != nullptr && vulkan11Features->protectedMemory) {
                 protectedMemoryFeatureRequested = true;
             }
 
@@ -2331,8 +2430,8 @@ class VkDecoderGlobalState::Impl {
                     protectedMemoryFeatures->protectedMemory) {
                     protectedMemoryFeatures->protectedMemory = false;
                 }
-                if (vk11Features != nullptr && vk11Features->protectedMemory) {
-                    vk11Features->protectedMemory = false;
+                if (vulkan11Features != nullptr && vulkan11Features->protectedMemory) {
+                    vulkan11Features->protectedMemory = false;
                 }
 
                 if (pipelineProtectedAccessFeatureRequested) {
@@ -3261,19 +3360,20 @@ class VkDecoderGlobalState::Impl {
             pCreateInfo = &decompInfo;
         }
 
-#ifdef __APPLE__
-        // We do some validation on macOS, because it can crash the whole app if exceeded.
+        // We do some validation to avoid undefined behaviors, for stability.
+        // This is needed mainly for Metal backend, as the invalid usage leads
+        // to driver crashes, but it's also required for software backend to avoid
+        // integer overflows and potential vulnerabilities.
         if (pCreateInfo->imageType == VK_IMAGE_TYPE_2D &&
             (pCreateInfo->extent.width > deviceInfo->maxImageDimension2D ||
              pCreateInfo->extent.height > deviceInfo->maxImageDimension2D)) {
             GFXSTREAM_WARNING(
                 "vkCreateImage: requested image dimensions (%u x %u) "
-                "exceeds maxImageDimension2D limit (%u).",
+                "exceed maxImageDimension2D limit (%u).",
                 pCreateInfo->extent.width, pCreateInfo->extent.height,
                 deviceInfo->maxImageDimension2D);
             return VK_ERROR_VALIDATION_FAILED;
         }
-#endif
 
         std::unique_ptr<AndroidNativeBufferInfo> anbInfo = nullptr;
         const VkNativeBufferANDROID* nativeBufferANDROID =
@@ -3411,6 +3511,35 @@ class VkDecoderGlobalState::Impl {
         imageInfo.anbInfo.reset();
     }
 
+    void unbindFromOptimalImageLocked(MemoryInfo* memoryInfo, VkImage image) {
+        memoryInfo->optimalImageMemoryRanges.erase(image);
+    }
+
+    void bindToOptimalImageLocked(MemoryInfo* memoryInfo, VkImage image, VkDeviceSize offset,
+                                  VkDeviceSize size) {
+        memoryInfo->optimalImageMemoryRanges[image] = {offset, size};
+    }
+
+    void recordImageMemoryBindLocked(VkDevice device, VulkanDispatch* vk, VkImage image,
+                                     ImageInfo* imageInfo, MemoryInfo* memoryInfo,
+                                     VkDeviceMemory memory, VkDeviceSize memoryOffset)
+        REQUIRES(mMutex) {
+        imageInfo->memory = memory;
+        imageInfo->memoryOffset = memoryOffset;
+        if (imageInfo->imageCreateInfoShallow.tiling == VK_IMAGE_TILING_OPTIMAL &&
+            !imageInfo->anbInfo) {
+            VkMemoryRequirements memReqs = {};
+            if (vk && vk->vkGetImageMemoryRequirements) {
+                vk->vkGetImageMemoryRequirements(device, image, &memReqs);
+            }
+            updateImageMemoryRequirementsLocked(device, image, &memReqs);
+            imageInfo->memorySize = memReqs.size;
+            if (imageInfo->memorySize > 0) {
+                bindToOptimalImageLocked(memoryInfo, image, memoryOffset, imageInfo->memorySize);
+            }
+        }
+    }
+
     void destroyImageLocked(VkDevice device, VulkanDispatch* deviceDispatch, VkImage image)
         REQUIRES(mMutex) {
         auto imageInfoIt = mImageInfo.find(image);
@@ -3418,6 +3547,12 @@ class VkDecoderGlobalState::Impl {
         auto& imageInfo = imageInfoIt->second;
 
         destroyImageWithExclusiveInfo(device, deviceDispatch, image, imageInfo);
+        if (imageInfo.memory != VK_NULL_HANDLE) {
+            auto* memoryInfo = gfxstream::base::find(mMemoryInfo, imageInfo.memory);
+            if (memoryInfo) {
+                unbindFromOptimalImageLocked(memoryInfo, image);
+            }
+        }
 
         mImageInfo.erase(image);
     }
@@ -3518,7 +3653,7 @@ class VkDecoderGlobalState::Impl {
             deviceInfo->debugUtilsHelper.addDebugLabel(image, "ColorBuffer:%d",
                                                        *imageInfo->boundColorBuffer);
         }
-        imageInfo->memory = memory;
+        recordImageMemoryBindLocked(device, vk, image, imageInfo, memoryInfo, memory, memoryOffset);
 
         if (!imageInfo->compressInfo) {
             return VK_SUCCESS;
@@ -3618,7 +3753,8 @@ class VkDecoderGlobalState::Impl {
                     deviceInfo->debugUtilsHelper.addDebugLabel(
                         pBindInfos[i].image, "ColorBuffer:%d", *memoryInfo->boundColorBuffer);
                 }
-                imageInfo->memory = pBindInfos[i].memory;
+                recordImageMemoryBindLocked(device, vk, pBindInfos[i].image, imageInfo, memoryInfo,
+                                            pBindInfos[i].memory, pBindInfos[i].memoryOffset);
             }
         }
 
@@ -3635,8 +3771,9 @@ class VkDecoderGlobalState::Impl {
         }
 
         std::lock_guard<std::mutex> lock(mMutex);
+        const VkImage originalImage = pCreateInfo->image;
         auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
-        auto* imageInfo = gfxstream::base::find(mImageInfo, pCreateInfo->image);
+        auto* imageInfo = gfxstream::base::find(mImageInfo, originalImage);
         if (!deviceInfo || !imageInfo) return VK_ERROR_OUT_OF_HOST_MEMORY;
         VkImageViewCreateInfo createInfo;
         bool needEmulatedAlpha = false;
@@ -3672,6 +3809,7 @@ class VkDecoderGlobalState::Impl {
         VALIDATE_NEW_HANDLE_INFO_ENTRY(mImageViewInfo, *pView);
         auto& imageViewInfo = mImageViewInfo[*pView];
         imageViewInfo.device = device;
+        imageViewInfo.image = originalImage;
         imageViewInfo.needEmulatedAlpha = needEmulatedAlpha;
         imageViewInfo.boundColorBuffer = imageInfo->boundColorBuffer;
         if (imageViewInfo.boundColorBuffer) {
@@ -8741,7 +8879,17 @@ class VkDecoderGlobalState::Impl {
             return imageCreateRes;
         }
 
-        on_vkGetImageMemoryRequirements(pool, apiCallHandle, boxed_device, unbox_VkImage(*pImage),
+        VkImage image = try_unbox_VkImage(*pImage);
+        if (image == VK_NULL_HANDLE) {
+            // This should not happen on valid Vulkan apps and the boxed image
+            // should stay valid until the end of this call even after moving out
+            // of the lock, but better to avoid crashes with invalid inputs.
+            GFXSTREAM_ERROR("Failed to unbox VkImage %p when creating image with requirements.", *pImage);
+            *pImage = VK_NULL_HANDLE;
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+
+        on_vkGetImageMemoryRequirements(pool, apiCallHandle, boxed_device, image,
                                         pMemoryRequirements);
 
         return imageCreateRes;
@@ -8761,9 +8909,17 @@ class VkDecoderGlobalState::Impl {
         if (bufferCreateRes != VK_SUCCESS) {
             return bufferCreateRes;
         }
+        VkBuffer buffer = try_unbox_VkBuffer(*pBuffer);
+        if (buffer == VK_NULL_HANDLE) {
+            // This should not happen on valid Vulkan apps and the boxed buffer
+            // should stay valid until the end of this call even after moving out
+            // of the lock, but better to avoid crashes with invalid inputs.
+            GFXSTREAM_ERROR("Failed to unbox VkBuffer %p when creating buffer with requirements.", *pBuffer);
+            *pBuffer = VK_NULL_HANDLE;
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
 
-        on_vkGetBufferMemoryRequirements(pool, apiCallHandle, boxed_device, unbox_VkBuffer(*pBuffer),
-                                         pMemoryRequirements);
+        on_vkGetBufferMemoryRequirements(pool, apiCallHandle, boxed_device, buffer, pMemoryRequirements);
 
         return bufferCreateRes;
     }
@@ -9018,6 +9174,13 @@ class VkDecoderGlobalState::Impl {
         VALIDATE_NEW_HANDLE_INFO_ENTRY(mRenderPassInfo, *pRenderPass);
         auto& renderPassInfo = mRenderPassInfo[*pRenderPass];
         renderPassInfo.device = device;
+        if (pCreateInfo->pAttachments) {
+            renderPassInfo.attachmentFinalLayouts.reserve(pCreateInfo->attachmentCount);
+            for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
+                renderPassInfo.attachmentFinalLayouts.push_back(
+                    pCreateInfo->pAttachments[i].finalLayout);
+            }
+        }
 
         *pRenderPass = new_boxed_non_dispatchable_VkRenderPass(*pRenderPass);
 
@@ -9098,6 +9261,13 @@ class VkDecoderGlobalState::Impl {
         VALIDATE_NEW_HANDLE_INFO_ENTRY(mRenderPassInfo, *pRenderPass);
         auto& renderPassInfo = mRenderPassInfo[*pRenderPass];
         renderPassInfo.device = device;
+        if (pCreateInfo->pAttachments) {
+            renderPassInfo.attachmentFinalLayouts.reserve(pCreateInfo->attachmentCount);
+            for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
+                renderPassInfo.attachmentFinalLayouts.push_back(
+                    pCreateInfo->pAttachments[i].finalLayout);
+            }
+        }
 
         *pRenderPass = new_boxed_non_dispatchable_VkRenderPass(*pRenderPass);
 
@@ -9155,6 +9325,45 @@ class VkDecoderGlobalState::Impl {
 
         cmdBufferInfo->releasedColorBuffers.insert(fbInfo->attachedColorBuffers.begin(),
                                                    fbInfo->attachedColorBuffers.end());
+
+        RenderPassInfo* rpInfo =
+            gfxstream::base::find(mRenderPassInfo, pRenderPassBegin->renderPass);
+        if (rpInfo) {
+            const VkRenderPassAttachmentBeginInfo* attachmentBeginInfo = nullptr;
+            for (const auto* next =
+                     reinterpret_cast<const VkBaseInStructure*>(pRenderPassBegin->pNext);
+                 next != nullptr; next = next->pNext) {
+                if (next->sType == VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO) {
+                    attachmentBeginInfo =
+                        reinterpret_cast<const VkRenderPassAttachmentBeginInfo*>(next);
+                    break;
+                }
+            }
+            if (attachmentBeginInfo && attachmentBeginInfo->pAttachments) {
+                const uint32_t count =
+                    std::min<uint32_t>(attachmentBeginInfo->attachmentCount,
+                                       rpInfo->attachmentFinalLayouts.size());
+                for (uint32_t i = 0; i < count; i++) {
+                    auto* imageViewInfo =
+                        gfxstream::base::find(mImageViewInfo, attachmentBeginInfo->pAttachments[i]);
+                    if (imageViewInfo && imageViewInfo->image != VK_NULL_HANDLE &&
+                        rpInfo->attachmentFinalLayouts[i] != VK_IMAGE_LAYOUT_UNDEFINED) {
+                        cmdBufferInfo->imageLayouts[imageViewInfo->image] =
+                            rpInfo->attachmentFinalLayouts[i];
+                    }
+                }
+            } else {
+                const size_t count = std::min(fbInfo->attachedImages.size(),
+                                              rpInfo->attachmentFinalLayouts.size());
+                for (size_t i = 0; i < count; i++) {
+                    VkImage image = fbInfo->attachedImages[i];
+                    if (image != VK_NULL_HANDLE &&
+                        rpInfo->attachmentFinalLayouts[i] != VK_IMAGE_LAYOUT_UNDEFINED) {
+                        cmdBufferInfo->imageLayouts[image] = rpInfo->attachmentFinalLayouts[i];
+                    }
+                }
+            }
+        }
         return true;
     }
 
@@ -9315,13 +9524,20 @@ class VkDecoderGlobalState::Impl {
         auto& framebufferInfo = mFramebufferInfo[*pFramebuffer];
         framebufferInfo.device = device;
 
-        if ((pCreateInfo->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) == 0) {
+        if ((pCreateInfo->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) == 0 &&
+            pCreateInfo->pAttachments) {
             // b/327522469
             // Track the Colorbuffers that would be written to.
             // It might be better to check for VK_QUEUE_FAMILY_EXTERNAL in pipeline barrier.
             // But the guest does not always add it to pipeline barrier.
+            framebufferInfo.attachedImages.reserve(pCreateInfo->attachmentCount);
             for (uint32_t i = 0; i < pCreateInfo->attachmentCount; i++) {
                 auto* imageViewInfo = gfxstream::base::find(mImageViewInfo, pCreateInfo->pAttachments[i]);
+                if (!imageViewInfo) {
+                    framebufferInfo.attachedImages.push_back(VK_NULL_HANDLE);
+                    continue;
+                }
+                framebufferInfo.attachedImages.push_back(imageViewInfo->image);
                 if (imageViewInfo->boundColorBuffer.has_value()) {
                     framebufferInfo.attachedColorBuffers.push_back(
                         imageViewInfo->boundColorBuffer.value());
@@ -9662,10 +9878,18 @@ class VkDecoderGlobalState::Impl {
         uint64_t poolId, uint32_t pendingAlloc, bool* didAlloc) REQUIRES(mMutex) {
         auto* poolInfo = gfxstream::base::find(mDescriptorPoolInfo, pool);
         if (!poolInfo) {
-            GFXSTREAM_FATAL("VkDescriptorPool:%p not found.", pool);
+            GFXSTREAM_ERROR("VkDescriptorPool:%p not found.", pool);
+            *didAlloc = false;
+            return VK_NULL_HANDLE;
         }
 
         BoxedHandleInfo* setHandleInfo = sBoxedHandleManager.get(poolId);
+        if (!setHandleInfo) {
+            GFXSTREAM_ERROR("Invalid descriptor set poolId 0x%" PRIx64 " for VkDescriptorPool:%p",
+                            poolId, pool);
+            *didAlloc = false;
+            return VK_NULL_HANDLE;
+        }
 
         if (setHandleInfo->underlying) {
             if (pendingAlloc) {
@@ -9696,8 +9920,10 @@ class VkDecoderGlobalState::Impl {
                 *didAlloc = true;
                 return allocedSet;
             } else {
-                GFXSTREAM_FATAL("VkDescriptorPool:%p wanted to get set with id 0x%" PRIx64, pool, poolId);
-                return nullptr;
+                GFXSTREAM_ERROR("VkDescriptorPool:%p wanted to get set with id 0x%" PRIx64, pool,
+                                poolId);
+                *didAlloc = false;
+                return VK_NULL_HANDLE;
             }
         }
     }
@@ -9758,6 +9984,9 @@ class VkDecoderGlobalState::Impl {
             setsToUpdate[i] = getOrAllocateDescriptorSetFromPoolAndIdLocked(
                 vk, device, pDescriptorPools[whichPool], pDescriptorSetLayouts[i], poolId,
                 pendingAlloc, &didAllocThisTime);
+            if (setsToUpdate[i] == VK_NULL_HANDLE) {
+                return;
+            }
 
             if (didAllocThisTime) didAlloc = true;
         }
@@ -11196,7 +11425,9 @@ class VkDecoderGlobalState::Impl {
                        instanceInfo.applicationName.c_str(), instanceInfo.engineName.c_str());
 
 #ifdef CONFIG_AEMU
-        m_vkEmulation->getGlobalState()->unregisterVulkanInstance((uint64_t)instance);
+        if (m_vkEmulation->getGlobalState()) {
+            m_vkEmulation->getGlobalState()->unregisterVulkanInstance((uint64_t)instance);
+        }
 #endif
         delete_VkInstance(instanceInfo.boxed);
         LOG_CALLS_VERBOSE("destroyInstanceObjects: finished.");
