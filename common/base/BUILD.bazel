@@ -36,7 +36,12 @@ objc_library(
     srcs = [
         "system-native-mac.mm",
     ],
-    copts = ["-std=c++20"],
+    # These sources use manual reference counting (retain/release, CFRelease),
+    # so disable ARC which objc_library enables by default.
+    copts = [
+        "-fno-objc-arc",
+        "-std=c++20",
+    ],
     sdk_frameworks = [
         "IOKit",
         "AppKit",

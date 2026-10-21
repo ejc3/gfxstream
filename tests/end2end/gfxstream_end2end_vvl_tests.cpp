@@ -29,6 +29,30 @@ using testing::NotNull;
 
 class GfxstreamEnd2EndVvlTest : public GfxstreamEnd2EndTest {
    protected:
+    void SetUp() override {
+        testing::internal::CaptureStdout();
+        testing::internal::CaptureStderr();
+        mOutputCaptured = true;
+        GfxstreamEnd2EndTest::SetUp();
+    }
+
+    void TearDown() override {
+        GfxstreamEnd2EndTest::TearDown();
+        if (mOutputCaptured) {
+            (void)testing::internal::GetCapturedStdout();
+            (void)testing::internal::GetCapturedStderr();
+            mOutputCaptured = false;
+        }
+    }
+
+    std::string GetCapturedLogs() {
+        if (mOutputCaptured) {
+            mOutputCaptured = false;
+            return testing::internal::GetCapturedStdout() + testing::internal::GetCapturedStderr();
+        }
+        return "";
+    }
+
     void DoValidVkOperations() {
         auto [instance, physicalDevice, device, queue, queueFamilyIndex] =
             GFXSTREAM_ASSERT(SetUpTypicalVkTestEnvironment());
@@ -65,6 +89,9 @@ class GfxstreamEnd2EndVvlTest : public GfxstreamEnd2EndTest {
         auto image = device->createImageUnique(imageCreateInfo).value;
         ASSERT_TRUE(image.get() != VK_NULL_HANDLE);
     }
+
+   private:
+    bool mOutputCaptured = false;
 };
 
 TEST_P(GfxstreamEnd2EndVvlTest, BasicValidOperations) {
@@ -74,40 +101,53 @@ TEST_P(GfxstreamEnd2EndVvlTest, BasicValidOperations) {
 TEST_P(GfxstreamEnd2EndVvlTest, InvalidVkOperationTriggersVvlLog) {
     bool vvlEnabled = false;
     for (const auto& f : GetParam().with_features) {
-        if (f == "VulkanValidation") {
+        if (f.find("VulkanValidation") != std::string::npos) {
             vvlEnabled = true;
             break;
         }
     }
 
-    std::vector<std::string> capturedLogs;
-    gfxstream::host::SetGfxstreamLogCallback([&capturedLogs](gfxstream::host::LogLevel level,
-                                                              const char* file, int line,
-                                                              const char* function,
-                                                              const char* message) {
-        if (message && std::string(message).find("VVL") != std::string::npos) {
-            capturedLogs.push_back(message);
-        }
-    });
+    {
+        auto [instance, physicalDevice, device, queue, queueFamilyIndex] =
+            GFXSTREAM_ASSERT(SetUpTypicalVkTestEnvironment());
 
-    auto [instance, physicalDevice, device, queue, queueFamilyIndex] =
-        GFXSTREAM_ASSERT(SetUpTypicalVkTestEnvironment());
+        // Perform invalid operations that trigger VVL validation without hitting Mesa assertions:
+        // 1. createBuffer with usage = 0 (VUID-VkBufferCreateInfo-usage-requiredbitmask)
+        const vkhpp::BufferCreateInfo invalidBufferInfo = {
+            .size = 64,
+            .usage = {},
+        };
+        auto bufferRes = device->createBufferUnique(invalidBufferInfo);
+        (void)bufferRes;
 
-    // Perform an invalid operation: createBuffer with size = 0 triggers VUID-VkBufferCreateInfo-size-00904
-    const vkhpp::BufferCreateInfo invalidBufferInfo = {
-        .size = 0,
-        .usage = vkhpp::BufferUsageFlagBits::eTransferSrc,
-    };
-    (void)device->createBuffer(invalidBufferInfo);
+        // 2. createSampler with maxLod < minLod (VUID-VkSamplerCreateInfo-maxLod-01973)
+        const vkhpp::SamplerCreateInfo invalidSamplerInfo = {
+            .minLod = 2.0f,
+            .maxLod = 1.0f,
+        };
+        auto samplerRes = device->createSamplerUnique(invalidSamplerInfo);
+        (void)samplerRes;
+    }
 
-    gfxstream::host::SetGfxstreamLogCallback(nullptr);
+    // Tear down guest connection so kumquat_virtio processes and flushes all pending commands/logs
+    TearDownGuest();
+
+    const std::string logs = GetCapturedLogs();
 
     if (vvlEnabled) {
-        EXPECT_FALSE(capturedLogs.empty())
-            << "Expected VVL validation output in logs when VulkanValidation feature is enabled.";
+        EXPECT_NE(logs.find("VVL"), std::string::npos)
+            << "Expected VVL prefix in logs when VulkanValidation feature is enabled. Logs:\n"
+            << logs;
+        EXPECT_NE(logs.find("VUID-"), std::string::npos)
+            << "Expected VVL VUID validation error in logs when VulkanValidation feature is enabled. Logs:\n"
+            << logs;
     } else {
-        EXPECT_TRUE(capturedLogs.empty())
-            << "Expected no VVL validation output in logs when VulkanValidation feature is disabled.";
+        EXPECT_EQ(logs.find("VVL"), std::string::npos)
+            << "Expected no VVL validation output in logs when VulkanValidation feature is disabled. Logs:\n"
+            << logs;
+        EXPECT_EQ(logs.find("VUID-"), std::string::npos)
+            << "Expected no VVL VUID validation error in logs when VulkanValidation feature is disabled. Logs:\n"
+            << logs;
     }
 }
 
@@ -122,7 +162,7 @@ INSTANTIATE_TEST_SUITE_P(GfxstreamEnd2EndTests, GfxstreamEnd2EndVvlTest, ::testi
                                  TestParams{
                                      .with_gl = false,
                                      .with_vk = true,
-                                     .with_features = {"MinimalLogging", "VulkanValidation"},
+                                     .with_features = {"MinimalLogging", "VulkanValidation:print"},
                                      .with_transport = GfxstreamTransport::kVirtioGpuAsg,
                                  },
                              };

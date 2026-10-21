@@ -8,3 +8,8 @@ natsu@google.com
 sergiuferentz@google.com
 bohu@google.com
 jpcottin@google.com
+
+# OWNERS for code-isolation upstream merge process only.
+achant@google.com #{LAST_RESORT_SUGGESTION}
+baligh@google.com #{LAST_RESORT_SUGGESTION}
+yichunko@google.com #{LAST_RESORT_SUGGESTION}

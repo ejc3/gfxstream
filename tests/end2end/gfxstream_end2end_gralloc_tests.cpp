@@ -35,8 +35,6 @@ TEST_P(GfxstreamEnd2EndGrallocTests, Allocate_YV12) {
 }
 
 TEST_P(GfxstreamEnd2EndGrallocTests, Allocate_YCbCr888420) {
-    ASSERT_THAT(false, Eq(true));
-
     auto ahb = GFXSTREAM_ASSERT(ScopedAHardwareBuffer::Allocate(
         *mGralloc, 32, 32, GFXSTREAM_AHB_FORMAT_Y8Cb8Cr8_420));
 }
