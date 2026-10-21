@@ -886,28 +886,24 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
             }
             resourceSnapshot.mutable_ring_blob()->Swap(&*snapshotRingBlobOpt);
         } else if (std::holds_alternative<ExternalMemoryInfo>(*mBlobMemory)) {
-            if (!mLatestAttachedContext) {
-                GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob context?", mId);
-                return std::nullopt;
-            }
             if (!mCreateBlobArgs) {
                 GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob args?", mId);
                 return std::nullopt;
             }
             auto snapshotDescriptorInfo = resourceSnapshot.mutable_external_memory_descriptor();
-            snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
+            if (mLatestAttachedContext) {
+                snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
+            }
             snapshotDescriptorInfo->set_blob_id(mCreateBlobArgs->blob_id);
         } else if (std::holds_alternative<ExternalMemoryMapping>(*mBlobMemory)) {
-            if (!mLatestAttachedContext) {
-                GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob context?", mId);
-                return std::nullopt;
-            }
             if (!mCreateBlobArgs) {
                 GFXSTREAM_ERROR("Failed to snapshot resource %d: missing blob args?", mId);
                 return std::nullopt;
             }
             auto snapshotDescriptorInfo = resourceSnapshot.mutable_external_memory_mapping();
-            snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
+            if (mLatestAttachedContext) {
+                snapshotDescriptorInfo->set_context_id(*mLatestAttachedContext);
+            }
             snapshotDescriptorInfo->set_blob_id(mCreateBlobArgs->blob_id);
         }
     }
@@ -964,30 +960,34 @@ std::optional<VirtioGpuResourceSnapshot> VirtioGpuResource::Snapshot() const {
         resource.mBlobMemory.emplace(std::move(*resourceRingBlobOpt));
     } else if (resourceSnapshot.has_external_memory_descriptor()) {
         const auto& snapshotDescriptorInfo = resourceSnapshot.external_memory_descriptor();
+        if (snapshotDescriptorInfo.has_context_id()) {
+            auto descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
+                snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
+            if (!descriptorInfoOpt) {
+                GFXSTREAM_ERROR("Failed to restore resource: failed to find blob descriptor info.");
+                return std::nullopt;
+            }
 
-        auto descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
-            snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
-        if (!descriptorInfoOpt) {
-            GFXSTREAM_ERROR("Failed to restore resource: failed to find blob descriptor info.");
-            return std::nullopt;
+            resource.mBlobMemory.emplace(
+                std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
         }
-
-        resource.mBlobMemory.emplace(
-            std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
     } else if (resourceSnapshot.has_external_memory_mapping()) {
         const auto& snapshotDescriptorInfo = resourceSnapshot.external_memory_mapping();
-
-        auto memoryMappingOpt = ExternalObjectManager::get()->removeMapping(
-            snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
-        if (!memoryMappingOpt) {
-            GFXSTREAM_ERROR("Failed to restore resource: failed to find mapping info.");
-            return std::nullopt;
+        if (snapshotDescriptorInfo.has_context_id()) {
+            auto memoryMappingOpt = ExternalObjectManager::get()->removeMapping(
+                snapshotDescriptorInfo.context_id(), snapshotDescriptorInfo.blob_id());
+            if (!memoryMappingOpt) {
+                GFXSTREAM_ERROR("Failed to restore resource: failed to find mapping info.");
+                return std::nullopt;
+            }
+            resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
         }
-        resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
     }
 
     if (resourceSnapshot.has_latest_attached_context()) {
         resource.mLatestAttachedContext = resourceSnapshot.latest_attached_context();
+    } else {
+        resource.mLatestAttachedContext = std::nullopt;
     }
 
     resource.mAttachedToContexts.insert(resourceSnapshot.attached_contexts().begin(),
