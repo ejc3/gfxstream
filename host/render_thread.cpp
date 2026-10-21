@@ -90,15 +90,15 @@ uint32_t RenderThread::getActiveRenderThreadsCount() {
     return sActiveRenderThreads.load();
 }
 
-RenderThread::RenderThread(RenderChannelImpl* channel,
-                           gfxstream::Stream* load,
+RenderThread::RenderThread(RenderChannelImpl* channel, gfxstream::Stream* load,
                            uint32_t virtioGpuContextId)
     : gfxstream::base::Thread(gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
-                            "RenderThread"),
+                              virtioGpuContextId == INVALID_CONTEXT_ID
+                                  ? "RenderThread"
+                                  : "RenderThread-" + std::to_string(virtioGpuContextId)),
       mChannel(channel),
       mRunInLimitedMode(gfxstream::base::getCpuCoreCount() < kMinThreadsToRunUnlimited),
-      mContextId(virtioGpuContextId)
-{
+      mContextId(virtioGpuContextId) {
     incrementAndCheckRenderThreadCount();
     if (load) {
         const bool success = load->getByte();
@@ -113,11 +113,15 @@ RenderThread::RenderThread(RenderChannelImpl* channel,
 }
 
 RenderThread::RenderThread(const AsgConsumerCreateInfo& info, Stream* load)
-    : gfxstream::base::Thread(gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
-                              info.virtioGpuContextName ? *info.virtioGpuContextName : ""),
+    : gfxstream::base::Thread(
+          gfxstream::base::ThreadFlags::MaskSignals, 2 * 1024 * 1024,
+          (info.virtioGpuContextId && *info.virtioGpuContextId != INVALID_CONTEXT_ID)
+              ? "RenderThread-" + std::to_string(*info.virtioGpuContextId)
+              : "RenderThread"),
       mRingStream(new RingStream(info, kStreamBufferSize)),
       mContextId(info.virtioGpuContextId ? *info.virtioGpuContextId : 0),
-      mCapsetId(info.virtioGpuCapsetId ? *info.virtioGpuCapsetId : 0) {
+      mCapsetId(info.virtioGpuCapsetId ? *info.virtioGpuCapsetId : 0),
+      mContextName(info.virtioGpuContextName) {
     incrementAndCheckRenderThreadCount();
     if (load) {
         const bool success = load->getByte();
@@ -449,8 +453,8 @@ intptr_t RenderThread::main() {
             anyProgress |= progress;
 
             const char* contextName = nullptr;
-            if (mNameOpt) {
-                contextName = (*mNameOpt).c_str();
+            if (mContextName) {
+                contextName = mContextName->c_str();
             }
 
             if (!tInfo->m_puid) {
