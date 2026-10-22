@@ -112,6 +112,12 @@ using gfxstream::host::GfxApiLogger;
 template <typename T>
 void validateRequiredHandle(const char* api_name, const char* parameter_name, T value) {
     if (value == VK_NULL_HANDLE) {
+        if (VkDecoderGlobalState::get()->isSnapshotCurrentlyLoading()) {
+            GFXSTREAM_ERROR("Invalid required handle for %s param %s during snapshot load",
+                            api_name, parameter_name);
+            VkDecoderGlobalState::get()->setSnapshotLoadError();
+            return;
+        }
         GFXSTREAM_FATAL("Invalid required handle for %s param %s", api_name, parameter_name);
     }
 }
@@ -493,7 +499,15 @@ class VkDecoderGlobalState::Impl {
         GFXSTREAM_DEBUG("VulkanSnapshots save (begin)");
         std::lock_guard<std::mutex> lock(mMutex);
 
-        mSnapshotState = SnapshotState::Saving;
+        struct ScopedSnapshotSaveState {
+            Impl* self;
+            ScopedSnapshotSaveState(Impl* impl) : self(impl) {
+                self->mSnapshotState = SnapshotState::Saving;
+            }
+            ~ScopedSnapshotSaveState() {
+                self->mSnapshotState = SnapshotState::Normal;
+            }
+        } scopedSnapshotSaveState(this);
 
 #ifdef CONFIG_AEMU
         if (!mInstanceInfo.empty()) {
@@ -640,29 +654,34 @@ class VkDecoderGlobalState::Impl {
             auto unboxedDescriptorPool = unbox_VkDescriptorPool(boxedDescriptorPool);
             const DescriptorPoolInfo& poolInfo = mDescriptorPoolInfo[unboxedDescriptorPool];
 
-            auto poolIds = poolInfo.poolIds;
+            // Boxed VkDescriptorSet handles whose contents are serialized for this
+            // pool, one record each.
+            auto boxedSetsToSave = poolInfo.preallocatedBoxedSets;
             if (!m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
-                poolIds.clear();
-                // we need to fake pool ids
-                for (auto it : poolInfo.allocedSetsToBoxed) {
+                // Without batched updates there are no pre-minted slots, so
+                // serialize the sets that are currently allocated instead.
+                boxedSetsToSave.clear();
+                for (auto it : poolInfo.allocatedSetsUnboxedToBoxed) {
                     auto boxedSet = it.second;
-                    poolIds.push_back((uint64_t)boxedSet);
+                    boxedSetsToSave.push_back((uint64_t)boxedSet);
                 }
-                sort(poolIds.begin(), poolIds.end());
+                sort(boxedSetsToSave.begin(), boxedSetsToSave.end());
             }
-            int dcount = poolIds.size();
-            GFXSTREAM_DEBUG("snapshot save: %d descriptor pool for this pool", dcount);
-            for (uint64_t poolId : poolIds) {
-                BoxedHandleInfo* setHandleInfo = sBoxedHandleManager.get(poolId);
-                bool allocated = setHandleInfo->underlying != 0;
+            int dcount = boxedSetsToSave.size();
+            GFXSTREAM_DEBUG("snapshot save: %d descriptor sets for this pool", dcount);
+            stream->putBe64(boxedSetsToSave.size());
+            for (uint64_t boxedSet : boxedSetsToSave) {
+                stream->putBe64(boxedSet);
+                BoxedHandleInfo* setHandleInfo = sBoxedHandleManager.get(boxedSet);
+                bool allocated = setHandleInfo && (setHandleInfo->underlying != 0);
                 stream->putByte(allocated);
                 if (!allocated) {
                     GFXSTREAM_DEBUG("snapshot save: skip 0x%llx descriptor set for this pool",
-                                    (unsigned long long)poolId);
+                                    (unsigned long long)boxedSet);
                     continue;
                 }
                 GFXSTREAM_DEBUG("snapshot save: keep 0x%llx descriptor set for this pool",
-                                (unsigned long long)poolId);
+                                (unsigned long long)boxedSet);
 
                 const DescriptorSetInfo& descriptorSetInfo =
                     mDescriptorSetInfo[(VkDescriptorSet)setHandleInfo->underlying];
@@ -806,7 +825,6 @@ class VkDecoderGlobalState::Impl {
         // Semaphores
         saveSemaphores(stream);
 
-        mSnapshotState = SnapshotState::Normal;
         GFXSTREAM_DEBUG("VulkanSnapshots save (end)");
         if (stream && stream->hasErrors()) {
             GFXSTREAM_ERROR("VulkanSnapshots save failed due to stream errors: %s",
@@ -821,6 +839,17 @@ class VkDecoderGlobalState::Impl {
         // from FrameBuffer's onLoad method.
         GFXSTREAM_DEBUG("VulkanSnapshots load (begin)");
 
+        struct ScopedSnapshotLoadState {
+            Impl* self;
+            ~ScopedSnapshotLoadState() {
+                std::lock_guard<std::mutex> lock(self->mMutex);
+                self->mSnapshotLoadVkDeviceToVirtioCpuContextId.reset();
+                self->mSnapshotLoadBoxedInstance2ContextId.clear();
+                self->mSnapshotState = SnapshotState::Normal;
+                sBoxedHandleManager.replayHandles({});
+            }
+        } scopedSnapshotLoadState{this};
+
         // destroy all current internal data structures
         GFXSTREAM_DEBUG("snapshot load: setup internal structures");
         {
@@ -829,6 +858,7 @@ class VkDecoderGlobalState::Impl {
             clearLocked();
 
             mSnapshotState = SnapshotState::Loading;
+            mSnapshotLoadHasError = false;
 
             // This needs to happen before the replay in the decoder so that virtio gpu context ids
             // are available for operations involving `ExternalObjectManager`.
@@ -883,6 +913,10 @@ class VkDecoderGlobalState::Impl {
             if (consumed != decoderReplayBuffer.size()) {
                 GFXSTREAM_ERROR("Failed to completely decode snapshot replay buffer. Consumed %zu of %zu bytes",
                                 consumed, decoderReplayBuffer.size());
+                return false;
+            }
+            if (mSnapshotLoadHasError) {
+                GFXSTREAM_ERROR("Failed to decode snapshot replay buffer due to errors.");
                 return false;
             }
         }
@@ -1079,22 +1113,19 @@ class VkDecoderGlobalState::Impl {
                 !(m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled());
             for (const auto& boxedDescriptorPool : sortedBoxedDescriptorPools) {
                 auto unboxedDescriptorPool = unbox_VkDescriptorPool(boxedDescriptorPool);
-                const DescriptorPoolInfo& poolInfo = mDescriptorPoolInfo[unboxedDescriptorPool];
+                DescriptorPoolInfo& poolInfo = mDescriptorPoolInfo[unboxedDescriptorPool];
 
                 std::vector<VkDescriptorSetLayout> layouts;
-                std::vector<uint64_t> poolIds;
+                // Boxed VkDescriptorSet handles whose contents are restored for
+                // this pool (passed as the "pool ids" of the commit below).
+                std::vector<uint64_t> boxedSetsToRestore;
                 std::vector<VkWriteDescriptorSet> writeDescriptorSets;
                 std::vector<uint32_t> writeStartingIndices;
+                // Boxed sets that save() wrote a record for (and that were
+                // allocated at save time); used to prune replayed sets that the
+                // snapshot does not know about.
+                std::unordered_set<uint64_t> savedBoxedSets;
 
-                auto allpoolIds = poolInfo.poolIds;
-                if (!m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
-                    allpoolIds.clear();
-                    for (auto it : poolInfo.allocedSetsToBoxed) {
-                        auto boxedSet = it.second;
-                        allpoolIds.push_back((uint64_t)boxedSet);
-                    }
-                    sort(allpoolIds.begin(), allpoolIds.end());
-                }
                 // Temporary structures for the pointers in VkWriteDescriptorSet.
                 // Use unique_ptr so that the pointers don't change when vector resizes.
                 std::vector<std::unique_ptr<VkDescriptorImageInfo>> tmpImageInfos;
@@ -1104,17 +1135,30 @@ class VkDecoderGlobalState::Impl {
                     tmpInlineUniformBlocks;
                 std::vector<std::vector<uint8_t>> tmpInlineUniformBlockBuffers;
 
-                for (uint64_t poolId : allpoolIds) {
+                // The stream is self-framing: save() wrote the number of boxed
+                // set records followed by each boxed set handle.
+                uint64_t savedBoxedSetCount = stream->getBe64();
+                for (uint64_t setIdx = 0; setIdx < savedBoxedSetCount; ++setIdx) {
+                    uint64_t boxedSet = stream->getBe64();
                     bool allocated = stream->getByte();
                     if (!allocated) {
                         continue;
                     }
+                    savedBoxedSets.insert(boxedSet);
                     GFXSTREAM_DEBUG("snapshot load: 0x%llx descriptor set for this pool",
-                                    (unsigned long long)poolId);
-                    poolIds.push_back(poolId);
-                    writeStartingIndices.push_back(writeDescriptorSets.size());
+                                    (unsigned long long)boxedSet);
                     VkDescriptorSetLayout boxedLayout = (VkDescriptorSetLayout)stream->getBe64();
-                    layouts.push_back(unbox_VkDescriptorSetLayout(boxedLayout));
+                    VkDescriptorSetLayout unboxedLayout =
+                        try_unbox_VkDescriptorSetLayout(boxedLayout);
+                    BoxedHandleInfo* setHandleInfo = sBoxedHandleManager.get(boxedSet);
+                    bool setValid = (setHandleInfo != nullptr && setHandleInfo->underlying != 0 &&
+                                     (boxedLayout == VK_NULL_HANDLE ||
+                                      unboxedLayout != VK_NULL_HANDLE));
+                    if (setValid) {
+                        boxedSetsToRestore.push_back(boxedSet);
+                        writeStartingIndices.push_back(writeDescriptorSets.size());
+                        layouts.push_back(unboxedLayout);
+                    }
                     uint64_t validWriteCount = stream->getBe64();
                     for (uint64_t write = 0; write < validWriteCount; write++) {
                         uint32_t binding = stream->getBe32();
@@ -1125,24 +1169,37 @@ class VkDecoderGlobalState::Impl {
                             static_cast<VkDescriptorType>(stream->getBe32());
                         VkWriteDescriptorSet writeDescriptorSet = {
                             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                            .dstSet = (VkDescriptorSet)poolId,
+                            .dstSet = (VkDescriptorSet)boxedSet,
                             .dstBinding = binding,
                             .dstArrayElement = arrayElement,
                             .descriptorCount = 1,
                             .descriptorType = descriptorType,
                         };
+                        bool writeValid = setValid;
                         switch (writeType) {
                             case DescriptorSetInfo::DescriptorWriteType::ImageInfo: {
                                 tmpImageInfos.push_back(std::make_unique<VkDescriptorImageInfo>());
                                 writeDescriptorSet.pImageInfo = tmpImageInfos.back().get();
                                 VkDescriptorImageInfo& imageInfo = *tmpImageInfos.back();
                                 stream->read(&imageInfo, sizeof(imageInfo));
-                                imageInfo.imageView = descriptorTypeContainsImage(descriptorType)
-                                                          ? unbox_VkImageView(imageInfo.imageView)
-                                                          : 0;
-                                imageInfo.sampler = descriptorTypeContainsSampler(descriptorType)
-                                                        ? unbox_VkSampler(imageInfo.sampler)
-                                                        : 0;
+                                VkImageView boxedImageView = imageInfo.imageView;
+                                VkSampler boxedSampler = imageInfo.sampler;
+                                imageInfo.imageView =
+                                    descriptorTypeContainsImage(descriptorType)
+                                        ? try_unbox_VkImageView(boxedImageView)
+                                        : VK_NULL_HANDLE;
+                                imageInfo.sampler =
+                                    descriptorTypeContainsSampler(descriptorType)
+                                        ? try_unbox_VkSampler(boxedSampler)
+                                        : VK_NULL_HANDLE;
+                                if ((descriptorTypeContainsImage(descriptorType) &&
+                                     boxedImageView != VK_NULL_HANDLE &&
+                                     imageInfo.imageView == VK_NULL_HANDLE) ||
+                                    (descriptorTypeContainsSampler(descriptorType) &&
+                                     boxedSampler != VK_NULL_HANDLE &&
+                                     imageInfo.sampler == VK_NULL_HANDLE)) {
+                                    writeValid = false;
+                                }
                             } break;
                             case DescriptorSetInfo::DescriptorWriteType::BufferInfo: {
                                 tmpBufferInfos.push_back(
@@ -1150,14 +1207,24 @@ class VkDecoderGlobalState::Impl {
                                 writeDescriptorSet.pBufferInfo = tmpBufferInfos.back().get();
                                 VkDescriptorBufferInfo& bufferInfo = *tmpBufferInfos.back();
                                 stream->read(&bufferInfo, sizeof(bufferInfo));
-                                bufferInfo.buffer = unbox_VkBuffer(bufferInfo.buffer);
+                                VkBuffer boxedBuffer = bufferInfo.buffer;
+                                bufferInfo.buffer = try_unbox_VkBuffer(boxedBuffer);
+                                if (boxedBuffer != VK_NULL_HANDLE &&
+                                    bufferInfo.buffer == VK_NULL_HANDLE) {
+                                    writeValid = false;
+                                }
                             } break;
                             case DescriptorSetInfo::DescriptorWriteType::BufferView: {
                                 tmpBufferViews.push_back(std::make_unique<VkBufferView>());
                                 writeDescriptorSet.pTexelBufferView = tmpBufferViews.back().get();
                                 VkBufferView& bufferView = *tmpBufferViews.back();
                                 stream->read(&bufferView, sizeof(bufferView));
-                                bufferView = unbox_VkBufferView(bufferView);
+                                VkBufferView boxedBufferView = bufferView;
+                                bufferView = try_unbox_VkBufferView(boxedBufferView);
+                                if (boxedBufferView != VK_NULL_HANDLE &&
+                                    bufferView == VK_NULL_HANDLE) {
+                                    writeValid = false;
+                                }
                             } break;
                             case DescriptorSetInfo::DescriptorWriteType::InlineUniformBlock: {
                                 uint32_t dataSize = stream->getBe32();
@@ -1175,13 +1242,13 @@ class VkDecoderGlobalState::Impl {
                                 inlineUniformBlock.pData =
                                     tmpInlineUniformBlockBuffers.back().data();
                                 writeDescriptorSet.pNext = &inlineUniformBlock;
-                                // Note: following is redundant, as arrayElement is guarantee to be
+                                // Note: following is redundant, as arrayElement is guaranteed to be
                                 // 0 due to the way descriptor is handled in snapshot. it just
                                 // serves to clarify that we are updating the whole buffer, to
                                 // account the possibility of accumulative updating
                                 writeDescriptorSet.dstArrayElement = 0;
                                 // Note: following is important to indicate we are updating
-                                // the whole buffer, as it could accumulate multiple update before
+                                // the whole buffer, as it could accumulate multiple updates before
                                 // snapshot is taken
                                 writeDescriptorSet.descriptorCount = dataSize;
                             } break;
@@ -1194,23 +1261,62 @@ class VkDecoderGlobalState::Impl {
                             default:
                                 break;
                         }
-                        writeDescriptorSets.push_back(writeDescriptorSet);
+                        if (writeValid) {
+                            writeDescriptorSets.push_back(writeDescriptorSet);
+                        }
                     }
                 }
-                std::vector<uint32_t> whichPool(poolIds.size(), 0);
+                std::vector<uint32_t> whichPool(boxedSetsToRestore.size(), 0);
                 // no need to allocate descriptors as this is not batched
                 // all the descriptors are already allocated
-                std::vector<uint32_t> pendingAlloc(poolIds.size(), false);
+                std::vector<uint32_t> pendingAlloc(boxedSetsToRestore.size(), false);
 
                 const auto& device = poolInfo.device;
                 const auto& deviceInfo = gfxstream::base::find(mDeviceInfo, device);
                 VulkanDispatch* dvk = dispatch_VkDevice(deviceInfo->boxed);
-                on_vkQueueCommitDescriptorSetUpdatesGOOGLELocked(
-                    &bumpPool, kInvalidSnapshotApiCallHandle, dvk, device, 1,
-                    &unboxedDescriptorPool, poolIds.size(), layouts.data(), poolIds.data(),
-                    whichPool.data(), pendingAlloc.data(), writeStartingIndices.data(),
-                    writeDescriptorSets.size(), writeDescriptorSets.data(),
-                    needToUnboxDescriptorSet);
+                if (!m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
+                    // Replay may have recreated descriptor sets that were no longer
+                    // allocated when the snapshot was saved. Drop them so that the
+                    // pool accounting matches the saved state.
+                    std::vector<VkDescriptorSet> staleUnboxedSets;
+                    for (const auto& [allocedUnboxedSet, allocedBoxedSet] :
+                         poolInfo.allocatedSetsUnboxedToBoxed) {
+                        if (savedBoxedSets.find((uint64_t)allocedBoxedSet) ==
+                            savedBoxedSets.end()) {
+                            staleUnboxedSets.push_back(allocedUnboxedSet);
+                        }
+                    }
+                    if (!staleUnboxedSets.empty()) {
+                        GFXSTREAM_WARNING(
+                            "snapshot load: VkDescriptorPool:%p has %zu replayed descriptor "
+                            "set(s) that were not in the snapshot; removing them",
+                            unboxedDescriptorPool, staleUnboxedSets.size());
+                        if (poolInfo.createInfo.flags &
+                            VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT) {
+                            dvk->vkFreeDescriptorSets(device, unboxedDescriptorPool,
+                                                      staleUnboxedSets.size(),
+                                                      staleUnboxedSets.data());
+                        }
+                    }
+                    for (VkDescriptorSet staleSet : staleUnboxedSets) {
+                        VkDescriptorSet boxedStaleSet =
+                            poolInfo.allocatedSetsUnboxedToBoxed[staleSet];
+                        if (auto* setInfo = gfxstream::base::find(mDescriptorSetInfo, staleSet)) {
+                            removeDescriptorSetAllocationLocked(poolInfo, setInfo->bindings);
+                        }
+                        mDescriptorSetInfo.erase(staleSet);
+                        poolInfo.allocatedSetsUnboxedToBoxed.erase(staleSet);
+                        delete_VkDescriptorSet(boxedStaleSet);
+                    }
+                }
+                if (!boxedSetsToRestore.empty()) {
+                    on_vkQueueCommitDescriptorSetUpdatesGOOGLELocked(
+                        &bumpPool, kInvalidSnapshotApiCallHandle, dvk, device, 1,
+                        &unboxedDescriptorPool, boxedSetsToRestore.size(), layouts.data(),
+                        boxedSetsToRestore.data(), whichPool.data(), pendingAlloc.data(),
+                        writeStartingIndices.data(), writeDescriptorSets.size(),
+                        writeDescriptorSets.data(), needToUnboxDescriptorSet);
+                }
             }
 
             // Fences
@@ -1241,11 +1347,12 @@ class VkDecoderGlobalState::Impl {
 
             // semaphores
             loadSemaphores(stream);
-
-            mSnapshotLoadBoxedInstance2ContextId.clear();
-            mSnapshotState = SnapshotState::Normal;
         }
         GFXSTREAM_DEBUG("VulkanSnapshots load (end)");
+        if (hasSnapshotLoadError()) {
+            GFXSTREAM_ERROR("VulkanSnapshots load failed due to handle unboxing errors.");
+            return false;
+        }
         if (stream && stream->hasErrors()) {
             GFXSTREAM_ERROR("VulkanSnapshots load failed due to stream errors: %s",
                             stream->getErrors().value_or("unknown error").c_str());
@@ -1293,11 +1400,43 @@ class VkDecoderGlobalState::Impl {
                                                    VkSnapshotApiCallHandle, const char* pLayerName,
                                                    uint32_t* pPropertyCount,
                                                    VkExtensionProperties* pProperties) {
+        if (pPropertyCount == nullptr) {
+            return VK_INCOMPLETE;
+        }
+
 #if defined(__linux__)
         // TODO(b/401005629) always lock before the call on linux
         std::lock_guard<std::mutex> lock(mMutex);
 #endif
-        return m_vk->vkEnumerateInstanceExtensionProperties(pLayerName, pPropertyCount, pProperties);
+        // Start with host extensions:
+        std::vector<VkExtensionProperties> properties;
+        VkResult result = enumerateInstanceExtensionProperties(m_vk, pLayerName, properties);
+        if (result != VK_SUCCESS) {
+            GFXSTREAM_ERROR("Failed to query host instance extensions.");
+            return result;
+        }
+
+        // Remove all extensions that are not supported by the host codegen to prevent
+        // guest to host compatibility issues:
+        const auto& supportedInstanceExtensions = GetInstanceExtensionsSupportedByCodegen();
+        properties.erase(
+            std::remove_if(properties.begin(), properties.end(),
+                           [&](const VkExtensionProperties& extension) {
+                               return supportedInstanceExtensions.find(extension.extensionName) ==
+                                      supportedInstanceExtensions.end();
+                           }),
+            properties.end());
+
+        if (pProperties == nullptr) {
+            *pPropertyCount = properties.size();
+        } else {
+            // return number of structures actually written to pProperties.
+            *pPropertyCount = std::min((uint32_t)properties.size(), *pPropertyCount);
+            if (*pPropertyCount > 0) {
+                std::memcpy(pProperties, properties.data(), *pPropertyCount * sizeof(VkExtensionProperties));
+            }
+        }
+        return *pPropertyCount < properties.size() ? VK_INCOMPLETE : VK_SUCCESS;
     }
 
     VkResult on_vkCreateInstance(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -1340,7 +1479,7 @@ class VkDecoderGlobalState::Impl {
             m_vkEmulation->createVVLContext(vvlAppName, vvlEngineName, &debugInfo);
 
         if (debugContext) {
-            GFXSTREAM_INFO("Enabling VVL for %s %s", vvlAppName.c_str(), vvlEngineName.c_str());
+            GFXSTREAM_INFO("VVL: Enabling for %s %s", vvlAppName.c_str(), vvlEngineName.c_str());
 
             bool hasDebugUtils = false;
             for (const char* ext : finalExts) {
@@ -1352,8 +1491,8 @@ class VkDecoderGlobalState::Impl {
             if (!hasDebugUtils) {
                 finalExts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             }
-        } else {
-            GFXSTREAM_VERBOSE("Not enabling VVL for %s %s", vvlAppName.c_str(), vvlEngineName.c_str());
+        } else if (!vvlAppName.empty() || !vvlEngineName.empty()) {
+            GFXSTREAM_VERBOSE("VVL: Not enabling for %s %s", vvlAppName.c_str(), vvlEngineName.c_str());
         }
 
         createInfoFiltered.enabledExtensionCount = static_cast<uint32_t>(finalExts.size());
@@ -1862,10 +2001,35 @@ class VkDecoderGlobalState::Impl {
         auto* extImageFormatInfo =
             vk_find_struct<VkPhysicalDeviceExternalImageFormatInfo>(pImageFormatInfo);
 
-        if (extImageFormatInfo &&
-            extImageFormatInfo->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
-            const_cast<VkPhysicalDeviceExternalImageFormatInfo*>(extImageFormatInfo)->handleType =
-                m_vkEmulation->getDefaultExternalMemoryHandleType();
+        if (extImageFormatInfo) {
+            if (extImageFormatInfo->handleType &
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID) {
+                VkFormat resolvedFormat = resolveAhbFormat(pImageFormatInfo->format);
+                std::unique_ptr<VkImageCreateInfo> colorBufferVkImageCi =
+                    m_vkEmulation->generateColorBufferVkImageCreateInfo(
+                        resolvedFormat, 1, 1, pImageFormatInfo->tiling, 1);
+                if (colorBufferVkImageCi) {
+                    if (pImageFormatInfo != &imageFormatInfo) {
+                        imageFormatInfo = *pImageFormatInfo;
+                        pImageFormatInfo = &imageFormatInfo;
+                    }
+                    imageFormatInfo.format = resolvedFormat;
+                    imageFormatInfo.flags |= colorBufferVkImageCi->flags;
+                    imageFormatInfo.usage |= colorBufferVkImageCi->usage;
+                }
+            }
+
+            auto* mutExtImageFormatInfo =
+                const_cast<VkPhysicalDeviceExternalImageFormatInfo*>(extImageFormatInfo);
+            mutExtImageFormatInfo->handleType =
+                static_cast<VkExternalMemoryHandleTypeFlagBits>(
+                    m_vkEmulation->transformExternalMemoryHandleTypeFlags_tohost(
+                        mutExtImageFormatInfo->handleType));
+            if (mutExtImageFormatInfo->handleType ==
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT) {
+                mutExtImageFormatInfo->handleType =
+                    m_vkEmulation->getDefaultExternalMemoryHandleType();
+            }
         }
         VkResult res = VK_ERROR_INITIALIZATION_FAILED;
 
@@ -2247,7 +2411,7 @@ class VkDecoderGlobalState::Impl {
 #endif
 
         // If MoltenVK is supported on host, we need to ensure that we include
-        // VK_MVK_moltenvk extenstion in returned properties.
+        // VK_MVK_moltenvk extension in returned properties.
 #if defined(__APPLE__) && defined(VK_MVK_moltenvk)
         // Guest will check for VK_MVK_moltenvk extension for enabling AHB support
         if ((m_vkEmulation->getExternalMemoryMode() == ExternalMemory::Mode::Metal) &&
@@ -2569,6 +2733,7 @@ class VkDecoderGlobalState::Impl {
 
         // Filter device memory report as callbacks can not be passed between guest and host.
         vk_struct_chain_filter<VkDeviceDeviceMemoryReportCreateInfoEXT>(&createInfoFiltered);
+        vk_struct_chain_filter<VkPhysicalDeviceDeviceMemoryReportFeaturesEXT>(&createInfoFiltered);
 
         // Filter device groups as they are effectively disabled.
         vk_struct_chain_filter<VkDeviceGroupDeviceCreateInfo>(&createInfoFiltered);
@@ -2695,11 +2860,15 @@ class VkDecoderGlobalState::Impl {
 
         if (mSnapshotState == SnapshotState::Loading) {
             if (!mSnapshotLoadVkDeviceToVirtioCpuContextId) {
-                GFXSTREAM_FATAL("Missing device to context id map during snapshot load.");
+                GFXSTREAM_ERROR("Missing device to context id map during snapshot load.");
+                setSnapshotLoadError();
+                return VK_ERROR_INITIALIZATION_FAILED;
             }
             auto contextIdIt = mSnapshotLoadVkDeviceToVirtioCpuContextId->find(boxedDevice);
             if (contextIdIt == mSnapshotLoadVkDeviceToVirtioCpuContextId->end()) {
-                GFXSTREAM_FATAL("Missing context id for VkDevice:%p", boxedDevice);
+                GFXSTREAM_ERROR("Missing context id for VkDevice:%p", boxedDevice);
+                setSnapshotLoadError();
+                return VK_ERROR_INITIALIZATION_FAILED;
             }
             deviceInfo.virtioGpuContextId = contextIdIt->second;
         } else {
@@ -2773,7 +2942,7 @@ class VkDecoderGlobalState::Impl {
                     const uint64_t physicalQueue64 = reinterpret_cast<uint64_t>(physicalQueue);
 
                     if ((physicalQueue64 & QueueInfo::kVirtualQueueBit) != 0) {
-                        // Cannot use queue virtualization on this GPU, where the pysical handle
+                        // Cannot use queue virtualization on this GPU, where the physical handle
                         // values generated are not 2-byte aligned. This is very unusual, but the
                         // spec is not enforcing handle values to be aligned and the driver is free
                         // to use a similar logic to use the last bit for other purposes.
@@ -3153,7 +3322,7 @@ class VkDecoderGlobalState::Impl {
             //   c) use storage and compute shaders.
             //
             // (a) is covered by memory snapshot. (b) requires an extra vkCmdCopyBuffer
-            // command on snapshot, thuse we need to add transfer_src for (b) so that
+            // command on snapshot, thus we need to add transfer_src for (b) so that
             // they could be loaded back on snapshot save. (c) is still future work.
             if (localCreateInfo.usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) {
                 localCreateInfo.usage |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -3793,6 +3962,9 @@ class VkDecoderGlobalState::Impl {
             needEmulatedAlpha = false;
             createInfo.image = imageInfo->compressInfo->compressedMipmap(
                 pCreateInfo->subresourceRange.baseMipLevel);
+            if (createInfo.image == VK_NULL_HANDLE) {
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
             createInfo.subresourceRange.baseMipLevel = 0;
             pCreateInfo = &createInfo;
         }
@@ -4008,7 +4180,7 @@ class VkDecoderGlobalState::Impl {
             if (!hasDeviceExtension(device, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
                 // Note: VK_KHR_external_semaphore_fd might be advertised in the guest,
                 // because SYNC_FD handling is performed guest-side only. But still need
-                // need to error out here when handling a non-sync, opaque FD.
+                // to error out here when handling a non-sync, opaque FD.
                 return VK_ERROR_OUT_OF_HOST_MEMORY;
             }
         }
@@ -4128,15 +4300,13 @@ class VkDecoderGlobalState::Impl {
         if (exportSyncFd) {
             // Remove VkExportFenceCreateInfo, since host doesn't need to create
             // an exportable fence in this case
-            ExternalFencePool<VulkanDispatch>* externalFencePool = nullptr;
             vk_struct_chain_remove(exportFenceInfoPtr, &localCreateInfo);
             {
                 std::lock_guard<std::mutex> lock(mMutex);
                 auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
                 if (!deviceInfo) return VK_ERROR_OUT_OF_HOST_MEMORY;
-                externalFencePool = deviceInfo->externalFencePool.get();
+                *pFence = deviceInfo->externalFencePool->pop(&localCreateInfo);
             }
-            *pFence = externalFencePool->pop(&localCreateInfo);
             if (*pFence != VK_NULL_HANDLE) {
                 fenceReused = true;
             }
@@ -4242,7 +4412,7 @@ class VkDecoderGlobalState::Impl {
         }
 
         // Ensure that any host operations that reference this fence have completed
-        // before reseting.
+        // before resetting.
         while (!pendingUses.empty()) {
             {
                 std::lock_guard<std::mutex> lock(mMutex);
@@ -4352,7 +4522,7 @@ class VkDecoderGlobalState::Impl {
             if (!hasDeviceExtension(device, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
                 // Note: VK_KHR_external_semaphore_fd might be advertised in the guest,
                 // because SYNC_FD handling is performed guest-side only. But still need
-                // need to error out here when handling a non-sync, opaque FD.
+                // to error out here when handling a non-sync, opaque FD.
                 return VK_ERROR_OUT_OF_HOST_MEMORY;
             }
         }
@@ -4505,7 +4675,7 @@ class VkDecoderGlobalState::Impl {
             std::lock_guard<std::mutex> lock(mMutex);
             auto semaphoreInfo = gfxstream::base::find(mSemaphoreInfo, semaphore);
             if (!semaphoreInfo) {
-                GFXSTREAM_VERBOSE("%f: cound not find semaphore info for %p", __func__, semaphore);
+                GFXSTREAM_VERBOSE("%s: could not find semaphore info for %p", __func__, semaphore);
                 return VK_SUCCESS;
             }
 
@@ -4524,7 +4694,7 @@ class VkDecoderGlobalState::Impl {
             // Check if any of the pending submissions can now be executed
             auto deviceInfo = gfxstream::base::find(mDeviceInfo, semaphoreInfo->device);
             if (!deviceInfo) {
-                GFXSTREAM_VERBOSE("%f: cound not find device info for %p", __func__,
+                GFXSTREAM_VERBOSE("%s: could not find device info for %p", __func__,
                                   semaphoreInfo->device);
                 return VK_SUCCESS;
             }
@@ -4533,7 +4703,7 @@ class VkDecoderGlobalState::Impl {
                 for (auto& unboxed_queue : queue_iter.second) {
                     auto queueInfo = gfxstream::base::find(mQueueInfo, unboxed_queue);
                     if (!queueInfo) {
-                        GFXSTREAM_VERBOSE("%f: cound not find queue info for %p", __func__,
+                        GFXSTREAM_VERBOSE("%s: could not find queue info for %p", __func__,
                                           unboxed_queue);
                         continue;
                     }
@@ -4810,13 +4980,13 @@ class VkDecoderGlobalState::Impl {
 
             if (m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
                 for (uint32_t i = 0; i < pCreateInfo->maxSets; ++i) {
-                    info.poolIds.push_back(
+                    info.preallocatedBoxedSets.push_back(
                         (uint64_t)new_boxed_non_dispatchable_VkDescriptorSet(VK_NULL_HANDLE));
                 }
                 if (snapshotsEnabled() && apiCallHandle != kInvalidSnapshotApiCallHandle) {
-                    mSnapshot.addOrderedBoxedHandlesCreatedByCall(apiCallHandle,
-                                                                  info.poolIds.data(),
-                                                                  info.poolIds.size());
+                    mSnapshot.addOrderedBoxedHandlesCreatedByCall(
+                        apiCallHandle, info.preallocatedBoxedSets.data(),
+                        info.preallocatedBoxedSets.size());
                 }
             }
         }
@@ -4828,7 +4998,7 @@ class VkDecoderGlobalState::Impl {
         DescriptorPoolInfo& descriptorPoolInfo,
         std::unordered_map<VkDescriptorSet, DescriptorSetInfo>& descriptorSetInfos,
         bool isDestroy = false) {
-        for (auto it : descriptorPoolInfo.allocedSetsToBoxed) {
+        for (auto it : descriptorPoolInfo.allocatedSetsUnboxedToBoxed) {
             auto unboxedSet = it.first;
             auto boxedSet = it.second;
             descriptorSetInfos.erase(unboxedSet);
@@ -4839,12 +5009,12 @@ class VkDecoderGlobalState::Impl {
 
         if (m_vkEmulation->getFeatures().VulkanBatchedDescriptorSetUpdate.enabled()) {
             if (isDestroy) {
-                for (auto poolId : descriptorPoolInfo.poolIds) {
-                    delete_VkDescriptorSet((VkDescriptorSet)poolId);
+                for (auto boxedSet : descriptorPoolInfo.preallocatedBoxedSets) {
+                    delete_VkDescriptorSet((VkDescriptorSet)boxedSet);
                 }
             } else {
-                for (auto poolId : descriptorPoolInfo.poolIds) {
-                    auto handleInfo = sBoxedHandleManager.get(poolId);
+                for (auto boxedSet : descriptorPoolInfo.preallocatedBoxedSets) {
+                    auto handleInfo = sBoxedHandleManager.get(boxedSet);
                     if (handleInfo)
                         handleInfo->underlying = reinterpret_cast<uint64_t>(VK_NULL_HANDLE);
                 }
@@ -4852,7 +5022,7 @@ class VkDecoderGlobalState::Impl {
         }
 
         descriptorPoolInfo.usedSets = 0;
-        descriptorPoolInfo.allocedSetsToBoxed.clear();
+        descriptorPoolInfo.allocatedSetsUnboxedToBoxed.clear();
 
         for (auto& pool : descriptorPoolInfo.pools) {
             pool.used = 0;
@@ -4948,7 +5118,7 @@ class VkDecoderGlobalState::Impl {
             }
         }
 
-        poolInfo->allocedSetsToBoxed[descriptorSet] = (VkDescriptorSet)boxedDescriptorSet;
+        poolInfo->allocatedSetsUnboxedToBoxed[descriptorSet] = (VkDescriptorSet)boxedDescriptorSet;
         applyDescriptorSetAllocationLocked(*poolInfo, setInfo.bindings);
     }
 
@@ -5006,8 +5176,8 @@ class VkDecoderGlobalState::Impl {
 
                 removeDescriptorSetAllocationLocked(*poolInfo, setInfo->bindings);
 
-                auto descSetAllocedEntry =
-                    gfxstream::base::find(poolInfo->allocedSetsToBoxed, pDescriptorSets[i]);
+                auto descSetAllocedEntry = gfxstream::base::find(
+                    poolInfo->allocatedSetsUnboxedToBoxed, pDescriptorSets[i]);
                 if (!descSetAllocedEntry) continue;
 
                 auto handleInfo = sBoxedHandleManager.get((uint64_t)*descSetAllocedEntry);
@@ -5019,7 +5189,7 @@ class VkDecoderGlobalState::Impl {
                     }
                 }
 
-                poolInfo->allocedSetsToBoxed.erase(pDescriptorSets[i]);
+                poolInfo->allocatedSetsUnboxedToBoxed.erase(pDescriptorSets[i]);
 
                 mDescriptorSetInfo.erase(pDescriptorSets[i]);
             }
@@ -5634,10 +5804,12 @@ class VkDecoderGlobalState::Impl {
             if (srcImg->compressInfo) {
                 srcImageMip =
                     srcImg->compressInfo->compressedMipmap(pRegions[r].srcSubresource.mipLevel);
+                if (srcImageMip == VK_NULL_HANDLE) continue;
             }
             if (dstImg->compressInfo) {
                 dstImageMip =
                     dstImg->compressInfo->compressedMipmap(pRegions[r].dstSubresource.mipLevel);
+                if (dstImageMip == VK_NULL_HANDLE) continue;
             }
             VkImageCopy region = CompressedImageInfo::getCompressedMipmapsImageCopy(
                 pRegions[r], srcImg->compressInfo.get(), dstImg->compressInfo.get());
@@ -5666,8 +5838,10 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < regionCount; r++) {
             uint32_t mipLevel = pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy region = cmpInfo.getBufferImageCopy(pRegions[r]);
-            vk->vkCmdCopyImageToBuffer(commandBuffer, cmpInfo.compressedMipmap(mipLevel),
+            vk->vkCmdCopyImageToBuffer(commandBuffer, mipImage,
                                        srcImageLayout, dstBuffer, 1, &region);
         }
     }
@@ -5697,10 +5871,12 @@ class VkDecoderGlobalState::Impl {
             if (srcImg->compressInfo) {
                 srcImageMip = srcImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].srcSubresource.mipLevel);
+                if (srcImageMip == VK_NULL_HANDLE) continue;
             }
             if (dstImg->compressInfo) {
                 dstImageMip = dstImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].dstSubresource.mipLevel);
+                if (dstImageMip == VK_NULL_HANDLE) continue;
             }
 
             VkCopyImageInfo2 inf2 = *pCopyImageInfo;
@@ -5734,11 +5910,13 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < pCopyImageToBufferInfo->regionCount; r++) {
             uint32_t mipLevel = pCopyImageToBufferInfo->pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2 region = cmpInfo.getBufferImageCopy(pCopyImageToBufferInfo->pRegions[r]);
             VkCopyImageToBufferInfo2 inf = *pCopyImageToBufferInfo;
             inf.regionCount = 1;
             inf.pRegions = &region;
-            inf.srcImage = cmpInfo.compressedMipmap(mipLevel);
+            inf.srcImage = mipImage;
 
             vk->vkCmdCopyImageToBuffer2(commandBuffer, &inf);
         }
@@ -5769,10 +5947,12 @@ class VkDecoderGlobalState::Impl {
             if (srcImg->compressInfo) {
                 srcImageMip = srcImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].srcSubresource.mipLevel);
+                if (srcImageMip == VK_NULL_HANDLE) continue;
             }
             if (dstImg->compressInfo) {
                 dstImageMip = dstImg->compressInfo->compressedMipmap(
                     pCopyImageInfo->pRegions[r].dstSubresource.mipLevel);
+                if (dstImageMip == VK_NULL_HANDLE) continue;
             }
 
             VkCopyImageInfo2KHR inf2 = *pCopyImageInfo;
@@ -5806,11 +5986,13 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < pCopyImageToBufferInfo->regionCount; r++) {
             uint32_t mipLevel = pCopyImageToBufferInfo->pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2KHR region = cmpInfo.getBufferImageCopy(pCopyImageToBufferInfo->pRegions[r]);
             VkCopyImageToBufferInfo2KHR inf = *pCopyImageToBufferInfo;
             inf.regionCount = 1;
             inf.pRegions = &region;
-            inf.srcImage = cmpInfo.compressedMipmap(mipLevel);
+            inf.srcImage = mipImage;
 
             vk->vkCmdCopyImageToBuffer2KHR(commandBuffer, &inf);
         }
@@ -6007,8 +6189,10 @@ class VkDecoderGlobalState::Impl {
 
         for (uint32_t r = 0; r < regionCount; r++) {
             uint32_t mipLevel = pRegions[r].imageSubresource.mipLevel;
+            VkImage mipImage = cmpInfo.compressedMipmap(mipLevel);
+            if (mipImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy region = cmpInfo.getBufferImageCopy(pRegions[r]);
-            vk->vkCmdCopyBufferToImage(commandBuffer, srcBuffer, cmpInfo.compressedMipmap(mipLevel),
+            vk->vkCmdCopyBufferToImage(commandBuffer, srcBuffer, mipImage,
                                        dstImageLayout, 1, &region);
         }
 
@@ -6070,9 +6254,10 @@ class VkDecoderGlobalState::Impl {
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
 
         for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
-            VkCopyBufferToImageInfo2 inf;
+            VkCopyBufferToImageInfo2 inf = *pCopyBufferToImageInfo;
             uint32_t mipLevel = pCopyBufferToImageInfo->pRegions[r].imageSubresource.mipLevel;
             inf.dstImage = cmpInfo.compressedMipmap(mipLevel);
+            if (inf.dstImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2 region = cmpInfo.getBufferImageCopy(pCopyBufferToImageInfo->pRegions[r]);
             inf.regionCount = 1;
             inf.pRegions = &region;
@@ -6127,9 +6312,10 @@ class VkDecoderGlobalState::Impl {
 
         CompressedImageInfo& cmpInfo = *imageInfo->compressInfo;
         for (uint32_t r = 0; r < pCopyBufferToImageInfo->regionCount; r++) {
-            VkCopyBufferToImageInfo2KHR inf;
+            VkCopyBufferToImageInfo2KHR inf = *pCopyBufferToImageInfo;
             uint32_t mipLevel = pCopyBufferToImageInfo->pRegions[r].imageSubresource.mipLevel;
             inf.dstImage = cmpInfo.compressedMipmap(mipLevel);
+            if (inf.dstImage == VK_NULL_HANDLE) continue;
             VkBufferImageCopy2KHR region = cmpInfo.getBufferImageCopy(pCopyBufferToImageInfo->pRegions[r]);
             inf.regionCount = 1;
             inf.pRegions = &region;
@@ -6736,7 +6922,7 @@ class VkDecoderGlobalState::Impl {
         //
         // so any allocation requests with a VkImportAndroidHardwareBufferInfoANDROID
         // will necessarily have a VkMemoryDedicatedAllocateInfo. However, the host
-        // may or may not actually use a dedicated allocations during Buffer/ColorBuffer
+        // may or may not actually use a dedicated allocation during Buffer/ColorBuffer
         // setup. Below checks if the underlying Buffer/ColorBuffer backing memory was
         // originally created with a dedicated allocation.
         bool shouldUseDedicatedAllocInfo = dedicatedAllocInfoPtr != nullptr;
@@ -6810,7 +6996,7 @@ class VkDecoderGlobalState::Impl {
                 }
                 // During snapshot load there could be invalidated references to
                 // color buffers.
-                // Here we just create a placeholder for it, as it is not suppoed
+                // Here we just create a placeholder for it, as it is not supposed
                 // to be used.
                 importCbInfoPtr = nullptr;
             } else {
@@ -7046,13 +7232,13 @@ class VkDecoderGlobalState::Impl {
         //
         //  * When the external blob feature is not enabled,  the underlying VkDeviceMemory needs
         //    to be shared with the VMM via `stream_renderer_resource_map()`.
-        //  * When the external blob feature is enabled, the memory needs to need external and
+        //  * When the external blob feature is enabled, the memory needs to be external and
         //    shared to the VMM as an OS-specific handle (`stream_renderer_export_blob`).
         //  * there is also a case where the VMM shares an OS-specific handle with gfxstream,
         //    (`STREAM_BLOB_MEM_GUEST`), though this is experimental only.
         //
         // We do not want to share all host visible memory if it is associated with a
-        // Colorbuffer/Buffer.  The exact desired semantics various by OS-type:
+        // Colorbuffer/Buffer.  The exact desired semantics varies by OS-type:
         //  * For Android guests, mapping ColorBuffers/Buffers is handled by guest minigbm
         //    (server-allocated) and no zero-copy logic is needed here.
         //  * For Linux guests, host-visible Colorbuffers/Buffers are client allocated and in
@@ -7172,7 +7358,7 @@ class VkDecoderGlobalState::Impl {
                     }
 
                     if (importHostInfo.pHostPointer != nullptr) {
-                        GFXSTREAM_FATAL("%s: Host pointer info is already set import operation!",
+                        GFXSTREAM_FATAL("%s: Host pointer info is already set for import operation!",
                                         __func__);
                     }
                     importHostInfo.pHostPointer = mappedPtr;
@@ -7486,6 +7672,20 @@ class VkDecoderGlobalState::Impl {
             if (strcmp(prop.extensionName, name) == 0) return true;
         }
         return false;
+    }
+
+    // Convenience function to call vkEnumerateInstanceExtensionProperties and get the results as an
+    // std::vector
+    VkResult enumerateInstanceExtensionProperties(VulkanDispatch* vk, const char* pLayerName,
+                                                  std::vector<VkExtensionProperties>& properties) {
+        uint32_t propertyCount = 0;
+        VkResult result =
+            vk->vkEnumerateInstanceExtensionProperties(pLayerName, &propertyCount, nullptr);
+        if (result != VK_SUCCESS) return result;
+
+        properties.resize(propertyCount);
+        return vk->vkEnumerateInstanceExtensionProperties(pLayerName, &propertyCount,
+                                                          properties.data());
     }
 
     // Convenience function to call vkEnumerateDeviceExtensionProperties and get the results as an
@@ -8212,10 +8412,10 @@ class VkDecoderGlobalState::Impl {
         std::unordered_set<HandleType> acquiredColorBuffers;
         std::unordered_set<HandleType> releasedColorBuffers;
         VkDevice device = VK_NULL_HANDLE;
-        std::mutex* queueMutex = nullptr;
-        PhysicalQueuePendingOps* pendingOps = nullptr;
+        std::shared_ptr<std::mutex> queueMutex;
+        std::shared_ptr<PhysicalQueuePendingOps> pendingOps;
         bool sharedQueue = false;
-        DeviceOpTracker* deviceOpTracker = nullptr;
+        DeviceOpTrackerPtr deviceOpTracker;
 
         {
             std::lock_guard<std::mutex> lock(mMutex);
@@ -8263,8 +8463,8 @@ class VkDecoderGlobalState::Impl {
                 return VK_ERROR_INITIALIZATION_FAILED;
             }
             device = queueInfo->device;
-            queueMutex = queueInfo->queueMutex.get();
-            pendingOps = queueInfo->pendingOps.get();
+            queueMutex = queueInfo->queueMutex;
+            pendingOps = queueInfo->pendingOps;
             sharedQueue = queueInfo->usingSharedPhysicalQueue;
 
             auto* deviceInfo = gfxstream::base::find(mDeviceInfo, device);
@@ -8273,7 +8473,7 @@ class VkDecoderGlobalState::Impl {
                 return VK_ERROR_INITIALIZATION_FAILED;
             }
 
-            deviceOpTracker = deviceInfo->deviceOpTracker.get();
+            deviceOpTracker = deviceInfo->deviceOpTracker;
 
             if (mRenderDocWithMultipleVkInstances && m_vkEmulation->supportsFrameBoundary()) {
                 // Check if this is a frame boundary submission, only the first submit call
@@ -8360,7 +8560,7 @@ class VkDecoderGlobalState::Impl {
                 // semaphore signaling is made.
                 // We cannot partially send some of the submissions, as that'd break the fence
                 // signalling, so we defer all the operations for this call.
-                // For other post-submit operations, we treat this submissions as if it has been
+                // For other post-submit operations, we treat this submission as if it has been
                 // sent to the GPU, because all the object lifetimes (e.g. semaphores, fences,
                 // command buffers) need to be managed correctly by the app side until actual
                 // GPU operation is started.
@@ -8533,12 +8733,12 @@ class VkDecoderGlobalState::Impl {
 
         if (!queue) return VK_SUCCESS;
 
-        std::mutex* queueMutex;
+        std::shared_ptr<std::mutex> queueMutex;
         {
             std::lock_guard<std::mutex> lock(mMutex);
             auto* queueInfo = gfxstream::base::find(mQueueInfo, queue);
             if (!queueInfo) return VK_SUCCESS;
-            queueMutex = queueInfo->queueMutex.get();
+            queueMutex = queueInfo->queueMutex;
         }
 
         // TODO(b/379862480): register and track gpu workload to wait only for the
@@ -8636,7 +8836,7 @@ class VkDecoderGlobalState::Impl {
         }
 
         if (m_vkEmulation->getFeatures().VulkanExternalSync.enabled()) {
-            // Cannot forward this call to driver because nVidia linux driver crahses on it.
+            // Cannot forward this call to driver because nVidia linux driver crashes on it.
             switch (pExternalSemaphoreInfo->handleType) {
                 case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT:
                     pExternalSemaphoreProperties->exportFromImportedHandleTypes =
@@ -8799,7 +8999,8 @@ class VkDecoderGlobalState::Impl {
 
         auto timeoutDeadline = gfxstream::base::getUnixTimeUs() + 5000000;  // 5 s
 
-        OrderMaintenanceInfo* order = ordmaint_VkCommandBuffer(boxed_commandBuffer);
+        std::shared_ptr<OrderMaintenanceInfo> order =
+            ordmaint_VkCommandBuffer(boxed_commandBuffer);
         if (!order) return;
 
         AutoLock lock(order->lock);
@@ -8818,7 +9019,6 @@ class VkDecoderGlobalState::Impl {
 
         __atomic_store_n(&order->sequenceNumber, sequenceNumber, __ATOMIC_RELEASE);
         order->cv.signal();
-        releaseOrderMaintInfo(order);
     }
 
     void on_vkCommandBufferHostSyncGOOGLE(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -8835,7 +9035,7 @@ class VkDecoderGlobalState::Impl {
 
         auto timeoutDeadline = gfxstream::base::getUnixTimeUs() + 5000000;  // 5 s
 
-        OrderMaintenanceInfo* order = ordmaint_VkQueue(boxed_queue);
+        std::shared_ptr<OrderMaintenanceInfo> order = ordmaint_VkQueue(boxed_queue);
         if (!order) return;
 
         AutoLock lock(order->lock);
@@ -8854,7 +9054,6 @@ class VkDecoderGlobalState::Impl {
 
         __atomic_store_n(&order->sequenceNumber, sequenceNumber, __ATOMIC_RELEASE);
         order->cv.signal();
-        releaseOrderMaintInfo(order);
     }
 
     void on_vkQueueHostSyncGOOGLE(gfxstream::base::BumpPool* pool, VkSnapshotApiCallHandle,
@@ -10047,15 +10246,17 @@ class VkDecoderGlobalState::Impl {
         DescriptorPoolInfo& info = it->second;
 
         const uint32_t requestedCount = pPoolIdCount ? *pPoolIdCount : 0;
-        const uint32_t availableCount = static_cast<uint32_t>(info.poolIds.size());
+        const uint32_t availableCount = static_cast<uint32_t>(info.preallocatedBoxedSets.size());
 
         if (pPoolIdCount) {
-            *pPoolIdCount = availableCount;
-        }
-
-        if (pPoolIdCount && pPoolIds) {
-            for (uint32_t i = 0; i < std::min(requestedCount, availableCount); ++i) {
-                pPoolIds[i] = info.poolIds[i];
+            if (pPoolIds) {
+                const uint32_t writtenCount = std::min(requestedCount, availableCount);
+                for (uint32_t i = 0; i < writtenCount; ++i) {
+                    pPoolIds[i] = info.preallocatedBoxedSets[i];
+                }
+                *pPoolIdCount = writtenCount;
+            } else {
+                *pPoolIdCount = availableCount;
             }
         }
     }
@@ -10436,6 +10637,22 @@ class VkDecoderGlobalState::Impl {
         }
     }
 
+    VkFormat resolveAhbFormat(VkFormat format) {
+        // Use UNORM formats for SRGB format requests.
+        switch (format) {
+            case VK_FORMAT_R8G8B8A8_SRGB:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case VK_FORMAT_R8G8B8_SRGB:
+                return VK_FORMAT_R8G8B8_UNORM;
+            case VK_FORMAT_B8G8R8A8_SRGB:
+                return VK_FORMAT_B8G8R8A8_UNORM;
+            case VK_FORMAT_R8_SRGB:
+                return VK_FORMAT_R8_UNORM;
+            default:
+                return format;
+        }
+    }
+
     void transformImpl_VkImageCreateInfo_tohost(const VkImageCreateInfo* pImageCreateInfos,
                                                 uint32_t count) {
         for (uint32_t i = 0; i < count; i++) {
@@ -10470,24 +10687,7 @@ class VkDecoderGlobalState::Impl {
             // the contents of the memory differently, ...
             std::unique_ptr<VkImageCreateInfo> colorBufferVkImageCi = nullptr;
             const char* importSourceDebug = "";
-            VkFormat resolvedFormat = VK_FORMAT_UNDEFINED;
-            // Use UNORM formats for SRGB format requests.
-            switch (imageCreateInfo.format) {
-                case VK_FORMAT_R8G8B8A8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8G8B8A8_UNORM;
-                    break;
-                case VK_FORMAT_R8G8B8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8G8B8_UNORM;
-                    break;
-                case VK_FORMAT_B8G8R8A8_SRGB:
-                    resolvedFormat = VK_FORMAT_B8G8R8A8_UNORM;
-                    break;
-                case VK_FORMAT_R8_SRGB:
-                    resolvedFormat = VK_FORMAT_R8_UNORM;
-                    break;
-                default:
-                    resolvedFormat = imageCreateInfo.format;
-            }
+            VkFormat resolvedFormat = resolveAhbFormat(imageCreateInfo.format);
             if (importAndroidHardwareBuffer) {
                 // For AHardwareBufferImage binding, we can't know which ColorBuffer this
                 // to-be-created VkImage will bind to, so we try our best to infer the creation
@@ -10654,7 +10854,10 @@ class VkDecoderGlobalState::Impl {
         }                                                                                 \
     }
 
-    DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkPhysicalDeviceExternalImageFormatInfo, handleType)
+    void transformImpl_VkPhysicalDeviceExternalImageFormatInfo_tohost(
+        const VkPhysicalDeviceExternalImageFormatInfo*, uint32_t) {}
+    void transformImpl_VkPhysicalDeviceExternalImageFormatInfo_fromhost(
+        const VkPhysicalDeviceExternalImageFormatInfo*, uint32_t) {}
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkPhysicalDeviceExternalBufferInfo, handleType)
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkExternalMemoryImageCreateInfo, handleTypes)
     DEFINE_EXTERNAL_HANDLE_TYPE_TRANSFORM(VkExternalMemoryBufferCreateInfo, handleTypes)
@@ -10662,13 +10865,15 @@ class VkDecoderGlobalState::Impl {
     DEFINE_EXTERNAL_MEMORY_PROPERTIES_TRANSFORM(VkExternalImageFormatProperties)
     DEFINE_EXTERNAL_MEMORY_PROPERTIES_TRANSFORM(VkExternalBufferProperties)
 
-    BoxedHandle newGlobalHandle(const BoxedHandleInfo& item, BoxedHandleTypeTag typeTag) {
-        return sBoxedHandleManager.add(item, typeTag);
+    BoxedHandle newGlobalHandle(BoxedHandleInfo item, BoxedHandleTypeTag typeTag) {
+        return sBoxedHandleManager.add(std::move(item), typeTag);
     }
 
     VkDecoderSnapshot* snapshot() { return &mSnapshot; }
 
     bool isSnapshotCurrentlyLoading() const { return mSnapshotState == SnapshotState::Loading; }
+    void setSnapshotLoadError() { mSnapshotLoadHasError = true; }
+    bool hasSnapshotLoadError() const { return mSnapshotLoadHasError; }
 
    private:
     bool isEmulatedInstanceExtension(const char* name) const {
@@ -10739,7 +10944,7 @@ class VkDecoderGlobalState::Impl {
                 // ppEnabledExtensionNames. Mesa WSI (in Linux) does this, because it has certain
                 // assumptions about the Vulkan loader architecture it is using. However, depending
                 // on
-                // the host's Vulkan loader architecture, this could in NULL function pointer access
+                // the host's Vulkan loader architecture, this could result in NULL function pointer access
                 // (i.e. on vkGetImageDrmFormatModifierPropertiesEXT()). So just enable it if it's
                 // available.
                 VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
@@ -11173,6 +11378,36 @@ class VkDecoderGlobalState::Impl {
         pFormatProp->formatProperties.bufferFeatures &= kEmulatedTextureBufferFeatureMask;
     }
 
+    static const VkFormatFeatureFlags kUnsupportedFormatFeatureFlags =
+        VK_FORMAT_FEATURE_VIDEO_DECODE_OUTPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_VIDEO_DECODE_DPB_BIT_KHR |
+        VK_FORMAT_FEATURE_VIDEO_ENCODE_INPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_VIDEO_ENCODE_DPB_BIT_KHR;
+
+    static const VkFormatFeatureFlags2 kUnsupportedFormatFeatureFlags2 =
+        VK_FORMAT_FEATURE_2_VIDEO_DECODE_OUTPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_DECODE_DPB_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_INPUT_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_DPB_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_QUANTIZATION_DELTA_MAP_BIT_KHR |
+        VK_FORMAT_FEATURE_2_VIDEO_ENCODE_EMPHASIS_MAP_BIT_KHR;
+
+    void maskFormatPropertiesForUnsupportedExtensions(VkFormatProperties* pFormatProp) {
+        pFormatProp->linearTilingFeatures &= ~kUnsupportedFormatFeatureFlags;
+        pFormatProp->optimalTilingFeatures &= ~kUnsupportedFormatFeatureFlags;
+        pFormatProp->bufferFeatures &= ~kUnsupportedFormatFeatureFlags;
+    }
+
+    void maskFormatPropertiesForUnsupportedExtensions(VkFormatProperties2* pFormatProp) {
+        maskFormatPropertiesForUnsupportedExtensions(&pFormatProp->formatProperties);
+        VkFormatProperties3* formatProps3 = vk_find_struct<VkFormatProperties3>(pFormatProp);
+        if (formatProps3) {
+            formatProps3->linearTilingFeatures &= ~kUnsupportedFormatFeatureFlags2;
+            formatProps3->optimalTilingFeatures &= ~kUnsupportedFormatFeatureFlags2;
+            formatProps3->bufferFeatures &= ~kUnsupportedFormatFeatureFlags2;
+        }
+    }
+
     void maskImageFormatPropertiesForEmulatedTextures(VkImageFormatProperties* pProperties) {
         // dEQP-VK.api.info.image_format_properties.2d.optimal#etc2_r8g8b8_unorm_block
         pProperties->sampleCounts &= VK_SAMPLE_COUNT_1_BIT;
@@ -11189,9 +11424,11 @@ class VkDecoderGlobalState::Impl {
                 physicalDevice, CompressedImageInfo::getOutputFormat(format),
                 pFormatProperties);
             maskFormatPropertiesForEmulatedTextures(pFormatProperties);
+            maskFormatPropertiesForUnsupportedExtensions(pFormatProperties);
             return;
         }
         getPhysicalDeviceFormatPropertiesFunc(physicalDevice, format, pFormatProperties);
+        maskFormatPropertiesForUnsupportedExtensions(pFormatProperties);
     }
 
     template <typename VkHandleToInfoMap,
@@ -11756,6 +11993,7 @@ class VkDecoderGlobalState::Impl {
         Loading,
     };
     SnapshotState mSnapshotState = SnapshotState::Normal;
+    std::atomic<bool> mSnapshotLoadHasError = false;
 
     // NOTE: Only present during snapshot loading. This is needed to associate
     // `VkDevice`s with Virtio GPU context ids because API calls are not currently
@@ -11859,11 +12097,19 @@ bool VkDecoderGlobalState::batchedDescriptorSetUpdateEnabled() const { return mI
 
 uint64_t VkDecoderGlobalState::newGlobalVkGenericHandle(BoxedHandleTypeTag typeTag) {
     BoxedHandleInfo item;
-    return mImpl->newGlobalHandle(item, typeTag);
+    return mImpl->newGlobalHandle(std::move(item), typeTag);
 }
 
 bool VkDecoderGlobalState::isSnapshotCurrentlyLoading() const {
     return mImpl->isSnapshotCurrentlyLoading();
+}
+
+void VkDecoderGlobalState::setSnapshotLoadError() {
+    mImpl->setSnapshotLoadError();
+}
+
+bool VkDecoderGlobalState::hasSnapshotLoadError() const {
+    return mImpl->hasSnapshotLoadError();
 }
 
 const gfxstream::host::FeatureSet& VkDecoderGlobalState::getFeatures() const { return mImpl->getFeatures(); }

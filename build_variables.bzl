@@ -41,26 +41,6 @@ GFXSTREAM_HOST_COPTS = GFXSTREAM_COMMON_COPTS + [
 GFXSTREAM_HOST_VK_DEFINES = [
     "VK_GFXSTREAM_STRUCTURE_TYPE_EXT",
     "VK_GOOGLE_gfxstream",
-] + select({
-    "@platforms//os:macos": [
-        "VK_USE_PLATFORM_METAL_EXT",
-        "VK_USE_PLATFORM_MACOS_MVK",
-    ],
-    "@platforms//os:windows": [
-        "VK_USE_PLATFORM_WIN32_KHR",
-    ],
-    "@platforms//os:linux": [
-        "VK_USE_PLATFORM_XCB_KHR",
-    ],
-    "//conditions:default": [],
-})
-
-GFXSTREAM_HOST_DEFINES = GFXSTREAM_HOST_VK_DEFINES + [
-    "BUILDING_EMUGL_COMMON_SHARED",
-    "EMUGL_BUILD",
-    "GFXSTREAM_ENABLE_HOST_GLES=1",
-    "GFXSTREAM_BUILD_WITH_SNAPSHOT_FRONTEND_SUPPORT=1",
-    "GFXSTREAM_BUILD_WITH_SNAPSHOT_SUPPORT=1",
     "VK_BASE_VERSION_1_0",
     "VK_BASE_VERSION_1_1",
     "VK_BASE_VERSION_1_2",
@@ -76,6 +56,31 @@ GFXSTREAM_HOST_DEFINES = GFXSTREAM_HOST_VK_DEFINES + [
     "VK_GRAPHICS_VERSION_1_2",
     "VK_GRAPHICS_VERSION_1_3",
     "VK_GRAPHICS_VERSION_1_4",
+]
+
+GFXSTREAM_HOST_FEATURE_DEFINES = [
+    "GFXSTREAM_ENABLE_HOST_GLES=1",
+    "GFXSTREAM_BUILD_WITH_SNAPSHOT_FRONTEND_SUPPORT=1",
+    "GFXSTREAM_BUILD_WITH_SNAPSHOT_SUPPORT=1",
+]
+
+GFXSTREAM_HOST_WSI_DEFINES = select({
+    "@platforms//os:macos": [
+        "VK_USE_PLATFORM_METAL_EXT",
+        "VK_USE_PLATFORM_MACOS_MVK",
+    ],
+    "@platforms//os:windows": [
+        "VK_USE_PLATFORM_WIN32_KHR",
+    ],
+    "@platforms//os:linux": [
+        "VK_USE_PLATFORM_XCB_KHR",
+    ],
+    "//conditions:default": [],
+})
+
+GFXSTREAM_HOST_DEFINES = GFXSTREAM_HOST_VK_DEFINES + GFXSTREAM_HOST_FEATURE_DEFINES + GFXSTREAM_HOST_WSI_DEFINES + [
+    "BUILDING_EMUGL_COMMON_SHARED",
+    "EMUGL_BUILD",
 ] + select({
     "@platforms//os:windows": [
         "WIN32_LEAN_AND_MEAN",

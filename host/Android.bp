@@ -45,6 +45,7 @@ cc_library_host_static {
 
 gfxstream_backend_static_deps = [
     "libgfxstream_common_base",
+    "libgfxstream_common_build_info",
     "libgfxstream_common_logging",
     "libgfxstream_common_utils",
     "libgfxstream_etc",
@@ -167,6 +168,7 @@ cc_defaults {
             ],
         },
     },
+    use_version_lib: true,
 }
 
 cc_library {
@@ -215,6 +217,28 @@ cc_test_host {
     defaults: ["gfxstream_host_cc_defaults"],
     srcs: [
         "virtio_gpu_timelines_tests.cpp",
+    ],
+    shared_libs: [
+        "libbase",
+        "libgfxstream_backend",
+    ],
+    static_libs: [
+        "libgmock",
+    ],
+    test_options: {
+        unit_test: true,
+    },
+    test_suites: [
+        "general-tests",
+    ],
+}
+
+// Run with `atest GfxstreamVirtioGpuResourceTests`
+cc_test_host {
+    name: "GfxstreamVirtioGpuResourceTests",
+    defaults: ["gfxstream_host_cc_defaults"],
+    srcs: [
+        "virtio_gpu_resource_unittest.cpp",
     ],
     shared_libs: [
         "libbase",

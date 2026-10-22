@@ -1,5 +1,5 @@
 load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
-load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS")
+load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES", "GFXSTREAM_HOST_LINKOPTS", "GFXSTREAM_HOST_VK_DEFINES")
 
 package(
     default_applicable_licenses = ["//:gfxstream_license"],
@@ -9,7 +9,7 @@ package(
 cc_library(
     name = "gfxstream_vulkan_headers",
     copts = GFXSTREAM_HOST_COPTS,
-    defines = GFXSTREAM_HOST_DEFINES,
+    defines = GFXSTREAM_HOST_VK_DEFINES,
     includes = ["."],
     linkopts = GFXSTREAM_HOST_LINKOPTS,
     textual_hdrs = [
@@ -41,9 +41,9 @@ cc_library(
         "vulkan_stream.h",
     ],
     copts = GFXSTREAM_HOST_COPTS,
-    defines = GFXSTREAM_HOST_DEFINES,
     includes = ["."],
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_headers",
         "//common/base:gfxstream_common_base",
@@ -140,7 +140,6 @@ cc_library(
         "-Wno-extern-c-compat",
         "-Wno-unused-variable",
     ],
-    defines = GFXSTREAM_HOST_DEFINES,
     includes = [
         ".",
         "cereal",
@@ -152,6 +151,7 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+    local_defines = GFXSTREAM_HOST_DEFINES,
     textual_hdrs = [
         "vk_sub_decoder.cpp",
     ],
@@ -218,6 +218,7 @@ cc_test(
         "testdata/256x256_golden_transform_rot90.png",
     ],
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -238,6 +239,7 @@ cc_test(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -255,6 +257,7 @@ cc_test(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -271,6 +274,7 @@ cc_test(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -289,6 +293,7 @@ cc_test(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -306,6 +311,7 @@ cc_test(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -323,6 +329,7 @@ cc_test(
         "vk_utils_tests.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -339,6 +346,7 @@ cc_test(
         "vulkan_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -363,6 +371,7 @@ cc_test(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     features = ["-layering_check"],
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         ":gfxstream_vulkan_server_headers",
@@ -381,6 +390,7 @@ cc_test(
         "swap_chain_state_vk_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -398,6 +408,7 @@ cc_test(
         "vk_format_utils_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -413,6 +424,7 @@ cc_test(
         "vk_qsri_timeline_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -428,6 +440,7 @@ cc_test(
         "device_op_tracker_unittest.cpp",
     ],
     copts = GFXSTREAM_HOST_COPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",
@@ -446,6 +459,7 @@ cc_test(
     ],
     copts = GFXSTREAM_HOST_COPTS,
     linkopts = GFXSTREAM_HOST_LINKOPTS,
+    local_defines = GFXSTREAM_HOST_DEFINES,
     deps = [
         ":gfxstream_vulkan_server",
         "//common/base:gfxstream_common_base",

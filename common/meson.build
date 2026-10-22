@@ -4,6 +4,7 @@
 subdir('logging')
 
 subdir('base')
+subdir('build_info')
 subdir('etc')
 subdir('testenv')
 subdir('utils')
