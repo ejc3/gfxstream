@@ -16,6 +16,9 @@
 
 #include <drm/drm_fourcc.h>
 
+#include <cinttypes>
+#include <limits>
+
 #include "frame_buffer.h"
 #include "virtio_gpu_format_utils.h"
 
@@ -163,8 +166,9 @@ std::optional<VirtioGpuResource> VirtioGpuResource::Create(
     if (resourceType == VirtioGpuResourceType::PIPE) {
         // Frontend only resource.
     } else if (resourceType == VirtioGpuResourceType::BUFFER) {
-        if (!FrameBuffer::getFB()->createBufferWithResourceHandle(args->width * args->height,
-                                                                  args->handle)) {
+        const uint64_t bufferSize =
+            static_cast<uint64_t>(args->width) * static_cast<uint64_t>(args->height);
+        if (!FrameBuffer::getFB()->createBufferWithResourceHandle(bufferSize, args->handle)) {
             GFXSTREAM_ERROR("Failed to create buffer with resource handle %d.", args->handle);
             return std::nullopt;
         }
@@ -345,13 +349,20 @@ void VirtioGpuResource::AttachIov(struct iovec* iov, uint32_t num_iovs) {
     mIovs.clear();
     mLinear.clear();
 
+    if (!iov || num_iovs == 0) {
+        return;
+    }
+
     size_t linearSize = 0;
-    if (num_iovs) {
-        mIovs.reserve(num_iovs);
-        for (uint32_t i = 0; i < num_iovs; ++i) {
-            mIovs.push_back(iov[i]);
-            linearSize += iov[i].iov_len;
+    mIovs.reserve(num_iovs);
+    for (uint32_t i = 0; i < num_iovs; ++i) {
+        if (!SafeAddSizeT(linearSize, iov[i].iov_len, &linearSize)) {
+            GFXSTREAM_ERROR("Failed to attach iov: total iov length overflows size_t for resource %d",
+                            mId);
+            mIovs.clear();
+            return;
         }
+        mIovs.push_back(iov[i]);
     }
 
     if (linearSize > 0) {
@@ -491,6 +502,11 @@ int VirtioGpuResource::GetCaching(uint32_t* outCaching) const {
 // copy into display buffers.
 int VirtioGpuResource::TransferRead(uint64_t offset, stream_renderer_box* box,
                                     std::optional<std::vector<struct iovec>> iovs) {
+    if (!box) {
+        GFXSTREAM_ERROR("Failed to transfer: missing box.");
+        return -EINVAL;
+    }
+
     // First, copy from the underlying backend resource to this resource's linear buffer:
     int ret = 0;
     if (mResourceType == VirtioGpuResourceType::BLOB) {
@@ -526,6 +542,11 @@ int VirtioGpuResource::TransferRead(uint64_t offset, stream_renderer_box* box,
 // Corresponds to Virtio GPU "TransferToHost" commands.
 int VirtioGpuResource::TransferWrite(uint64_t offset, stream_renderer_box* box,
                                      std::optional<std::vector<struct iovec>> iovs) {
+    if (!box) {
+        GFXSTREAM_ERROR("Failed to transfer: missing box.");
+        return -EINVAL;
+    }
+
     // First, copy from the desired iov to this resource's linear buffer:
     int ret = 0;
     if (iovs) {
@@ -565,13 +586,19 @@ int VirtioGpuResource::ReadFromPipeToLinear(uint64_t offset, stream_renderer_box
         return -EINVAL;
     }
 
-    size_t requiredSize = box->x + box->w;
-    if (mLinear.size() < requiredSize) {
-        GFXSTREAM_ERROR("mLinear is too small! size: %zu, required: %zu", mLinear.size(), requiredSize);
+    if (!box) {
+        GFXSTREAM_ERROR("Failed to transfer: missing box.");
         return -EINVAL;
     }
 
-    return mHostPipe->TransferFromHost(mLinear.data() + box->x, box->w);
+    if (static_cast<size_t>(box->x) > mLinear.size() ||
+        static_cast<size_t>(box->w) > mLinear.size() - static_cast<size_t>(box->x)) {
+        GFXSTREAM_ERROR("mLinear is too small for pipe read! size: %zu, x: %u, w: %u",
+                        mLinear.size(), box->x, box->w);
+        return -EINVAL;
+    }
+
+    return mHostPipe->TransferFromHost(mLinear.data() + static_cast<size_t>(box->x), box->w);
 }
 
 int VirtioGpuResource::WriteToPipeFromLinear(uint64_t offset, stream_renderer_box* box) {
@@ -591,7 +618,19 @@ int VirtioGpuResource::WriteToPipeFromLinear(uint64_t offset, stream_renderer_bo
         return -EINVAL;
     }
 
-    return mHostPipe->TransferToHost(mLinear.data() + box->x, box->w);
+    if (!box) {
+        GFXSTREAM_ERROR("Failed to transfer: missing box.");
+        return -EINVAL;
+    }
+
+    if (static_cast<size_t>(box->x) > mLinear.size() ||
+        static_cast<size_t>(box->w) > mLinear.size() - static_cast<size_t>(box->x)) {
+        GFXSTREAM_ERROR("mLinear is too small for pipe write! size: %zu, x: %u, w: %u",
+                        mLinear.size(), box->x, box->w);
+        return -EINVAL;
+    }
+
+    return mHostPipe->TransferToHost(mLinear.data() + static_cast<size_t>(box->x), box->w);
 }
 
 int VirtioGpuResource::ReadFromBufferToLinear(uint64_t offset, stream_renderer_box* box) {
@@ -605,14 +644,15 @@ int VirtioGpuResource::ReadFromBufferToLinear(uint64_t offset, stream_renderer_b
         return -EINVAL;
     }
 
-    size_t requiredSize = mCreateArgs->width * mCreateArgs->height;
-    if (mLinear.size() < requiredSize) {
-        GFXSTREAM_ERROR("mLinear is too small! size: %zu, required: %zu", mLinear.size(), requiredSize);
+    const uint64_t requiredSize =
+        static_cast<uint64_t>(mCreateArgs->width) * static_cast<uint64_t>(mCreateArgs->height);
+    if (requiredSize == 0 || requiredSize > mLinear.size()) {
+        GFXSTREAM_ERROR("mLinear is too small! size: %zu, required: %" PRIu64, mLinear.size(),
+                        requiredSize);
         return -EINVAL;
     }
 
-    FrameBuffer::getFB()->readBuffer(mCreateArgs->handle, 0,
-                                     mCreateArgs->width * mCreateArgs->height, mLinear.data());
+    FrameBuffer::getFB()->readBuffer(mCreateArgs->handle, 0, requiredSize, mLinear.data());
     return 0;
 }
 
@@ -627,8 +667,15 @@ int VirtioGpuResource::WriteToBufferFromLinear(uint64_t offset, stream_renderer_
         return -EINVAL;
     }
 
-    FrameBuffer::getFB()->updateBuffer(mCreateArgs->handle, 0,
-                                       mCreateArgs->width * mCreateArgs->height, mLinear.data());
+    const uint64_t requiredSize =
+        static_cast<uint64_t>(mCreateArgs->width) * static_cast<uint64_t>(mCreateArgs->height);
+    if (requiredSize == 0 || requiredSize > mLinear.size()) {
+        GFXSTREAM_ERROR("mLinear is too small! size: %zu, required: %" PRIu64, mLinear.size(),
+                        requiredSize);
+        return -EINVAL;
+    }
+
+    FrameBuffer::getFB()->updateBuffer(mCreateArgs->handle, 0, requiredSize, mLinear.data());
     return 0;
 }
 
@@ -650,10 +697,12 @@ int VirtioGpuResource::ReadFromColorBufferToLinear(uint64_t offset, stream_rende
     }
     auto format = *formatOpt;
 
-    size_t requiredSize = GetTransferSize(mCreateArgs->format, mCreateArgs->width, mCreateArgs->height,
-                                          0, 0, mCreateArgs->width, mCreateArgs->height);
-    if (mLinear.size() < requiredSize) {
-        GFXSTREAM_ERROR("mLinear is too small! size: %zu, required: %zu", mLinear.size(), requiredSize);
+    const size_t requiredSize = GetTransferSize(mCreateArgs->format, mCreateArgs->width,
+                                                mCreateArgs->height, 0, 0,
+                                                mCreateArgs->width, mCreateArgs->height);
+    if (requiredSize == 0 || mLinear.size() < requiredSize) {
+        GFXSTREAM_ERROR("mLinear is too small! size: %zu, required: %zu", mLinear.size(),
+                        requiredSize);
         return -EINVAL;
     }
 
@@ -690,6 +739,15 @@ int VirtioGpuResource::WriteToColorBufferFromLinear(uint64_t offset, stream_rend
     }
     auto format = *formatOpt;
 
+    const size_t requiredSize = GetTransferSize(mCreateArgs->format, mCreateArgs->width,
+                                                mCreateArgs->height, 0, 0,
+                                                mCreateArgs->width, mCreateArgs->height);
+    if (requiredSize == 0 || mLinear.size() < requiredSize) {
+        GFXSTREAM_ERROR("mLinear is too small! size: %zu, required: %zu", mLinear.size(),
+                        requiredSize);
+        return -EINVAL;
+    }
+
     // We always xfer the whole thing again to GL
     // since it's fiddly to calc / copy-out subregions
     FrameBuffer::getFB()->updateColorBuffer(mCreateArgs->handle, 0, 0, mCreateArgs->width,
@@ -718,7 +776,7 @@ int VirtioGpuResource::TransferFromIov(uint64_t offset, const stream_renderer_bo
 int VirtioGpuResource::TransferWithIov(uint64_t offset, const stream_renderer_box* box,
                                        const std::vector<struct iovec>& iovs,
                                        TransferDirection direction) {
-    if (!mCreateArgs) {
+    if (!mCreateArgs || !box) {
         GFXSTREAM_ERROR("failed to transfer: missing resource args.");
         return -EINVAL;
     }
@@ -730,8 +788,8 @@ int VirtioGpuResource::TransferWithIov(uint64_t offset, const stream_renderer_bo
         GFXSTREAM_ERROR("failed to transfer: empty transfer");
         return -EINVAL;
     }
-    if (box->x + box->w > mCreateArgs->width) {
-        GFXSTREAM_ERROR("failed to transfer: box overflows resource width");
+    if (box->w > mCreateArgs->width - box->x || box->h > mCreateArgs->height - box->y) {
+        GFXSTREAM_ERROR("failed to transfer: box overflows resource dimensions");
         return -EINVAL;
     }
 
@@ -741,18 +799,17 @@ int VirtioGpuResource::TransferWithIov(uint64_t offset, const stream_renderer_bo
     size_t start = linearBase;
     size_t length =
         GetTransferSize(mCreateArgs->format, mCreateArgs->width, mCreateArgs->height,
-                                       box->x, box->y, box->w, box->h);
-    size_t end = start + length;
-
-    if (start == end) {
+                        box->x, box->y, box->w, box->h);
+    if (length == 0) {
         GFXSTREAM_ERROR("failed to transfer: nothing to transfer");
         return -EINVAL;
     }
 
-    if (end > mLinear.size()) {
+    if (start > mLinear.size() || length > mLinear.size() - start) {
         GFXSTREAM_ERROR("failed to transfer: start + length overflows!");
         return -EINVAL;
     }
+    const size_t end = start + length;
 
     uint32_t iovIndex = 0;
     size_t iovOffset = 0;
@@ -768,7 +825,11 @@ int VirtioGpuResource::TransferWithIov(uint64_t offset, const stream_renderer_bo
         const char* iovBase_const = static_cast<const char*>(iovs[iovIndex].iov_base);
         char* iovBase = static_cast<char*>(iovs[iovIndex].iov_base);
         size_t iovLen = iovs[iovIndex].iov_len;
-        size_t iovOffsetEnd = iovOffset + iovLen;
+        size_t iovOffsetEnd = 0;
+        if (!SafeAddSizeT(iovOffset, iovLen, &iovOffsetEnd)) {
+            GFXSTREAM_ERROR("failed to transfer: iov offset overflows");
+            return -EINVAL;
+        }
 
         auto lower_intersect = std::max(iovOffset, start);
         auto upper_intersect = std::min(iovOffsetEnd, end);
@@ -790,7 +851,7 @@ int VirtioGpuResource::TransferWithIov(uint64_t offset, const stream_renderer_bo
             written += toWrite;
         }
         ++iovIndex;
-        iovOffset += iovLen;
+        iovOffset = iovOffsetEnd;
     }
 
     return 0;

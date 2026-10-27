@@ -35,8 +35,11 @@
 #include "gfxstream/host/testing/ShaderUtils.h"
 #include "gfxstream/host/window_operations.h"
 #include "gfxstream/system/System.h"
+#include "common/gles_pointer.h"
+#include "host/gl/gles2_dec/gles2_opcodes.h"
 #include "host/gl/emulation_gl.h"
 #include "host/gl/yuv_converter.h"
+#include "host/vulkan/trivial_stream.h"
 #include "render_channel_impl.h"
 #include "render_thread_info.h"
 
@@ -68,6 +71,9 @@ class FrameBufferTest : public ::testing::Test {
     }
 
     void SetUp() override {
+        if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+            GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+        }
         const EGLDispatch* egl = LazyLoadedEGLDispatch::get();
         ASSERT_NE(nullptr, egl);
         ASSERT_NE(nullptr, LazyLoadedGLESv2Dispatch::get());
@@ -108,6 +114,9 @@ class FrameBufferTest : public ::testing::Test {
     }
 
     virtual void TearDown() override {
+        if (!mFb) {
+            return;
+        }
         FrameBuffer::finalize();
         mFb = nullptr;
 
@@ -940,6 +949,9 @@ class RenderThreadDeadlockTest : public ::testing::Test {
     }
 
     void SetUp() override {
+        if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+            GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+        }
         const EGLDispatch* egl = LazyLoadedEGLDispatch::get();
         ASSERT_NE(nullptr, egl);
         ASSERT_NE(nullptr, LazyLoadedGLESv2Dispatch::get());
@@ -956,6 +968,9 @@ class RenderThreadDeadlockTest : public ::testing::Test {
     }
 
     void TearDown() override {
+        if (IsSkipped()) {
+            return;
+        }
         FrameBuffer::finalize();
     }
 };
@@ -1027,7 +1042,8 @@ TEST_F(FrameBufferTest, CleanupProcGLObjects) {
 
     // Simulate render thread exit for this process before cleanupProcGLObjects
     mRenderThreadInfo->setPuid(0);
-    mFb->cleanupProcGLObjects(testPuid);
+    mFb->signalGuestProcessDead(testPuid);
+    mFb->waitForProcessCleanup();
 
     EXPECT_FALSE(mFb->getEmulationGl()->hasProcOwnedResources());
     EXPECT_FALSE(mFb->getEmulationGl()->hasContextsOrWindowSurfaces());
@@ -1198,10 +1214,9 @@ TEST_F(FrameBufferTest, Gles1DrawArraysNeededBytesExceedingInt32MaxRejected) {
         1.0f, 0.0f, 0.0f,
     };
     gl1.glEnableClientState(GL_VERTEX_ARRAY);
-    // Use a large stride (0x40000000) with a direct client pointer (capacity == 0) so that
-    // totalVerts (3) is within INT32_MAX / 16, but neededBytes ((3 - 1) * 0x40000000 + 12)
-    // exceeds INT32_MAX.
-    gl1.glVertexPointer(3, GL_FLOAT, 0x40000000, smallVerts);
+    // Use a large stride (0x40000000) with a client pointer so that totalVerts (3) is within
+    // INT32_MAX / 16, but neededBytes ((3 - 1) * 0x40000000 + 12) exceeds INT32_MAX.
+    gl1.glVertexPointerWithDataSize(3, GL_FLOAT, 0x40000000, smallVerts, sizeof(smallVerts));
     (void)gl1.glGetError();
 
     gl1.glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -1497,6 +1512,373 @@ TEST_F(FrameBufferTest, Gles1GetLightAndMaterialInvalidEnumDoesNotLeakStack) {
 
     EXPECT_TRUE(mFb->bindContext(0, 0, 0));
     mFb->destroyEmulatedEglContext(ctx1);
+    mFb->destroyEmulatedEglWindowSurface(surface);
+}
+
+TEST_F(FrameBufferTest, Gles2CrossVaoClientPointerDataRetainedWithoutUaf) {
+    if (!mFb->hasEmulationGl()) {
+        GTEST_SKIP() << "GL emulation not enabled.";
+    }
+
+    HandleType ctx = mFb->createEmulatedEglContext(0, 0, gl::GLESApi_3_0);
+    ASSERT_NE((HandleType)0, ctx);
+    HandleType surface = mFb->createEmulatedEglWindowSurface(0, mWidth, mHeight);
+    ASSERT_NE((HandleType)0, surface);
+    EXPECT_TRUE(mFb->bindContext(ctx, surface, surface));
+
+    auto& gl2 = mRenderThreadInfo->m_glInfo->m_gl2Dec;
+    GLuint vaos[2] = {0, 0};
+    gl2.glGenVertexArrays(2, vaos);
+    ASSERT_NE(0u, vaos[0]);
+    ASSERT_NE(0u, vaos[1]);
+
+    GLfloat smallVerts[12] = {
+        0.0f, 0.0f, 0.0f, 1.0f,
+        1.0f, 0.0f, 0.0f, 1.0f,
+        0.0f, 1.0f, 0.0f, 1.0f,
+    };
+    gl2.glBindVertexArray(vaos[0]);
+    gl2.glEnableVertexAttribArray(0);
+    gl2.glVertexAttribPointerData(&gl2, 0, 4, GL_FLOAT, GL_FALSE, 0, smallVerts,
+                                  sizeof(smallVerts));
+
+    // Switch to vao[1] and upload a larger buffer to attribute 0, forcing m_contextData
+    // to reallocate its per-attribute staging buffer for index 0.
+    std::vector<GLfloat> largeVerts(4096, 0.5f);
+    gl2.glBindVertexArray(vaos[1]);
+    gl2.glEnableVertexAttribArray(0);
+    gl2.glVertexAttribPointerData(&gl2, 0, 4, GL_FLOAT, GL_FALSE, 0, largeVerts.data(),
+                                  static_cast<GLuint>(largeVerts.size() * sizeof(GLfloat)));
+
+    // Rebinding vao[0] and drawing must use vao[0]'s owned copy rather than a dangling
+    // pointer into m_contextData's old buffer.
+    gl2.glBindVertexArray(vaos[0]);
+    (void)gl2.glGetError();
+    gl2.glDrawArrays(GL_TRIANGLES, 0, 3);
+    EXPECT_EQ((GLenum)GL_NO_ERROR, gl2.glGetError());
+
+    gl2.glBindVertexArray(0);
+    gl2.glDeleteVertexArrays(2, vaos);
+    EXPECT_TRUE(mFb->bindContext(0, 0, 0));
+    mFb->destroyEmulatedEglContext(ctx);
+    mFb->destroyEmulatedEglWindowSurface(surface);
+}
+
+TEST_F(FrameBufferTest, GlesPointerOnLoadClampsValuesAndPreservesStreamAlignment) {
+    MemStream stream;
+    stream.putBe32(4);                      // m_size
+    stream.putBe32(GL_FLOAT);               // m_type
+    stream.putBe32(0);                      // m_stride
+    stream.putByte(0);                      // m_enabled
+    stream.putByte(0);                      // m_normalize
+    stream.putByte(GLESpointer::VALUE);     // m_attribType
+    stream.putBe32(0);                      // m_bufferName
+    stream.putBe32(0);                      // m_buffOffset
+    stream.putByte(0);                      // m_isInt
+    stream.putBe32(0);                      // m_divisor
+    stream.putBe32(0);                      // m_bindingIndex
+    stream.putBe32(0);                      // m_reloffset
+
+    constexpr uint32_t kExcessValueCount = 10;
+    stream.putBe32(kExcessValueCount);      // m_valueCount (> 4)
+    for (uint32_t i = 0; i < kExcessValueCount; ++i) {
+        GLfloat val = static_cast<GLfloat>(i + 1);
+        stream.write(&val, sizeof(GLfloat));
+    }
+    constexpr uint32_t kSentinel = 0x12345678u;
+    stream.putBe32(kSentinel);
+
+    GLESpointer ptr(&stream);
+    EXPECT_EQ(4u, ptr.getValueCount());
+    const GLfloat* values = ptr.getValues();
+    ASSERT_NE(nullptr, values);
+    EXPECT_FLOAT_EQ(1.0f, values[0]);
+    EXPECT_FLOAT_EQ(2.0f, values[1]);
+    EXPECT_FLOAT_EQ(3.0f, values[2]);
+    EXPECT_FLOAT_EQ(4.0f, values[3]);
+    EXPECT_EQ(kSentinel, stream.getBe32());
+
+    // Negative serialized m_dataSize (0xFFFFFFFF / -1) on an ARRAY pointer must not throw
+    // std::bad_alloc and must reset dataSize / dataCapacity to 0 and arrayData to nullptr.
+    MemStream negArrayStream;
+    negArrayStream.putBe32(4);                      // m_size
+    negArrayStream.putBe32(GL_FLOAT);               // m_type
+    negArrayStream.putBe32(0);                      // m_stride
+    negArrayStream.putByte(0);                      // m_enabled
+    negArrayStream.putByte(0);                      // m_normalize
+    negArrayStream.putByte(GLESpointer::ARRAY);     // m_attribType
+    negArrayStream.putBe32(0);                      // m_bufferName
+    negArrayStream.putBe32(0xFFFFFFFFu);            // m_dataSize (-1 when signed)
+    negArrayStream.putBe32(0);                      // m_buffOffset
+    negArrayStream.putByte(0);                      // m_isInt
+    negArrayStream.putBe32(0);                      // m_divisor
+    negArrayStream.putBe32(0);                      // m_bindingIndex
+    negArrayStream.putBe32(0);                      // m_reloffset
+    negArrayStream.putBe32(0);                      // m_valueCount
+
+    GLESpointer negArrayPtr(&negArrayStream);
+    EXPECT_EQ(GLESpointer::ARRAY, negArrayPtr.getAttribType());
+    EXPECT_EQ(0, negArrayPtr.getDataSize());
+    EXPECT_EQ(0u, negArrayPtr.getDataCapacity());
+    EXPECT_EQ(nullptr, negArrayPtr.getArrayData());
+    EXPECT_EQ(nullptr, negArrayPtr.getData());
+}
+
+TEST_F(FrameBufferTest, GlesPointerSetArrayAndCopyMoveSemantics) {
+    GLfloat verts[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+    // 1. setArray with data != nullptr && dataSize == 0 retains m_data without copying.
+    GLESpointer unownedPtr;
+    unownedPtr.setArray(4, GL_FLOAT, 0, verts, 0);
+    EXPECT_EQ(verts, unownedPtr.getArrayData());
+    EXPECT_EQ(verts, unownedPtr.getData());
+    EXPECT_EQ(0, unownedPtr.getDataSize());
+
+    // 2. setArray with data == nullptr && dataSize > 0 resets m_dataSize to 0 and m_data to nullptr.
+    GLESpointer nullPtr;
+    nullPtr.setArray(4, GL_FLOAT, 0, nullptr, 64);
+    EXPECT_EQ(nullptr, nullPtr.getArrayData());
+    EXPECT_EQ(nullptr, nullPtr.getData());
+    EXPECT_EQ(0, nullPtr.getDataSize());
+    EXPECT_EQ(0u, nullPtr.getDataCapacity());
+
+    // Null-array onSave/onLoad round-trip must write/read size 0 cleanly.
+    MemStream nullStream;
+    nullPtr.onSave(&nullStream);
+    GLESpointer loadedNullPtr(&nullStream);
+    EXPECT_EQ(nullptr, loadedNullPtr.getData());
+    EXPECT_EQ(0, loadedNullPtr.getDataSize());
+
+    // 3. Copy constructor and copy assignment re-bind m_data to the new instance's m_ownData.
+    GLESpointer copyAssigned;
+    {
+        GLESpointer original;
+        original.setArray(4, GL_FLOAT, 0, verts, sizeof(verts));
+        ASSERT_NE(nullptr, original.getData());
+        EXPECT_NE(verts, original.getData());
+
+        GLESpointer copyConstructed(original);
+        EXPECT_NE(original.getData(), copyConstructed.getData());
+        EXPECT_EQ(0, memcmp(copyConstructed.getData(), verts, sizeof(verts)));
+
+        copyAssigned = original;
+        EXPECT_NE(original.getData(), copyAssigned.getData());
+        EXPECT_EQ(0, memcmp(copyAssigned.getData(), verts, sizeof(verts)));
+
+        // Overwrite original; copies must retain their own buffer and data.
+        GLfloat otherVerts[4] = {9.0f, 8.0f, 7.0f, 6.0f};
+        original.setArray(4, GL_FLOAT, 0, otherVerts, sizeof(otherVerts));
+        EXPECT_EQ(0, memcmp(copyConstructed.getData(), verts, sizeof(verts)));
+    }
+    EXPECT_EQ(0, memcmp(copyAssigned.getData(), verts, sizeof(verts)));
+
+    // 4. Move constructor and move assignment transfer ownership and point m_data to the new buffer.
+    GLESpointer moveConstructed(std::move(copyAssigned));
+    EXPECT_EQ(nullptr, copyAssigned.getData());
+    EXPECT_EQ(0, copyAssigned.getDataSize());
+    ASSERT_NE(nullptr, moveConstructed.getData());
+    EXPECT_EQ(static_cast<GLsizei>(sizeof(verts)), moveConstructed.getDataSize());
+    EXPECT_EQ(0, memcmp(moveConstructed.getData(), verts, sizeof(verts)));
+
+    GLESpointer moveAssigned;
+    moveAssigned = std::move(moveConstructed);
+    EXPECT_EQ(nullptr, moveConstructed.getData());
+    EXPECT_EQ(0, moveConstructed.getDataSize());
+    ASSERT_NE(nullptr, moveAssigned.getData());
+    EXPECT_EQ(static_cast<GLsizei>(sizeof(verts)), moveAssigned.getDataSize());
+    EXPECT_EQ(0, memcmp(moveAssigned.getData(), verts, sizeof(verts)));
+
+    // 5. Reconfiguring an ARRAY pointer via setValue clears owned array data and preserves VALUE state across copy/move.
+    GLfloat constVals[4] = {10.0f, 20.0f, 30.0f, 40.0f};
+    moveAssigned.setValue(4, constVals);
+    EXPECT_EQ(GLESpointer::VALUE, moveAssigned.getAttribType());
+    EXPECT_EQ(nullptr, moveAssigned.getArrayData());
+    EXPECT_EQ(0, moveAssigned.getDataSize());
+    EXPECT_EQ(moveAssigned.getValues(), moveAssigned.getData());
+
+    GLESpointer valueCopied(moveAssigned);
+    EXPECT_EQ(GLESpointer::VALUE, valueCopied.getAttribType());
+    EXPECT_EQ(nullptr, valueCopied.getArrayData());
+    EXPECT_EQ(0, valueCopied.getDataSize());
+    EXPECT_EQ(valueCopied.getValues(), valueCopied.getData());
+
+    GLESpointer valueMoved(std::move(valueCopied));
+    EXPECT_EQ(GLESpointer::VALUE, valueMoved.getAttribType());
+    EXPECT_EQ(nullptr, valueMoved.getArrayData());
+    EXPECT_EQ(0, valueMoved.getDataSize());
+    EXPECT_EQ(valueMoved.getValues(), valueMoved.getData());
+}
+
+
+TEST_F(FrameBufferTest, Gles3GetIntegeriVAndVertexAttribMaxIndexBoundsChecked) {
+    if (!mFb->hasEmulationGl()) {
+        GTEST_SKIP() << "GL emulation not enabled.";
+    }
+
+    HandleType ctx = mFb->createEmulatedEglContext(0, 0, gl::GLESApi_3_1);
+    ASSERT_NE((HandleType)0, ctx);
+    HandleType surface = mFb->createEmulatedEglWindowSurface(0, mWidth, mHeight);
+    ASSERT_NE((HandleType)0, surface);
+    EXPECT_TRUE(mFb->bindContext(ctx, surface, surface));
+
+    auto& gl2 = mRenderThreadInfo->m_glInfo->m_gl2Dec;
+    const GLenum kIndexedTargets[] = {
+        GL_TRANSFORM_FEEDBACK_BUFFER_BINDING,
+        GL_UNIFORM_BUFFER_BINDING,
+        GL_ATOMIC_COUNTER_BUFFER_BINDING,
+        GL_SHADER_STORAGE_BUFFER_BINDING,
+    };
+    for (GLenum target : kIndexedTargets) {
+        GLint val32 = -1;
+        gl2.glGetIntegeri_v(target, 0x7fffffffu, &val32);
+        EXPECT_EQ(0, val32);
+
+        GLint64 val64 = -1;
+        gl2.glGetInteger64i_v(target, 0x7fffffffu, &val64);
+        EXPECT_EQ(0, val64);
+    }
+
+    // Attribute index 16 (== kMaxVertexAttributes) must not index past the 16-element
+    // VAO attribute vector.
+    constexpr GLuint kOutOfBoundsAttrib = 16;
+    GLfloat verts[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    (void)gl2.glGetError();
+    gl2.glEnableVertexAttribArray(kOutOfBoundsAttrib);
+    EXPECT_EQ((GLenum)GL_INVALID_VALUE, gl2.glGetError());
+    gl2.glDisableVertexAttribArray(kOutOfBoundsAttrib);
+    EXPECT_EQ((GLenum)GL_INVALID_VALUE, gl2.glGetError());
+    gl2.glVertexAttribPointerData(&gl2, kOutOfBoundsAttrib, 4, GL_FLOAT, GL_FALSE, 0, verts,
+                                  sizeof(verts));
+    EXPECT_EQ((GLenum)GL_INVALID_VALUE, gl2.glGetError());
+    gl2.glVertexAttribBinding(kOutOfBoundsAttrib, 0);
+    EXPECT_EQ((GLenum)GL_INVALID_VALUE, gl2.glGetError());
+    gl2.glVertexAttribFormat(kOutOfBoundsAttrib, 4, GL_FLOAT, GL_FALSE, 0);
+    EXPECT_EQ((GLenum)GL_INVALID_VALUE, gl2.glGetError());
+
+    EXPECT_TRUE(mFb->bindContext(0, 0, 0));
+    mFb->destroyEmulatedEglContext(ctx);
+    mFb->destroyEmulatedEglWindowSurface(surface);
+}
+
+TEST_F(FrameBufferTest, Gles2DetachShaderWithProgramHandleDoesNotConfuseTypes) {
+    if (!mFb->hasEmulationGl()) {
+        GTEST_SKIP() << "GL emulation not enabled.";
+    }
+
+    HandleType ctx = mFb->createEmulatedEglContext(0, 0, gl::GLESApi_3_1);
+    ASSERT_NE((HandleType)0, ctx);
+    HandleType surface = mFb->createEmulatedEglWindowSurface(0, mWidth, mHeight);
+    ASSERT_NE((HandleType)0, surface);
+    EXPECT_TRUE(mFb->bindContext(ctx, surface, surface));
+
+    auto& gl2 = mRenderThreadInfo->m_glInfo->m_gl2Dec;
+    GLuint prog1 = gl2.glCreateProgram_dec(&gl2);
+    GLuint prog2 = gl2.glCreateProgram_dec(&gl2);
+    ASSERT_NE(0u, prog1);
+    ASSERT_NE(0u, prog2);
+    (void)gl2.glGetError();
+
+    // 1. Attempting to attach a program handle as a shader must fail with GL_INVALID_OPERATION.
+    gl2.glAttachShader_dec(&gl2, prog1, prog2);
+    EXPECT_EQ((GLenum)GL_INVALID_OPERATION, gl2.glGetError());
+
+    // 2. Attempting to detach a program handle as a shader must fail with GL_INVALID_OPERATION.
+    gl2.glDetachShader_dec(&gl2, prog1, prog2);
+    EXPECT_EQ((GLenum)GL_INVALID_OPERATION, gl2.glGetError());
+
+    // 3. Attaching and detaching a valid shader handle exercises s_detachShader cleanly.
+    GLuint vs = gl2.glCreateShader_dec(&gl2, GL_VERTEX_SHADER);
+    ASSERT_NE(0u, vs);
+    gl2.glAttachShader_dec(&gl2, prog1, vs);
+    EXPECT_EQ((GLenum)GL_NO_ERROR, gl2.glGetError());
+    gl2.glDetachShader_dec(&gl2, prog1, vs);
+    EXPECT_EQ((GLenum)GL_NO_ERROR, gl2.glGetError());
+
+    // 4. Passing a shader handle instead of a program handle to program APIs must be
+    // rejected with GL_INVALID_OPERATION without type confusion.
+    gl2.glUseProgram_dec(&gl2, vs);
+    EXPECT_EQ((GLenum)GL_INVALID_OPERATION, gl2.glGetError());
+
+    (void)gl2.glGetUniformLocation_dec(&gl2, vs, "u_test");
+    EXPECT_EQ((GLenum)GL_INVALID_OPERATION, gl2.glGetError());
+
+    gl2.glProgramUniform1i_dec(&gl2, vs, 0, 1);
+    EXPECT_EQ((GLenum)GL_INVALID_OPERATION, gl2.glGetError());
+
+    gl2.glDeleteShader_dec(&gl2, vs);
+    gl2.glDeleteProgram_dec(&gl2, prog1);
+    gl2.glDeleteProgram_dec(&gl2, prog2);
+    EXPECT_TRUE(mFb->bindContext(0, 0, 0));
+    mFb->destroyEmulatedEglContext(ctx);
+    mFb->destroyEmulatedEglWindowSurface(surface);
+}
+
+TEST_F(FrameBufferTest, Gles2RawArrayOfPointersOpcodesRejectedWithInvalidOperation) {
+    if (!mFb->hasEmulationGl()) {
+        GTEST_SKIP() << "GL emulation not enabled.";
+    }
+
+    HandleType ctx = mFb->createEmulatedEglContext(0, 0, gl::GLESApi_3_0);
+    ASSERT_NE((HandleType)0, ctx);
+    HandleType surface = mFb->createEmulatedEglWindowSurface(0, mWidth, mHeight);
+    ASSERT_NE((HandleType)0, surface);
+    EXPECT_TRUE(mFb->bindContext(ctx, surface, surface));
+
+    auto& gl2 = mRenderThreadInfo->m_glInfo->m_gl2Dec;
+    vk::TrivialStream ioStream;
+    ChecksumCalculator checksumCalc;
+    (void)gl2.getGLerror();
+
+    struct RawPointerArrayCase {
+        uint32_t opcode;
+        uint32_t lastWord;
+    };
+    const RawPointerArrayCase kCases[] = {
+        {OP_glShaderSource, 0},                                   // size_length = 0
+        {OP_glGetUniformIndices, 0},                              // size_uniformIndices = 0
+        {OP_glTransformFeedbackVaryings, GL_INTERLEAVED_ATTRIBS}, // bufferMode
+    };
+    for (const auto& testCase : kCases) {
+        uint32_t packet[8] = {
+            testCase.opcode,
+            32,                  // packetLen
+            1,                   // shader / program
+            1,                   // count / uniformCount
+            8,                   // byte size of pointer array
+            0xdeadbeefu,         // bogus pointer low 32 bits
+            0xdeadbeefu,         // bogus pointer high 32 bits
+            testCase.lastWord,
+        };
+        EXPECT_EQ(sizeof(packet), gl2.decode(packet, sizeof(packet), &ioStream, &checksumCalc));
+        EXPECT_EQ((GLenum)GL_INVALID_OPERATION, gl2.getGLerror());
+        EXPECT_EQ((GLenum)GL_NO_ERROR, gl2.getGLerror());
+    }
+
+    // OP_glCreateShaderProgramv with bogus guest pointer address 0xdeadbeefdeadbeef.
+    // Also verify OP_glGetError over the wire drains the pending GL_INVALID_OPERATION.
+    {
+        uint32_t packet[7] = {
+            OP_glCreateShaderProgramv,
+            28,                // packetLen
+            GL_VERTEX_SHADER,  // type
+            1,                 // count
+            8,                 // size_strings
+            0xdeadbeefu,       // bogus pointer low 32 bits
+            0xdeadbeefu,       // bogus pointer high 32 bits
+        };
+        EXPECT_EQ(sizeof(packet), gl2.decode(packet, sizeof(packet), &ioStream, &checksumCalc));
+        EXPECT_EQ((GLenum)GL_INVALID_OPERATION, gl2.getGLerror());
+        EXPECT_EQ((GLenum)GL_NO_ERROR, gl2.getGLerror());
+
+        EXPECT_EQ(sizeof(packet), gl2.decode(packet, sizeof(packet), &ioStream, &checksumCalc));
+        uint32_t getErrPacket[2] = {OP_glGetError, 8};
+        EXPECT_EQ(sizeof(getErrPacket),
+                  gl2.decode(getErrPacket, sizeof(getErrPacket), &ioStream, &checksumCalc));
+        EXPECT_EQ((GLenum)GL_NO_ERROR, gl2.getGLerror());
+    }
+
+    EXPECT_TRUE(mFb->bindContext(0, 0, 0));
+    mFb->destroyEmulatedEglContext(ctx);
     mFb->destroyEmulatedEglWindowSurface(surface);
 }
 

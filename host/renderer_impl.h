@@ -100,10 +100,10 @@ public:
     void onGuestGraphicsProcessCreate(uint64_t puid) final;
     // TODO(kaiyili): rename this interface to onGuestGraphicsProcessDestroy.
     void cleanupProcGLObjects(uint64_t puid) final;
-    void waitForProcessCleanup() final;
+    bool waitForProcessCleanup() final;
     struct AndroidVirtioGpuOps* getVirtioGpuOps() final;
 
-    void pauseAllPreSave() final;
+    bool pauseAllPreSave() final;
     void resumeAll() final;
 
     bool save(gfxstream::Stream* stream,
@@ -145,9 +145,6 @@ private:
     std::vector<std::shared_ptr<RenderChannelImpl>> mChannels;
     std::vector<std::shared_ptr<RenderChannelImpl>> mStoppedChannels;
     bool mStopped = false;
-
-    class ProcessCleanupThread;
-    std::unique_ptr<ProcessCleanupThread> mCleanupThread;
 
     std::unique_ptr<RenderThread> mLoaderRenderThread;
 

@@ -15,6 +15,7 @@
 #pragma once
 
 #include <deque>
+#include <memory>
 #include <mutex>
 
 #include "vulkan_dispatch.h"
@@ -53,31 +54,15 @@ struct OrderMaintenanceInfo {
     uint32_t sequenceNumber = 0;
     gfxstream::base::Lock lock;
     gfxstream::base::ConditionVariable cv;
-
-    uint32_t refcount = 1;
-
-    void incRef() { __atomic_add_fetch(&refcount, 1, __ATOMIC_SEQ_CST); }
-
-    bool decRef() { return 0 == __atomic_sub_fetch(&refcount, 1, __ATOMIC_SEQ_CST); }
 };
-
-inline void acquireOrderMaintInfo(OrderMaintenanceInfo* ord) {
-    if (!ord) return;
-    ord->incRef();
-}
-
-inline void releaseOrderMaintInfo(OrderMaintenanceInfo* ord) {
-    if (!ord) return;
-    if (ord->decRef()) delete ord;
-}
 
 class BoxedHandleInfo {
    public:
     UnboxedHandle underlying{0};
     VulkanDispatch* dispatch = nullptr;
     bool ownDispatch = false;
-    OrderMaintenanceInfo* ordMaintInfo = nullptr;
-    VulkanMemReadingStream* readStream = nullptr;
+    std::shared_ptr<OrderMaintenanceInfo> ordMaintInfo;
+    std::unique_ptr<VulkanMemReadingStream> readStream;
 };
 
 class BoxedHandleManager {
@@ -92,9 +77,9 @@ class BoxedHandleManager {
     // dEQP object management tests.
     using Store = gfxstream::base::HybridEntityManager<16000, BoxedHandle, BoxedHandleInfo>;
 
-    BoxedHandle add(const BoxedHandleInfo& item, BoxedHandleTypeTag tag);
+    BoxedHandle add(BoxedHandleInfo item, BoxedHandleTypeTag tag);
 
-    void update(BoxedHandle handle, const BoxedHandleInfo& item, BoxedHandleTypeTag tag);
+    void update(BoxedHandle handle, BoxedHandleInfo item, BoxedHandleTypeTag tag);
 
     void remove(BoxedHandle h);
     void removeDelayed(uint64_t h, VkDevice device, std::function<void()> callback);
@@ -105,6 +90,11 @@ class BoxedHandleManager {
 
     BoxedHandleInfo* get(BoxedHandle handle);
     BoxedHandle getBoxedFromUnboxed(UnboxedHandle unboxed);
+
+    // Returns nullptr if |handle| is not live. The lookup and the copy are done
+    // under the store lock, so a concurrent remove() can not release the
+    // OrderMaintenanceInfo in between.
+    std::shared_ptr<OrderMaintenanceInfo> getOrderMaintenanceInfo(BoxedHandle handle);
 
     void replayHandles(std::vector<BoxedHandle> handles);
 
@@ -133,14 +123,14 @@ class BoxedHandleManager {
 
 extern BoxedHandleManager sBoxedHandleManager;
 
-#define DEFINE_BOXED_DISPATCHABLE_HANDLE_API_DECL(type)               \
-    type new_boxed_##type(type underlying, VulkanDispatch* dispatch); \
-    void delete_##type(type boxed);                                   \
-    type unbox_##type(type boxed);                                    \
-    type try_unbox_##type(type boxed);                                \
-    type unboxed_to_boxed_##type(type boxed);                         \
-    VulkanDispatch* dispatch_##type(type boxed);                      \
-    OrderMaintenanceInfo* ordmaint_##type(type boxed);                \
+#define DEFINE_BOXED_DISPATCHABLE_HANDLE_API_DECL(type)                \
+    type new_boxed_##type(type underlying, VulkanDispatch* dispatch);  \
+    void delete_##type(type boxed);                                    \
+    type unbox_##type(type boxed);                                     \
+    type try_unbox_##type(type boxed);                                 \
+    type unboxed_to_boxed_##type(type boxed);                          \
+    VulkanDispatch* dispatch_##type(type boxed);                       \
+    std::shared_ptr<OrderMaintenanceInfo> ordmaint_##type(type boxed); \
     VulkanMemReadingStream* readstream_##type(type boxed);
 
 #define DEFINE_BOXED_NON_DISPATCHABLE_HANDLE_API_DECL(type)                                  \

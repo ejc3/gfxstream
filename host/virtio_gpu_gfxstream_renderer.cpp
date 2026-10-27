@@ -23,6 +23,7 @@ extern "C" {
 
 #include "frame_buffer.h"
 #include "gfxstream/strings.h"
+#include "gfxstream/common/build_info.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/features.h"
 #include "gfxstream/host/tracing.h"
@@ -110,6 +111,10 @@ ParseGfxstreamFeatures(const int rendererFlags,
         rendererFlags & STREAM_RENDERER_FLAGS_USE_VK_BIT);
     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
         &features, VulkanBatchedDescriptorSetUpdate, true);
+    GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
+        &features, VulkanAstcEmulation, true);
+    GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
+        &features, VulkanEtc2Emulation, true);
     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
         &features, VulkanIgnoredHandles, true);
     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
@@ -805,6 +810,9 @@ VG_EXPORT int stream_renderer_init(struct stream_renderer_param* stream_renderer
             log_callback(log_user_data, &log_info);
         });
     }
+
+    const std::string build_id = gfxstream::GetGfxstreamBuildId();
+    GFXSTREAM_INFO("Gfxstream Renderer Version: %s", build_id.c_str());
 
     GFXSTREAM_DEBUG("Finished reading parameters");
 

@@ -115,6 +115,7 @@ target_link_libraries(
         ${GFXSTREAM_HOST_COMMON_LIB}
         gfxstream_backend.headers
         gfxstream_common_base
+        gfxstream_common_build_info
         gfxstream_common_logging
         gfxstream_drm_headers
         gfxstream_features
@@ -183,6 +184,7 @@ add_library(
 target_link_libraries(
     gfxstream_backend
     PUBLIC
+    gfxstream_common_build_info
     gfxstream_common_utils
     gfxstream_features
     gfxstream_host_common
@@ -246,6 +248,7 @@ endfunction()
         gfxstream_backend_unittests
         PRIVATE
         gfxstream_backend
+        gfxstream_common_testenv
         gfxstream_host_testing_oswindow_support
         ${GFXSTREAM_BASE_LIB}
         gtest_main)

@@ -74,6 +74,7 @@ lib_vulkan_server = static_library(
     inc_cereal_common,
     inc_cereal,
     inc_common_base,
+    inc_common_build_info,
     inc_common_logging,
     inc_common_utils,
     inc_gl_openglesdispatch,
@@ -99,6 +100,7 @@ lib_vulkan_server = static_library(
   ],
   link_with: [
     lib_common_base,
+    lib_common_build_info,
     lib_common_logging,
     lib_emulated_textures,
     lib_host_common,
