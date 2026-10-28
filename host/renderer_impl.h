@@ -188,6 +188,8 @@ private:
     // textures it saved, which the loaded frame buffer may read lazily after.
     std::unique_ptr<MemStream> mReleasedState;
     std::shared_ptr<MemoryTextureStore> mReleasedTextures;
+    // The loader of the last load, whose background texture loading a release stops.
+    std::weak_ptr<ITextureLoader> mLastTextureLoader;
 };
 
 }  // namespace host

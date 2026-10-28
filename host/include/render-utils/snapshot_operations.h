@@ -95,6 +95,19 @@ class ITextureLoader {
         }
     }
 
+    // Stops any async use and forgets it, so nothing of the renderer's stays reachable
+    // from this loader: releasing the host GPU deletes what the async use refers to.
+    // Textures not loaded yet still load when touched.
+    void detachAsyncUse() {
+        if (mAsyncUseCallbacks) {
+            mAsyncUseCallbacks->interrupt();
+            mAsyncUseCallbacks->join();
+            mAsyncUseCallbacks.reset();
+        }
+    }
+
+    bool hasAsyncUse() const { return mAsyncUseCallbacks.has_value(); }
+
   private:
     std::optional<AsyncUseCallbacks> mAsyncUseCallbacks;
 };

@@ -45,6 +45,7 @@
 #include "host/vulkan/trivial_stream.h"
 #include "render_channel_impl.h"
 #include "render_thread_info.h"
+#include "renderer_impl.h"
 
 #ifdef _MSC_VER
 #include "gfxstream/msvc.h"
@@ -591,6 +592,42 @@ static bool hostGlesLibraryOpen() {
         }
     }
     return false;
+}
+
+// The loader of an ordinary snapshot load (the emulator's own) keeps the translator's
+// background texture loading reachable after the load; a release must stop and detach
+// it before it deletes the display that loading refers to.
+TEST(FrameBufferReleaseTest, ReleaseDetachesTheLastSnapshotLoader) {
+    ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
+    if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+        GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+    }
+    gfxstream::base::setEnvironmentVariable("ANDROID_EMU_HEADLESS", "1");
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    auto renderer = std::make_shared<RendererImpl>();
+    ASSERT_TRUE(renderer->initialize(256, 256, features, false));
+    HandleType colorBuffer =
+        FrameBuffer::getFB()->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
+    ASSERT_NE(0u, colorBuffer);
+
+    MemStream state;
+    auto textures = std::make_shared<InMemoryTextureSaverLoader>();
+    ASSERT_TRUE(renderer->pauseAllPreSave());
+    ASSERT_TRUE(renderer->save(&state, textures));
+    renderer->resumeAll();
+    state.rewind();
+    ASSERT_TRUE(renderer->load(&state, textures));
+    renderer->resumeAll();
+    ASSERT_TRUE(textures->hasAsyncUse());
+
+    std::string error;
+    ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
+    EXPECT_FALSE(textures->hasAsyncUse());
+    ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
+    ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
+    renderer->resumeAll();
+    renderer->stop(true);
 }
 
 // A renderer that never initialized GL emulation (a Vulkan-only one) releases

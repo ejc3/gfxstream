@@ -385,6 +385,7 @@ bool RendererImpl::load(gfxstream::Stream* stream,
     }
     auto fb = FrameBuffer::getFB();
     assert(fb);
+    mLastTextureLoader = textureLoader;
     return fb->onLoad(stream, textureLoader);
 }
 
@@ -838,12 +839,12 @@ bool RendererImpl::beginGpuRelease(std::string* error) {
             return false;
         }
     }
-    if (mReleasedTextures) {
-        // The last retake may still be restoring textures on a background thread with
-        // the driver about to go; stop it. A texture it did not reach is restored when
-        // the save below touches it.
-        mReleasedTextures->interrupt();
-        mReleasedTextures->join();
+    if (const auto loader = mLastTextureLoader.lock()) {
+        // The last load (a retake's or the emulator's own snapshot load) may still be
+        // restoring textures on a background thread that refers to the translator's
+        // display, which the release deletes: stop it and detach it from the loader. A
+        // texture it did not reach is restored when the save below touches it.
+        loader->detachAsyncUse();
     }
     if (!pauseAllPreSave()) {
         *error = "timed out waiting for guest process cleanup";
