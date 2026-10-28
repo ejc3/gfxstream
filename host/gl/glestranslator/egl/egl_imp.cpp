@@ -412,7 +412,7 @@ bool releaseHostDriver() {
         return false;
     }
     g_eglInfo = NULL;
-    GLEScontext::dispatcher().clearDispatchFuncs();
+    GLEScontext::releaseHostDriverGlobals();
     EglOS::releaseEgl2EglHostInstance();
     return true;
 }

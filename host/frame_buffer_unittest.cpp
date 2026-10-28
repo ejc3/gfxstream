@@ -37,6 +37,7 @@
 #include "gfxstream/host/window_operations.h"
 #include "gfxstream/shared_library.h"
 #include "gfxstream/system/System.h"
+#include "common/gles_context.h"
 #include "common/gles_pointer.h"
 #include "host/gl/gles2_dec/gles2_opcodes.h"
 #include "host/gl/emulation_gl.h"
@@ -595,7 +596,8 @@ static bool hostGlesLibraryOpen() {
 // Releasing the host GPU: a frame buffer's saved state survives tearing it down
 // together with the host EGL and GLES libraries, which gfxstream closes (whether
 // the dynamic loader then unmaps them is up to the driver: NVIDIA's are, SwiftShader's
-// stay), and a frame buffer made after they load again restores it.
+// stay) and forgets what it read from them, and a frame buffer made after they load
+// again restores it.
 TEST_F(FrameBufferTest, SnapshotSurvivesReleasingTheHostDriver) {
     HandleType handle =
         mFb->createColorBuffer(mWidth, mHeight, GfxstreamFormat::R8G8B8A8_UNORM);
@@ -604,6 +606,7 @@ TEST_F(FrameBufferTest, SnapshotSurvivesReleasingTheHostDriver) {
                            forUpdate.data());
     saveSnapshot();
     ASSERT_TRUE(hostGlesLibraryOpen());
+    ASSERT_TRUE(GLEScontext::hostCapabilitiesKnown());
 
     delete mRenderThreadInfo;
     mRenderThreadInfo = nullptr;
@@ -611,6 +614,9 @@ TEST_F(FrameBufferTest, SnapshotSurvivesReleasingTheHostDriver) {
     mFb = nullptr;
     ASSERT_TRUE(gl::EmulationGl::releaseHostDriver());
     EXPECT_FALSE(hostGlesLibraryOpen());
+    // What the translator learned about the released driver is forgotten, so it reads
+    // the capabilities of whatever GPU the next frame buffer finds.
+    EXPECT_FALSE(GLEScontext::hostCapabilitiesKnown());
 
     FeatureSet features = {};
     features.EglOnEgl.setEnabled(!shouldUseHostGpu());

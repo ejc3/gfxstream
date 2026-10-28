@@ -391,6 +391,28 @@ void GLEScontext::initEglIface(EGLiface* iface) {
     if (!s_eglIface) s_eglIface = iface;
 }
 
+void GLEScontext::releaseHostDriverGlobals() {
+    s_lock.lock();
+    s_glDispatch.clearDispatchFuncs();
+    s_glExtensionsInitialized = false;
+    s_glExtensionsGles1Initialized = false;
+    s_glExtensionsGles31Initialized = false;
+    for (std::string* extensions : {s_glExtensions, s_glExtensionsGles1, s_glExtensionsGles31}) {
+        if (extensions) {
+            extensions->clear();
+        }
+    }
+    s_glSupport = GLSupport();
+    s_glSupportGles1 = GLSupport();
+    s_glSupportGles31 = GLSupport();
+    s_lock.unlock();
+}
+
+bool GLEScontext::hostCapabilitiesKnown() {
+    return s_glExtensionsInitialized || s_glExtensionsGles1Initialized ||
+           s_glExtensionsGles31Initialized;
+}
+
 void GLEScontext::initGlobal(EGLiface* iface) {
     initEglIface(iface);
     s_lock.lock();
