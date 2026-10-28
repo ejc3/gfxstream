@@ -917,9 +917,19 @@ bool RendererImpl::retakeGpu(std::string* error) {
         *error = "the GPU is not released";
         return false;
     }
+    // A retake that fails goes back to released, with the saved state kept, so the
+    // caller can try again.
+    auto backToReleased = [this]() {
+        mRenderWindow.reset();
+#if GFXSTREAM_ENABLE_HOST_GLES
+        gl::EmulationGl::releaseHostDriver();
+#endif
+    };
     std::unique_ptr<RenderWindow> renderWindow(
         new RenderWindow(mWidth, mHeight, mFeatures, kUseSubwindowThread, mUseSubWindow));
     if (!renderWindow->isValid()) {
+        renderWindow.reset();
+        backToReleased();
         *error = "could not initialize a frame buffer on the GPU";
         return false;
     }
@@ -943,16 +953,20 @@ bool RendererImpl::retakeGpu(std::string* error) {
         std::lock_guard<std::mutex> lock(mChannelsMutex);
         mStopped = false;
     }
-    mGpuReleased = false;
     if (mReleasedState) {
         mReleasedState->rewind();
         ITextureLoaderPtr loader = mReleasedTextures;
         if (!load(mReleasedState.get(), loader)) {
+            if (loader) {
+                loader->detachAsyncUse();
+            }
+            backToReleased();
             *error = "loading the saved frame buffer onto the GPU failed";
             return false;
         }
         mReleasedState.reset();
     }
+    mGpuReleased = false;
     GFXSTREAM_INFO("Took the host GPU up again.");
     return true;
 }
