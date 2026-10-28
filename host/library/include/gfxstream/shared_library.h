@@ -74,6 +74,14 @@ class SharedLibrary {
                                char* error,
                                size_t errorSize);
 
+    // Closes the library open() loaded as |libraryName| and drops it from the
+    // cache, so the next open() loads it again. Every pointer found in it must
+    // be out of use. Returns false when no library is open under that name.
+    static bool close(const char* libraryName);
+
+    // Whether open() has |libraryName| loaded and cached.
+    static bool isOpen(const char* libraryName);
+
     // Generic function pointer type, for values returned by the
     // findSymbol() method.
     typedef void (*FunctionPtr)(void);

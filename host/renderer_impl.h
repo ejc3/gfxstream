@@ -13,12 +13,16 @@
 // limitations under the License.
 #pragma once
 
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "gfxstream/host/mem_stream.h"
 #include "render_thread.h"
 #include "render_window.h"
 #include "gfxstream/host/features.h"
@@ -30,6 +34,8 @@ namespace android_studio {
 
 namespace gfxstream {
 namespace host {
+
+class MemoryTextureStore;
 
 class RendererImpl final : public Renderer {
 public:
@@ -131,6 +137,11 @@ public:
     void setShouldSkipDraw(bool skip) override;
     bool getShouldSkipDraw() const override;
 
+    bool beginGpuRelease(std::string* error) override;
+    bool releaseGpu(std::string* error) override;
+    bool retakeGpu(std::string* error) override;
+    bool isGpuReleased() const override;
+
 private:
     DISALLOW_COPY_ASSIGN_AND_MOVE(RendererImpl);
 
@@ -152,6 +163,33 @@ private:
 
     std::mutex mAddressSpaceRenderThreadMutex;
     std::unordered_set<RenderThread*> mAddressSpaceRenderThreads;
+
+    // What initialize() was given, and what the emulator set on the frame buffer
+    // after it, so retakeGpu() can make an equivalent one.
+    int mWidth = 0;
+    int mHeight = 0;
+    gfxstream::host::FeatureSet mFeatures;
+    bool mUseSubWindow = false;
+    struct PostCallback {
+        OnPostCallback onPost;
+        void* context;
+        bool useBgraReadback;
+    };
+    std::map<uint32_t, PostCallback> mPostCallbacks;
+    std::optional<int> mVsyncHz;
+    struct DisplayConfig {
+        int configId, w, h, dpiX, dpiY;
+    };
+    std::vector<DisplayConfig> mDisplayConfigs;
+    std::optional<int> mDisplayActiveConfig;
+    std::vector<FrameBufferChangeEventListener*> mListeners;
+    bool mGpuReleased = false;
+    // The frame buffer's state between beginGpuRelease() and retakeGpu(), and the
+    // textures it saved, which the loaded frame buffer may read lazily after.
+    std::unique_ptr<MemStream> mReleasedState;
+    std::shared_ptr<MemoryTextureStore> mReleasedTextures;
+    // The loader of the last load, whose background texture loading a release stops.
+    std::weak_ptr<ITextureLoader> mLastTextureLoader;
 };
 
 }  // namespace host

@@ -14,6 +14,13 @@
 #include "renderer_impl.h"
 
 #include <assert.h>
+#ifdef __linux__
+#include <dirent.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <limits>
@@ -29,6 +36,7 @@
 #include "gfxstream/threads/WorkerThread.h"
 #if GFXSTREAM_ENABLE_HOST_GLES
 #include "host/gl/emulated_egl_fence_sync.h"
+#include "host/gl/emulation_gl.h"
 #endif
 #include "render_channel_impl.h"
 #include "render_thread.h"
@@ -89,6 +97,10 @@ bool RendererImpl::initialize(int width, int height, const gfxstream::host::Feat
     }
 
     mRenderWindow = std::move(renderWindow);
+    mWidth = width;
+    mHeight = height;
+    mFeatures = features;
+    mUseSubWindow = useSubWindow;
     GFXSTREAM_DEBUG("Renderer initialized successfully");
 
     // This render thread won't do anything but will only preload resources
@@ -212,11 +224,18 @@ RenderChannelPtr RendererImpl::createRenderChannel(
 }
 
 void RendererImpl::addListener(FrameBufferChangeEventListener* listener) {
-    mRenderWindow->addListener(listener);
+    mListeners.push_back(listener);
+    if (mRenderWindow) {
+        mRenderWindow->addListener(listener);
+    }
 }
 
 void RendererImpl::removeListener(FrameBufferChangeEventListener* listener) {
-    mRenderWindow->removeListener(listener);
+    mListeners.erase(std::remove(mListeners.begin(), mListeners.end(), listener),
+                     mListeners.end());
+    if (mRenderWindow) {
+        mRenderWindow->removeListener(listener);
+    }
 }
 
 void* RendererImpl::addressSpaceGraphicsConsumerCreate(
@@ -366,6 +385,7 @@ bool RendererImpl::load(gfxstream::Stream* stream,
     }
     auto fb = FrameBuffer::getFB();
     assert(fb);
+    mLastTextureLoader = textureLoader;
     return fb->onLoad(stream, textureLoader);
 }
 
@@ -416,7 +436,9 @@ void RendererImpl::setMultiDisplayColorBuffer(uint32_t id, uint32_t cb) {
 }
 
 RendererImpl::HardwareStrings RendererImpl::getHardwareStrings() {
-    assert(mRenderWindow);
+    if (!mRenderWindow) {
+        return {};
+    }
 
     const char* vendor = nullptr;
     const char* renderer = nullptr;
@@ -448,24 +470,36 @@ void RendererImpl::setPostCallback(RendererImpl::OnPostCallback onPost,
                                    void* context,
                                    bool useBgraReadback,
                                    uint32_t displayId) {
-    assert(mRenderWindow);
-    mRenderWindow->setPostCallback(onPost, context, displayId, useBgraReadback);
+    if (onPost) {
+        mPostCallbacks[displayId] = {onPost, context, useBgraReadback};
+    } else {
+        mPostCallbacks.erase(displayId);
+    }
+    if (mRenderWindow) {
+        mRenderWindow->setPostCallback(onPost, context, displayId, useBgraReadback);
+    }
 }
 
 bool RendererImpl::asyncReadbackSupported() {
-    assert(mRenderWindow);
+    if (!mRenderWindow) {
+        return false;
+    }
     return mRenderWindow->asyncReadbackSupported();
 }
 
 RendererImpl::ReadPixelsCallback
 RendererImpl::getReadPixelsCallback() {
-    assert(mRenderWindow);
+    if (!mRenderWindow) {
+        return nullptr;
+    }
     return mRenderWindow->getReadPixelsCallback();
 }
 
 RendererImpl::FlushReadPixelPipeline
 RendererImpl::getFlushReadPixelPipeline() {
-    assert(mRenderWindow);
+    if (!mRenderWindow) {
+        return nullptr;
+    }
     return mRenderWindow->getFlushReadPixelPipeline();
 }
 
@@ -480,29 +514,37 @@ bool RendererImpl::showOpenGLSubwindow(FBNativeWindowType window,
                                        float zRot,
                                        bool deleteExisting,
                                        bool hideWindow) {
-    assert(mRenderWindow);
+    if (!mRenderWindow) {
+        return false;
+    }
     return mRenderWindow->setupSubWindow(window, wx, wy, ww, wh, fbw, fbh, dpr,
                                          zRot, deleteExisting, hideWindow);
 }
 
 bool RendererImpl::destroyOpenGLSubwindow() {
-    assert(mRenderWindow);
+    if (!mRenderWindow) {
+        return false;
+    }
     return mRenderWindow->removeSubWindow();
 }
 
 void RendererImpl::setOpenGLDisplayRotation(float zRot) {
-    assert(mRenderWindow);
-    mRenderWindow->setRotation(zRot);
+    if (mRenderWindow) {
+        mRenderWindow->setRotation(zRot);
+    }
 }
 
 void RendererImpl::setOpenGLDisplayTranslation(float px, float py) {
-    assert(mRenderWindow);
-    mRenderWindow->setTranslation(px, py);
+    if (mRenderWindow) {
+        mRenderWindow->setTranslation(px, py);
+    }
 }
 
 void RendererImpl::repaintOpenGLDisplay() {
-    assert(mRenderWindow);
-    mRenderWindow->repaint();
+    // No-op while the host GPU is released.
+    if (mRenderWindow) {
+        mRenderWindow->repaint();
+    }
 }
 
 bool RendererImpl::hasGuestPostedAFrame() {
@@ -519,13 +561,15 @@ void RendererImpl::resetGuestPostedAFrame() {
 }
 
 void RendererImpl::setScreenMask(int width, int height, const uint8_t* rgbaData) {
-    assert(mRenderWindow);
-    mRenderWindow->setScreenMask(width, height, rgbaData);
+    if (mRenderWindow) {
+        mRenderWindow->setScreenMask(width, height, rgbaData);
+    }
 }
 
 void RendererImpl::setScreenBackground(int width, int height, const uint8_t* rgbaData) {
-    assert(mRenderWindow);
-    mRenderWindow->setScreenBackground(width, height, rgbaData);
+    if (mRenderWindow) {
+        mRenderWindow->setScreenBackground(width, height, rgbaData);
+    }
 }
 
 void RendererImpl::setDisplayLayout(int screenWidth, int screenHeight, const Rect& displayRect) {
@@ -537,7 +581,9 @@ void RendererImpl::setDisplayLayout(int screenWidth, int screenHeight, const Rec
 }
 
 void RendererImpl::onGuestGraphicsProcessCreate(uint64_t puid) {
-    FrameBuffer::getFB()->createGraphicsProcessResources(puid);
+    if (auto* fb = FrameBuffer::getFB()) {
+        fb->createGraphicsProcessResources(puid);
+    }
 }
 
 void RendererImpl::cleanupProcGLObjects(uint64_t puid) {
@@ -665,6 +711,7 @@ void RendererImpl::postLoad() {
 }
 
 void RendererImpl::setVsyncHz(int vsyncHz) {
+    mVsyncHz = vsyncHz;
     if (mRenderWindow) {
         mRenderWindow->setVsyncHz(vsyncHz);
     }
@@ -672,12 +719,19 @@ void RendererImpl::setVsyncHz(int vsyncHz) {
 
 void RendererImpl::setDisplayConfigs(int configId, int w, int h,
                                      int dpiX, int dpiY) {
+    mDisplayConfigs.erase(std::remove_if(mDisplayConfigs.begin(), mDisplayConfigs.end(),
+                                         [configId](const DisplayConfig& c) {
+                                             return c.configId == configId;
+                                         }),
+                          mDisplayConfigs.end());
+    mDisplayConfigs.push_back({configId, w, h, dpiX, dpiY});
     if (mRenderWindow) {
         mRenderWindow->setDisplayConfigs(configId, w, h, dpiX, dpiY);
     }
 }
 
 void RendererImpl::setDisplayActiveConfig(int configId) {
+    mDisplayActiveConfig = configId;
     if (mRenderWindow) {
         mRenderWindow->setDisplayActiveConfig(configId);
     }
@@ -698,6 +752,226 @@ const void* RendererImpl::getGles2Dispatch() {
     return nullptr;
 #endif
 }
+
+// The process's open descriptors and mappings of GPU device files, as text for an error
+// ("" when there are none).
+static std::string gpuDeviceHandles() {
+#ifdef __linux__
+    auto isGpuDevice = [](const std::string& path) {
+        return path.rfind("/dev/nvidia", 0) == 0 || path.rfind("/dev/dri/", 0) == 0;
+    };
+    int fds = 0;
+    if (DIR* dir = opendir("/proc/self/fd")) {
+        while (struct dirent* entry = readdir(dir)) {
+            char link[64];
+            char target[PATH_MAX];
+            snprintf(link, sizeof(link), "/proc/self/fd/%s", entry->d_name);
+            ssize_t n = readlink(link, target, sizeof(target) - 1);
+            if (n > 0) {
+                target[n] = 0;
+                if (isGpuDevice(target)) {
+                    fds++;
+                }
+            }
+        }
+        closedir(dir);
+    }
+    int mappings = 0;
+    if (FILE* maps = fopen("/proc/self/maps", "r")) {
+        char line[1024];
+        while (fgets(line, sizeof(line), maps)) {
+            const char* path = strchr(line, '/');
+            if (path && isGpuDevice(path)) {
+                mappings++;
+            }
+        }
+        fclose(maps);
+    }
+    if (fds || mappings) {
+        return std::to_string(fds) + " GPU device descriptor(s) and " + std::to_string(mappings) +
+               " mapping(s)";
+    }
+#endif
+    return "";
+}
+
+// Textures the frame buffer saves for a GPU release, kept in memory.
+class MemoryTextureStore : public ITextureLoader, public ITextureSaver {
+  public:
+    void saveTexture(uint32_t textureId, const saver_t& saver) override {
+        MemStream stream;
+        saver(&stream, nullptr);
+        mTextures[textureId] = stream.buffer();
+    }
+
+    void loadTexture(uint32_t textureId, const loader_t& callback) override {
+        auto it = mTextures.find(textureId);
+        if (it == mTextures.end()) {
+            return;
+        }
+        std::vector<char> copy = it->second;
+        MemStream stream(std::move(copy));
+        callback(&stream);
+    }
+
+    bool start() override { return true; }
+
+  private:
+    std::unordered_map<uint32_t, std::vector<char>> mTextures;
+};
+
+bool RendererImpl::beginGpuRelease(std::string* error) {
+    if (mGpuReleased) {
+        *error = "the GPU is already released";
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mChannelsMutex);
+        if (mStopped) {
+            *error = "the renderer is stopped";
+            return false;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(mAddressSpaceRenderThreadMutex);
+        if (!mAddressSpaceRenderThreads.empty()) {
+            *error = "the guest uses address space graphics, which a GPU release does not support";
+            return false;
+        }
+    }
+    if (const auto loader = mLastTextureLoader.lock()) {
+        // The last load (a retake's or the emulator's own snapshot load) may still be
+        // restoring textures on a background thread that refers to the translator's
+        // display, which the release deletes: stop it and detach it from the loader. A
+        // texture it did not reach is restored when the save below touches it.
+        loader->detachAsyncUse();
+    }
+    if (!pauseAllPreSave()) {
+        *error = "timed out waiting for guest process cleanup";
+        return false;
+    }
+    auto state = std::make_unique<MemStream>();
+    auto textures = std::make_shared<MemoryTextureStore>();
+    ITextureSaverPtr saver = textures;
+    if (!save(state.get(), saver)) {
+        resumeAll();
+        *error = "saving the frame buffer failed";
+        return false;
+    }
+    mReleasedState = std::move(state);
+    mReleasedTextures = std::move(textures);
+    return true;
+}
+
+bool RendererImpl::releaseGpu(std::string* error) {
+    if (!mReleasedState) {
+        *error = "beginGpuRelease() has not saved the frame buffer";
+        return false;
+    }
+    if (mLoaderRenderThread) {
+        mLoaderRenderThread->wait();
+        mLoaderRenderThread.reset();
+    }
+    if (const auto fb = FrameBuffer::getFB()) {
+        fb->setShuttingDown();
+    }
+    std::vector<std::shared_ptr<RenderChannelImpl>> channels;
+    {
+        std::lock_guard<std::mutex> lock(mChannelsMutex);
+        channels = std::move(mChannels);
+        mChannels.clear();
+        mStoppedChannels.clear();
+    }
+    // Every paused thread leaves its pause by exiting: its contexts stay in the saved
+    // frame buffer, and a thread recreated from its saved state carries on.
+    for (const auto& c : channels) {
+        c->renderThread()->exitFromSnapshotPause();
+    }
+    for (const auto& c : channels) {
+        c->renderThread()->waitForFinished();
+        gfxstream::base::AutoLock driverLock(*graphicsDriverLock());
+        c->renderThread()->sendExitSignal();
+        c->renderThread()->wait();
+    }
+    channels.clear();
+    mAdditionalPostLoadRenderThreads.clear();
+    mRenderWindow.reset();
+    mGpuReleased = true;
+#if GFXSTREAM_ENABLE_HOST_GLES
+    if (!gl::EmulationGl::releaseHostDriver()) {
+        *error = "the host EGL driver cannot be released (only EGL-on-EGL can)";
+        return false;
+    }
+#endif
+    const std::string held = gpuDeviceHandles();
+    if (!held.empty()) {
+        *error = "after the release the process still has " + held;
+        return false;
+    }
+    GFXSTREAM_INFO("Released the host GPU.");
+    return true;
+}
+
+bool RendererImpl::retakeGpu(std::string* error) {
+    if (!mGpuReleased) {
+        *error = "the GPU is not released";
+        return false;
+    }
+    // A retake that fails goes back to released, with the saved state kept, so the
+    // caller can try again.
+    auto backToReleased = [this]() {
+        mRenderWindow.reset();
+#if GFXSTREAM_ENABLE_HOST_GLES
+        gl::EmulationGl::releaseHostDriver();
+#endif
+    };
+    std::unique_ptr<RenderWindow> renderWindow(
+        new RenderWindow(mWidth, mHeight, mFeatures, kUseSubwindowThread, mUseSubWindow));
+    if (!renderWindow->isValid()) {
+        renderWindow.reset();
+        backToReleased();
+        *error = "could not initialize a frame buffer on the GPU";
+        return false;
+    }
+    mRenderWindow = std::move(renderWindow);
+    for (FrameBufferChangeEventListener* listener : mListeners) {
+        mRenderWindow->addListener(listener);
+    }
+    for (const auto& [displayId, cb] : mPostCallbacks) {
+        mRenderWindow->setPostCallback(cb.onPost, cb.context, displayId, cb.useBgraReadback);
+    }
+    if (mVsyncHz) {
+        mRenderWindow->setVsyncHz(*mVsyncHz);
+    }
+    for (const DisplayConfig& c : mDisplayConfigs) {
+        mRenderWindow->setDisplayConfigs(c.configId, c.w, c.h, c.dpiX, c.dpiY);
+    }
+    if (mDisplayActiveConfig) {
+        mRenderWindow->setDisplayActiveConfig(*mDisplayActiveConfig);
+    }
+    {
+        std::lock_guard<std::mutex> lock(mChannelsMutex);
+        mStopped = false;
+    }
+    if (mReleasedState) {
+        mReleasedState->rewind();
+        ITextureLoaderPtr loader = mReleasedTextures;
+        if (!load(mReleasedState.get(), loader)) {
+            if (loader) {
+                loader->detachAsyncUse();
+            }
+            backToReleased();
+            *error = "loading the saved frame buffer onto the GPU failed";
+            return false;
+        }
+        mReleasedState.reset();
+    }
+    mGpuReleased = false;
+    GFXSTREAM_INFO("Took the host GPU up again.");
+    return true;
+}
+
+bool RendererImpl::isGpuReleased() const { return mGpuReleased; }
 
 void RendererImpl::setShouldSkipDraw(bool skip) {
     set_gfxstream_should_skip_draw(skip);

@@ -64,6 +64,22 @@ SharedLibrary* SharedLibrary::open(const char* libraryName,
     return lib->second.get();
 }
 
+// static
+bool SharedLibrary::close(const char* libraryName) {
+    auto lib = s_libraryMap.find(libraryName);
+    if (lib == s_libraryMap.end()) {
+        return false;
+    }
+    GFXSTREAM_INFO("SharedLibrary::close for [%s]", libraryName);
+    s_libraryMap.erase(lib);
+    return true;
+}
+
+// static
+bool SharedLibrary::isOpen(const char* libraryName) {
+    return s_libraryMap.find(libraryName) != s_libraryMap.end();
+}
+
 #ifdef _WIN32
 
 // static

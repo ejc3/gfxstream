@@ -251,6 +251,12 @@ public:
             GlLibrary* glLib);
     virtual void init(bool nativeTextureDecompressionEnabled, bool programBinaryLinkStatusEnabled);
     static void initGlobal(EGLiface* eglIface);
+    // Forgets everything learned from the host GLES driver: its function pointers and
+    // the capabilities and strings read from it, which the next context init reads
+    // again from whatever driver is loaded then (releasing the host GPU).
+    static void releaseHostDriverGlobals();
+    // Whether the host driver's capabilities have been read since the last release.
+    static bool hostCapabilitiesKnown();
     GLenum getGLerror();
     void setGLerror(GLenum err);
     void setShareGroup(ShareGroupPtr grp){m_shareGroup = std::move(grp);};

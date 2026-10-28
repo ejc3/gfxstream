@@ -277,6 +277,44 @@ static std::optional<EGLConfig> getEmulationEglConfig(EGLDisplay display, bool a
 
 }  // namespace
 
+}  // namespace gl
+}  // namespace host
+}  // namespace gfxstream
+
+namespace translator {
+namespace egl {
+bool releaseHostDriver();
+}  // namespace egl
+}  // namespace translator
+
+namespace gfxstream {
+namespace host {
+namespace gl {
+
+// Whether initDispatchers() has loaded the EGL and GLES dispatch since the last
+// releaseHostDriver(): a renderer without GL emulation never loads it.
+static bool sDispatchersInitialized = false;
+
+bool EmulationGl::releaseHostDriver() {
+    if (!sDispatchersInitialized) {
+        return true;
+    }
+    // The translator's own default display: terminating it drops what it keeps of
+    // the contexts and surfaces, which belonged to the EmulationGl already gone.
+    // The thread is released first: releasing it after the terminate leaves the
+    // thread with EGL_NOT_INITIALIZED for its next eglGetError().
+    EGLDisplay display = s_egl.eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    s_egl.eglReleaseThread();
+    if (display != EGL_NO_DISPLAY) {
+        s_egl.eglTerminate(display);
+    }
+    if (!translator::egl::releaseHostDriver()) {
+        return false;
+    }
+    sDispatchersInitialized = false;
+    return true;
+}
+
 bool EmulationGl::initDispatchers(bool eglOnEgl) {
     // Loads the glestranslator function pointers.
     if (!LazyLoadedEGLDispatch::get()) {
@@ -296,6 +334,7 @@ bool EmulationGl::initDispatchers(bool eglOnEgl) {
         s_egl.eglUseOsEglApi(eglOnEgl, EGL_FALSE);
     }
 
+    sDispatchersInitialized = true;
     return true;
 }
 
@@ -1659,6 +1698,13 @@ void EmulationGl::updateYUVTextures(uint32_t type, uint32_t* textures, void* pri
 #endif
 
     updater(privData, type, gtextures, pcallerdata);
+}
+
+void EmulationGl::releaseRenderThread() {
+    bindContext(0, 0, 0);
+    if (!s_egl.eglReleaseThread()) {
+        GFXSTREAM_ERROR("Error: RenderThread failed to eglReleaseThread()");
+    }
 }
 
 void EmulationGl::drainRenderThreadResources() {

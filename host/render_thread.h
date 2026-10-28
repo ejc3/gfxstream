@@ -62,6 +62,11 @@ class RenderThread : public gfxstream::base::Thread {
     // the thread was not paused for a snapshot.
     void waitForPausePreSnapshot();
 
+    // After save(): the thread leaves its pause by exiting instead of resuming, so it
+    // decodes nothing more. Used to release the host GPU (RendererImpl::prepareGpuRelease):
+    // a thread recreated from the state save() wrote carries on where this one stopped.
+    void exitFromSnapshotPause();
+
     // RenderThreads are blocked from exiting after finished to workaround driver bugs.
     // `sendExitSignal` allows us to control when we can allow the thread to exit to synchronize
     // between exits and other RenderThreads calling vkDestroyDevice, eglMakeCurrent, etc.
@@ -117,6 +122,7 @@ class RenderThread : public gfxstream::base::Thread {
     gfxstream::base::ConditionVariable mFinishedSignal;
     gfxstream::base::ConditionVariable mExitSignal;
     std::atomic<bool> mCanExit { false };
+    bool mExitFromSnapshotPause = false;
     std::optional<MemStream> mStream;
 
     bool mRunInLimitedMode = false;
