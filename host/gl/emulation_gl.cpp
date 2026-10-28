@@ -291,7 +291,14 @@ namespace gfxstream {
 namespace host {
 namespace gl {
 
+// Whether initDispatchers() has loaded the EGL and GLES dispatch since the last
+// releaseHostDriver(): a renderer without GL emulation never loads it.
+static bool sDispatchersInitialized = false;
+
 bool EmulationGl::releaseHostDriver() {
+    if (!sDispatchersInitialized) {
+        return true;
+    }
     // The translator's own default display: terminating it drops what it keeps of
     // the contexts and surfaces, which belonged to the EmulationGl already gone.
     // The thread is released first: releasing it after the terminate leaves the
@@ -301,7 +308,11 @@ bool EmulationGl::releaseHostDriver() {
     if (display != EGL_NO_DISPLAY) {
         s_egl.eglTerminate(display);
     }
-    return translator::egl::releaseHostDriver();
+    if (!translator::egl::releaseHostDriver()) {
+        return false;
+    }
+    sDispatchersInitialized = false;
+    return true;
 }
 
 bool EmulationGl::initDispatchers(bool eglOnEgl) {
@@ -323,6 +334,7 @@ bool EmulationGl::initDispatchers(bool eglOnEgl) {
         s_egl.eglUseOsEglApi(eglOnEgl, EGL_FALSE);
     }
 
+    sDispatchersInitialized = true;
     return true;
 }
 

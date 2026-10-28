@@ -593,6 +593,12 @@ static bool hostGlesLibraryOpen() {
     return false;
 }
 
+// A renderer that never initialized GL emulation (a Vulkan-only one) releases
+// nothing GL: releasing the host driver must not reach the unloaded EGL dispatch.
+TEST(FrameBufferReleaseTest, ReleasingTheHostDriverWithoutGlDoesNothing) {
+    EXPECT_TRUE(gl::EmulationGl::releaseHostDriver());
+}
+
 // Releasing the host GPU: a frame buffer's saved state survives tearing it down
 // together with the host EGL and GLES libraries, which gfxstream closes (whether
 // the dynamic loader then unmaps them is up to the driver: NVIDIA's are, SwiftShader's

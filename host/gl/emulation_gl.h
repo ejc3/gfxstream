@@ -73,7 +73,8 @@ class EmulationGl {
    public:
     static bool initDispatchers(bool eglOnEgl);
     // Unloads the host EGL and GLES driver the dispatchers reach, once every
-    // EmulationGl is destroyed; initDispatchers() and create() load it again.
+    // EmulationGl is destroyed; initDispatchers() and create() load it again. Does
+    // nothing when initDispatchers() has not run since the last release.
     static bool releaseHostDriver();
     static std::unique_ptr<EmulationGl> create(uint32_t width, uint32_t height,
                                                const FeatureSet& features, bool allowWindowSurface,
