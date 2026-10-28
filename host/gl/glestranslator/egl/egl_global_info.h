@@ -47,6 +47,12 @@ public:
     // increment an internal reference-count.
     static EglGlobalInfo* getInstance(bool nullEgl = false);
 
+    // Deletes the instance with its displays, and the EGL-on-EGL host engine,
+    // display and libraries under it, so the process holds nothing of the host
+    // EGL or GLES driver; getInstance() creates them again. Only the EGL-on-EGL
+    // engine can be released: returns false, releasing nothing, for another.
+    static bool releaseInstance();
+
     // Create a new EglDisplay instance from an existing native |dpy| value.
     // |idpy| is the corresponding native internal display type. See
     // generateInternalDisplay() below to understand how they differ.

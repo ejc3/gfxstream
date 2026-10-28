@@ -398,6 +398,23 @@ EGLAPI EGLBoolean EGLAPIENTRY eglTerminate(EGLDisplay display) {
     return EGL_TRUE;
 }
 
+// Lets go of the host EGL and GLES driver: the GLES translators' function
+// pointers into the host GLES library, every display, and the EGL-on-EGL host
+// engine with its libraries. The caller has destroyed every context and
+// surface and unbound the calling thread. The next eglGetDisplay() and
+// eglInitialize() load the driver again.
+bool releaseHostDriver() {
+    gfxstream::base::AutoLock mutex(*graphicsDriverLock());
+    // The calling thread's record would name a display about to be deleted.
+    getThreadInfo()->updateInfo(ContextPtr(), nullptr, nullptr, ShareGroupPtr(), nullptr);
+    GLEScontext::dispatcher().clearDispatchFuncs();
+    if (!EglGlobalInfo::releaseInstance()) {
+        return false;
+    }
+    g_eglInfo = NULL;
+    return true;
+}
+
 EGLAPI const char * EGLAPIENTRY eglQueryString(EGLDisplay display, EGLint name) {
     VALIDATE_DISPLAY(display);
     static const char* version    = "1.4";

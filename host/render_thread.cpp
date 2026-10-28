@@ -197,6 +197,13 @@ void RenderThread::save(gfxstream::Stream* stream) {
     }
 }
 
+void RenderThread::exitFromSnapshotPause() {
+    AutoLock lock(mLock);
+    mExitFromSnapshotPause = true;
+    mDecodersShouldStop.store(true, std::memory_order_relaxed);
+    mSnapshotSignal.broadcastAndUnlock(&lock);
+}
+
 void RenderThread::waitForPausePreSnapshot() {
     AutoLock lock(mLock);
     if (mState != SnapshotState::StartSaving &&
@@ -232,12 +239,13 @@ bool RenderThread::doSnapshotOp(const SnapshotObjects& objects, SnapshotState ex
     mState = SnapshotState::Finished;
     mSnapshotSignal.broadcast();
 
-    // Only return after we're allowed to proceed.
-    while (isPausedForSnapshotLocked()) {
+    // Only return after we're allowed to proceed, or told to exit instead.
+    while (isPausedForSnapshotLocked() && !mExitFromSnapshotPause) {
         mSnapshotSignal.wait(&lock);
     }
 
-    return true;
+    // false makes the caller leave its decode loop.
+    return !mExitFromSnapshotPause;
 }
 
 bool RenderThread::loadSnapshot(const SnapshotObjects& objects) {
@@ -580,7 +588,17 @@ intptr_t RenderThread::main() {
 
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (tInfo->m_glInfo) {
-        FrameBuffer::getFB()->drainGlRenderThreadResources();
+        bool exitFromSnapshotPause;
+        {
+            AutoLock lock(mLock);
+            exitFromSnapshotPause = mExitFromSnapshotPause;
+        }
+        if (exitFromSnapshotPause) {
+            // Releasing the host GPU: the contexts this thread made are in the saved state.
+            FrameBuffer::getFB()->releaseGlRenderThread();
+        } else {
+            FrameBuffer::getFB()->drainGlRenderThreadResources();
+        }
     }
 #endif
 

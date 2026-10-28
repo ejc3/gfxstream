@@ -18,6 +18,7 @@
 
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -130,6 +131,7 @@ static const char* kGLES2LibName = "libGLESv2.dylib";
     X(EGLint, eglGetError, (void))                                             \
     X(EGLBoolean, eglInitialize,                                               \
       (EGLDisplay display, EGLint * major, EGLint * minor))                    \
+    X(EGLBoolean, eglTerminate, (EGLDisplay display))                          \
     X(EGLBoolean, eglMakeCurrent,                                              \
       (EGLDisplay display, EGLSurface draw, EGLSurface read,                   \
         EGLContext context))                                                    \
@@ -152,6 +154,16 @@ static const char* kGLES2LibName = "libGLESv2.dylib";
     X(EGLBoolean, eglReleaseThread, (void))                                    \
     X(EGLint, eglDebugMessageControlKHR,                                       \
       (EGLDEBUGPROCKHR callback, const EGLAttrib * attrib_list))               \
+
+namespace {
+class EglOsEglDisplay;
+}  // namespace
+
+// The host display and engine live until releaseEgl2EglHostInstance(), which
+// lets go of the host GPU; the next use creates them again. The translator's
+// default EglDisplay owns the host display and deletes it with itself.
+static std::mutex sHostInstanceLock;
+static EglOsEglDisplay* sHostDisplayInstance = nullptr;
 
 namespace {
 
@@ -547,6 +559,22 @@ EglOsEglDisplay::~EglOsEglDisplay() {
 #elif defined(__linux__)
     if (mGlxDisplay) getX11Api()->XCloseDisplay(mGlxDisplay);
 #endif // __linux__
+    // Deleted when the GPU is released (EglGlobalInfo::releaseInstance()): give the
+    // driver back everything it holds for this process before its library is closed.
+    if (mDisplay != EGL_NO_DISPLAY) {
+        mDispatcher.eglMakeCurrent(mDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (mDispatcher.eglTerminate) {
+            mDispatcher.eglTerminate(mDisplay);
+        }
+        mDisplay = EGL_NO_DISPLAY;
+    }
+    if (mDispatcher.eglReleaseThread) {
+        mDispatcher.eglReleaseThread();
+    }
+    std::lock_guard<std::mutex> lock(sHostInstanceLock);
+    if (sHostDisplayInstance == this) {
+        sHostDisplayInstance = nullptr;
+    }
 }
 
 EglOS::GlesVersion EglOsEglDisplay::getMaxGlesVersion() {
@@ -930,8 +958,11 @@ bool EglOsEglDisplay::checkWindowPixelFormatMatch(EGLNativeWindowType win,
 }
 
 static EglOsEglDisplay* sHostDisplay(bool nullEgl = false) {
-    static EglOsEglDisplay* d = new EglOsEglDisplay(nullEgl);
-    return d;
+    std::lock_guard<std::mutex> lock(sHostInstanceLock);
+    if (!sHostDisplayInstance) {
+        sHostDisplayInstance = new EglOsEglDisplay(nullEgl);
+    }
+    return sHostDisplayInstance;
 }
 
 class EglEngine : public EglOS::Engine {
@@ -975,14 +1006,42 @@ private:
 
 }  // namespace
 
+static EglEngine* sHostEngineInstance = nullptr;
+
 static EglEngine* sHostEngine(bool nullEgl) {
-    static EglEngine* res = new EglEngine(nullEgl);
-    return res;
+    std::lock_guard<std::mutex> lock(sHostInstanceLock);
+    if (!sHostEngineInstance) {
+        sHostEngineInstance = new EglEngine(nullEgl);
+    }
+    return sHostEngineInstance;
 }
 
 namespace EglOS {
 Engine* getEgl2EglHostInstance(bool nullEgl) {
     D("%s\n", __FUNCTION__);
     return sHostEngine(nullEgl);
+}
+
+void releaseEgl2EglHostInstance() {
+    EglEngine* engine;
+    EglOsEglDisplay* display;
+    {
+        std::lock_guard<std::mutex> lock(sHostInstanceLock);
+        engine = sHostEngineInstance;
+        display = sHostDisplayInstance;
+        sHostEngineInstance = nullptr;
+    }
+    delete engine;
+    // Normally already deleted by the translator display that owned it.
+    delete display;
+    // The host libraries go last: unloading glvnd's libEGL unloads the vendor's
+    // EGL library, the last holder of the GPU's device files.
+    for (const char* name : {kGLES2LibName, kEGLLibName,
+#ifdef __linux__
+                             kGLES2LibNameAlt, kEGLLibNameAlt,
+#endif
+                             }) {
+        gfxstream::host::SharedLibrary::close(name);
+    }
 }
 }  // namespace EglOS

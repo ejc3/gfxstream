@@ -257,6 +257,12 @@ public:
 // EGL/GLES translator on top of another EGL/GLES library
 Engine* getEgl2EglHostInstance(bool nullEgl);
 
+// Deletes the EGL-on-EGL host engine and display (terminating the host EGL
+// display) and closes the host EGL and GLES libraries. The translator must hold
+// nothing of them (EglGlobalInfo::releaseInstance() first). The next
+// getEgl2EglHostInstance() loads and initializes them again.
+void releaseEgl2EglHostInstance();
+
 }  // namespace EglOS
 
 #endif  // EGL_OS_API_H

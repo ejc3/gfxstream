@@ -18,6 +18,7 @@
 #include "frame_buffer.h"
 
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "gfxstream/common/testing/graphics_test_environment.h"
@@ -34,6 +35,7 @@
 #include "gfxstream/host/testing/SampleApplication.h"
 #include "gfxstream/host/testing/ShaderUtils.h"
 #include "gfxstream/host/window_operations.h"
+#include "gfxstream/shared_library.h"
 #include "gfxstream/system/System.h"
 #include "common/gles_pointer.h"
 #include "host/gl/gles2_dec/gles2_opcodes.h"
@@ -577,6 +579,58 @@ TEST_F(FrameBufferTest, SnapshotSingleColorBuffer) {
 
     mFb->closeColorBuffer(handle);
 }
+
+#ifdef __linux__
+// Whether gfxstream holds the host EGL or GLES library open, under any of the
+// names EGL-on-EGL loads it by.
+static bool hostGlesLibraryOpen() {
+    for (const char* name : {"libEGL.so", "libEGL.so.1", "libGLESv2.so", "libGLESv2.so.2"}) {
+        if (SharedLibrary::isOpen(name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Releasing the host GPU: a frame buffer's saved state survives tearing it down
+// together with the host EGL and GLES libraries, which gfxstream closes (whether
+// the dynamic loader then unmaps them is up to the driver: NVIDIA's are, SwiftShader's
+// stay), and a frame buffer made after they load again restores it.
+TEST_F(FrameBufferTest, SnapshotSurvivesReleasingTheHostDriver) {
+    HandleType handle =
+        mFb->createColorBuffer(mWidth, mHeight, GfxstreamFormat::R8G8B8A8_UNORM);
+    TestTexture forUpdate = createTestPatternRGBA8888(mWidth, mHeight);
+    mFb->updateColorBuffer(handle, 0, 0, mWidth, mHeight, GfxstreamFormat::R8G8B8A8_UNORM,
+                           forUpdate.data());
+    saveSnapshot();
+    ASSERT_TRUE(hostGlesLibraryOpen());
+
+    delete mRenderThreadInfo;
+    mRenderThreadInfo = nullptr;
+    FrameBuffer::finalize();
+    mFb = nullptr;
+    ASSERT_TRUE(gl::EmulationGl::releaseHostDriver());
+    EXPECT_FALSE(hostGlesLibraryOpen());
+
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    ASSERT_TRUE(FrameBuffer::initialize(mWidth, mHeight, features, false));
+    mFb = FrameBuffer::getFB();
+    ASSERT_NE(nullptr, mFb);
+    mRenderThreadInfo = new RenderThreadInfo();
+    mRenderThreadInfo->initGl(mFb->getEmulationGl());
+    EXPECT_TRUE(hostGlesLibraryOpen());
+    loadSnapshot();
+
+    TestTexture forRead =
+        createTestTextureRGBA8888SingleColor(mWidth, mHeight, 0.0f, 0.0f, 0.0f, 0.0f);
+    mFb->readColorBuffer(handle, 0, 0, mWidth, mHeight, GfxstreamFormat::R8G8B8A8_UNORM,
+                         forRead.data(), forRead.size());
+    EXPECT_TRUE(ImageMatches(mWidth, mHeight, 4, mWidth, forUpdate.data(), forRead.data()));
+
+    mFb->closeColorBuffer(handle);
+}
+#endif  // __linux__
 
 // bug: 111360779
 // Tests that the ColorBuffer is successfully updated even if a reformat happens

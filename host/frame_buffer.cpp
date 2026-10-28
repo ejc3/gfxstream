@@ -695,6 +695,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     // when a guest application crashes, for example.
     void drainGlRenderThreadResources();
 
+    void releaseGlRenderThread();
+
     // Call this function when a render thread terminates to destroy all
     // the remaining contexts it created. Necessary to avoid leaking host
     // contexts when a guest application crashes, for example.
@@ -4356,6 +4358,12 @@ void FrameBuffer::Impl::createEmulatedEglFenceSync(EGLenum type, int destroyWhen
     }
 }
 
+void FrameBuffer::Impl::releaseGlRenderThread() {
+    if (m_emulationGl) {
+        m_emulationGl->releaseRenderThread();
+    }
+}
+
 void FrameBuffer::Impl::drainGlRenderThreadResources() {
     // If we're already exiting then snapshot should not contain
     // this thread information at all.
@@ -5170,6 +5178,8 @@ void FrameBuffer::createEmulatedEglFenceSync(EGLenum type, int destroyWhenSignal
 }
 
 void FrameBuffer::drainGlRenderThreadResources() { mImpl->drainGlRenderThreadResources(); }
+
+void FrameBuffer::releaseGlRenderThread() { mImpl->releaseGlRenderThread(); }
 
 void FrameBuffer::drainGlRenderThreadContexts() { mImpl->drainGlRenderThreadContexts(); }
 

@@ -509,6 +509,11 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     // when a guest application crashes, for example.
     void drainGlRenderThreadResources();
 
+    // A render thread that exits to release the host GPU unbinds its context and
+    // releases its EGL thread state, and keeps every context and surface: they are in
+    // the saved state the next frame buffer loads.
+    void releaseGlRenderThread();
+
     // Call this function when a render thread terminates to destroy all
     // the remaining contexts it created. Necessary to avoid leaking host
     // contexts when a guest application crashes, for example.

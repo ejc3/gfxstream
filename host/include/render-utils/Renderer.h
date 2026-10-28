@@ -344,6 +344,30 @@ class Renderer {
     virtual void setShouldSkipDraw(bool skip) = 0;
     virtual bool getShouldSkipDraw() const = 0;
 
+    // Releasing the host GPU from a running guest, and taking it up again, so the
+    // process holds no handle on the GPU's device files in between. The guest must
+    // stay paused from beginGpuRelease() until resumeAll() after retakeGpu(). Only
+    // render channels (the pipe transport) can be released; a renderer with address
+    // space graphics consumers refuses. The saved state holds the guest's Vulkan objects
+    // only with the VulkanSnapshots feature, so without it the embedder releases only a
+    // guest with no Vulkan instance.
+    //
+    // Release: beginGpuRelease() pauses the render threads and keeps the frame
+    // buffer's state in memory; the caller then saves every render channel it holds
+    // (RenderChannel::onSave) and drops it; releaseGpu() makes the render threads exit,
+    // tears down the frame buffer, the GL and Vulkan emulation and the host EGL and
+    // GLES libraries, and fails when the process still has a GPU device file open or
+    // mapped (the caller then retakes the GPU).
+    //
+    // Retake: retakeGpu() loads the host driver again, initializes a frame buffer on
+    // the GPU present now with the settings the emulator gave the released one, and
+    // loads the kept state into it; the caller recreates every channel from its saved
+    // state (createRenderChannel with the stream) and calls resumeAll().
+    virtual bool beginGpuRelease(std::string* error) = 0;
+    virtual bool releaseGpu(std::string* error) = 0;
+    virtual bool retakeGpu(std::string* error) = 0;
+    virtual bool isGpuReleased() const = 0;
+
 protected:
     ~Renderer() = default;
 };

@@ -72,6 +72,9 @@ namespace gl {
 class EmulationGl {
    public:
     static bool initDispatchers(bool eglOnEgl);
+    // Unloads the host EGL and GLES driver the dispatchers reach, once every
+    // EmulationGl is destroyed; initDispatchers() and create() load it again.
+    static bool releaseHostDriver();
     static std::unique_ptr<EmulationGl> create(uint32_t width, uint32_t height,
                                                const FeatureSet& features, bool allowWindowSurface,
                                                GlobalState* globalState);
@@ -192,6 +195,9 @@ class EmulationGl {
     void drainRenderThreadContexts();
     void drainRenderThreadSurfaces();
     void drainRenderThreadResources();
+    // Unbinds this thread's context and releases its EGL thread state, keeping its
+    // contexts and surfaces (FrameBuffer::releaseGlRenderThread).
+    void releaseRenderThread();
     bool flushEmulatedEglWindowSurfaceColorBuffer(HandleType surfaceHandle);
     void fillGlesUsages(android_studio::EmulatorGLESUsages* usages);
     bool getRenderOpt(gfxstream::RenderOpt* opt) const;

@@ -17,6 +17,8 @@
 
 #include <string.h>
 
+#include <mutex>
+
 #include "client_api_exts.h"
 #include "egl_display.h"
 #include "egl_os_api.h"
@@ -27,9 +29,15 @@ namespace {
 
 [[maybe_unused]] static EGLBoolean sEgl2Egl = false;
 
+static std::mutex sSingletonLock;
+static EglGlobalInfo* sSingletonInstance = nullptr;
+
 static EglGlobalInfo* sSingleton(bool nullEgl = false) {
-    static EglGlobalInfo* i = new EglGlobalInfo(nullEgl);
-    return i;
+    std::lock_guard<std::mutex> lock(sSingletonLock);
+    if (!sSingletonInstance) {
+        sSingletonInstance = new EglGlobalInfo(nullEgl);
+    }
+    return sSingletonInstance;
 }
 
 static bool sEgl2EglSyncSafeToUse = false;
@@ -61,6 +69,27 @@ bool EglGlobalInfo::isEgl2EglSyncSafeToUse() {
 // static
 EglGlobalInfo* EglGlobalInfo::getInstance(bool nullEgl) {
     return sSingleton(nullEgl);
+}
+
+// static
+bool EglGlobalInfo::releaseInstance() {
+    if (!sEgl2Egl) {
+        GFXSTREAM_ERROR("Only the EGL-on-EGL host engine can release the host driver.");
+        return false;
+    }
+    EglGlobalInfo* info;
+    {
+        std::lock_guard<std::mutex> lock(sSingletonLock);
+        info = sSingletonInstance;
+        sSingletonInstance = nullptr;
+    }
+    if (info) {
+        // The engine is EglOS's instance: releaseEgl2EglHostInstance() deletes it.
+        info->m_engine = nullptr;
+        delete info;
+    }
+    EglOS::releaseEgl2EglHostInstance();
+    return true;
 }
 
 EglGlobalInfo::EglGlobalInfo(bool nullEgl) {
