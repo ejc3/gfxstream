@@ -838,6 +838,13 @@ bool RendererImpl::beginGpuRelease(std::string* error) {
             return false;
         }
     }
+    if (mReleasedTextures) {
+        // The last retake may still be restoring textures on a background thread with
+        // the driver about to go; stop it. A texture it did not reach is restored when
+        // the save below touches it.
+        mReleasedTextures->interrupt();
+        mReleasedTextures->join();
+    }
     if (!pauseAllPreSave()) {
         *error = "timed out waiting for guest process cleanup";
         return false;

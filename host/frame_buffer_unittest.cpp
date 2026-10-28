@@ -630,6 +630,54 @@ TEST_F(FrameBufferTest, SnapshotSurvivesReleasingTheHostDriver) {
 
     mFb->closeColorBuffer(handle);
 }
+
+// An EGL image a snapshot load restored into a new frame buffer stays with the
+// translator's display (the frame buffer keeps no wrapper for it), and destroying it
+// calls the GLES dispatch: a second release, after a retake loaded the image, must
+// destroy the displays while the dispatch is still loaded.
+TEST_F(FrameBufferTest, ReleasingTheHostDriverAgainAfterLoadingAnEglImage) {
+    auto gl = LazyLoadedGLESv2Dispatch::get();
+    HandleType context = mFb->createEmulatedEglContext(0, 0, GLESApi_3_0);
+    HandleType surface = mFb->createEmulatedEglWindowSurface(0, mWidth, mHeight);
+    ASSERT_TRUE(mFb->bindContext(context, surface, surface));
+    GLuint texture = 0;
+    gl->glGenTextures(1, &texture);
+    gl->glBindTexture(GL_TEXTURE_2D, texture);
+    gl->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_NE(0u, mFb->createEmulatedEglImage(context, EGL_GL_TEXTURE_2D_KHR, texture));
+
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    auto releaseAndRetake = [&]() {
+        mFb->bindContext(0, 0, 0);
+        delete mRenderThreadInfo;
+        mRenderThreadInfo = nullptr;
+        FrameBuffer::finalize();
+        mFb = nullptr;
+        ASSERT_TRUE(gl::EmulationGl::releaseHostDriver());
+        EXPECT_FALSE(hostGlesLibraryOpen());
+        ASSERT_TRUE(FrameBuffer::initialize(mWidth, mHeight, features, false));
+        mFb = FrameBuffer::getFB();
+        ASSERT_NE(nullptr, mFb);
+        mRenderThreadInfo = new RenderThreadInfo();
+        mRenderThreadInfo->initGl(mFb->getEmulationGl());
+    };
+
+    saveSnapshot();
+    releaseAndRetake();
+    mSnapshotStream->rewind();
+    mFb->onLoad(mSnapshotStream.get(), mSnapshotTextureSaverLoader);
+    // The load restores textures on a background thread; RendererImpl::beginGpuRelease()
+    // stops it before the next release.
+    auto loader = mSnapshotTextureSaverLoader;
+    loader->interrupt();
+    loader->join();
+    // The next release saves first, which restores the image's texture: the image owns a
+    // GL texture when the display holding it is destroyed.
+    saveSnapshot();
+    releaseAndRetake();
+}
+
 #endif  // __linux__
 
 // bug: 111360779

@@ -88,7 +88,6 @@ bool EglGlobalInfo::releaseInstance() {
         info->m_engine = nullptr;
         delete info;
     }
-    EglOS::releaseEgl2EglHostInstance();
     return true;
 }
 

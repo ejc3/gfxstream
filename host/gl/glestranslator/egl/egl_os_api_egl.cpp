@@ -161,8 +161,10 @@ class EglOsEglDisplay;
 
 // The host display and engine live until releaseEgl2EglHostInstance(), which
 // lets go of the host GPU; the next use creates them again. The translator's
-// default EglDisplay owns the host display and deletes it with itself.
-static std::mutex sHostInstanceLock;
+// default EglDisplay owns the host display and deletes it with itself. Each has
+// its own lock, taken engine first: on QNX the engine's constructor creates the
+// display.
+static std::mutex sHostDisplayLock;
 static EglOsEglDisplay* sHostDisplayInstance = nullptr;
 
 namespace {
@@ -571,7 +573,7 @@ EglOsEglDisplay::~EglOsEglDisplay() {
     if (mDispatcher.eglReleaseThread) {
         mDispatcher.eglReleaseThread();
     }
-    std::lock_guard<std::mutex> lock(sHostInstanceLock);
+    std::lock_guard<std::mutex> lock(sHostDisplayLock);
     if (sHostDisplayInstance == this) {
         sHostDisplayInstance = nullptr;
     }
@@ -958,7 +960,7 @@ bool EglOsEglDisplay::checkWindowPixelFormatMatch(EGLNativeWindowType win,
 }
 
 static EglOsEglDisplay* sHostDisplay(bool nullEgl = false) {
-    std::lock_guard<std::mutex> lock(sHostInstanceLock);
+    std::lock_guard<std::mutex> lock(sHostDisplayLock);
     if (!sHostDisplayInstance) {
         sHostDisplayInstance = new EglOsEglDisplay(nullEgl);
     }
@@ -1006,10 +1008,11 @@ private:
 
 }  // namespace
 
+static std::mutex sHostEngineLock;
 static EglEngine* sHostEngineInstance = nullptr;
 
 static EglEngine* sHostEngine(bool nullEgl) {
-    std::lock_guard<std::mutex> lock(sHostInstanceLock);
+    std::lock_guard<std::mutex> lock(sHostEngineLock);
     if (!sHostEngineInstance) {
         sHostEngineInstance = new EglEngine(nullEgl);
     }
@@ -1026,10 +1029,13 @@ void releaseEgl2EglHostInstance() {
     EglEngine* engine;
     EglOsEglDisplay* display;
     {
-        std::lock_guard<std::mutex> lock(sHostInstanceLock);
+        std::lock_guard<std::mutex> lock(sHostEngineLock);
         engine = sHostEngineInstance;
-        display = sHostDisplayInstance;
         sHostEngineInstance = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(sHostDisplayLock);
+        display = sHostDisplayInstance;
     }
     delete engine;
     // Normally already deleted by the translator display that owned it.
