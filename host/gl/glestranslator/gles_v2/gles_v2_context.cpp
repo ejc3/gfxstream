@@ -263,6 +263,13 @@ void GLESv2Context::postLoadRestoreCtx() {
             genVAOName(vaoIte.first, false);
         }
         dispatcher.glBindVertexArray(getVAOGlobalName(vaoIte.first));
+        // The element array buffer binding is state of the vertex array object. Bind each
+        // one's own here: GLEScontext::postLoadRestoreCtx binds only the current one's, so a
+        // vertex array that was not bound at the save would draw with no index buffer and the
+        // driver would read the draw's offset as a pointer.
+        dispatcher.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,
+                shareGroup()->getGlobalName(NamedObjectType::VERTEXBUFFER,
+                                            vaoIte.second.element_array_buffer_binding));
         for (uint32_t i = 0; i < kMaxVertexAttributes; ++i) {
             GLESpointer* glesPointer =
                 (GLESpointer*)(vaoIte.second.vertexAttribInfo.data() + i);

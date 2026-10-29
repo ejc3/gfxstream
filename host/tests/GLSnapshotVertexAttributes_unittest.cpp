@@ -305,6 +305,60 @@ TEST_F(SnapshotGlVertexAttribBufferTest, AttachArrayBuffer) {
     doCheckedSnapshot();
 }
 
+// The element array buffer binding belongs to a vertex array object. A vertex array that is
+// not bound at the save must still draw from its own index buffer after the load.
+TEST_F(SnapshotTest, RestoresTheIndexBufferOfAVertexArrayNotBoundAtTheSave) {
+    static const char kVertexShader[] =
+            "#version 300 es\n"
+            "layout(location = 0) in vec2 pos;\n"
+            "void main() { gl_Position = vec4(pos, 0.0, 1.0); }\n";
+    static const char kFragmentShader[] =
+            "#version 300 es\n"
+            "precision mediump float;\n"
+            "out vec4 color;\n"
+            "void main() { color = vec4(0.0, 1.0, 0.0, 1.0); }\n";
+    GLuint program = gl->glCreateProgram();
+    gl->glAttachShader(program, loadAndCompileShader(gl, GL_VERTEX_SHADER, kVertexShader));
+    gl->glAttachShader(program, loadAndCompileShader(gl, GL_FRAGMENT_SHADER, kFragmentShader));
+    gl->glLinkProgram(program);
+    GLint linked = GL_FALSE;
+    gl->glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    ASSERT_EQ(GL_TRUE, linked);
+
+    GLfloat corners[] = {-1.f, -1.f, 1.f, -1.f, -1.f, 1.f, 1.f, 1.f};
+    static const GLushort kIndices[] = {0, 1, 2, 2, 1, 3};
+    GLuint vaos[2] = {0, 0};
+    gl->glGenVertexArrays(2, vaos);
+    gl->glBindVertexArray(vaos[0]);
+    GLuint vbo = createBuffer(gl, {sizeof(corners), corners, GL_STATIC_DRAW});
+    gl->glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    gl->glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    gl->glEnableVertexAttribArray(0);
+    GLuint ibo = 0;
+    gl->glGenBuffers(1, &ibo);
+    gl->glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    gl->glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(kIndices), kIndices, GL_STATIC_DRAW);
+    // The other vertex array is the current one at the save.
+    gl->glBindVertexArray(vaos[1]);
+    gl->glBindBuffer(GL_ARRAY_BUFFER, 0);
+    EXPECT_EQ(GLenum(GL_NO_ERROR), gl->glGetError());
+
+    doSnapshot([] {});
+
+    gl->glBindVertexArray(vaos[0]);
+    gl->glUseProgram(program);
+    gl->glViewport(0, 0, kTestSurfaceSize[0], kTestSurfaceSize[1]);
+    gl->glClearColor(1.f, 0.f, 0.f, 1.f);
+    gl->glClear(GL_COLOR_BUFFER_BIT);
+    gl->glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr);
+    GLubyte pixel[4] = {0, 0, 0, 0};
+    gl->glReadPixels(kTestSurfaceSize[0] / 2, kTestSurfaceSize[1] / 2, 1, 1, GL_RGBA,
+                     GL_UNSIGNED_BYTE, pixel);
+    EXPECT_EQ(GLenum(GL_NO_ERROR), gl->glGetError());
+    EXPECT_EQ(0, pixel[0]) << "the draw did not cover the surface";
+    EXPECT_EQ(255, pixel[1]) << "the draw did not cover the surface";
+}
+
 }  // namespace
 }  // namespace gl
 }  // namespace host
