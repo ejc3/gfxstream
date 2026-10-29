@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <deque>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <string>
@@ -72,10 +74,13 @@ class Tap {
         mHead = mSize = 0;
     }
 
-    // Starts the copy: a HELLO naming the open channels, then everything that follows.
-    void start() {
+    // Starts the copy: a HELLO naming the open channels, then everything that follows. With
+    // `hold` (a join), records that follow wait in the ring until endJoin(), behind the JOIN
+    // parts joinPart() adds.
+    void start(bool hold = false) {
         std::lock_guard<std::mutex> l(mMu);
         mHead = mSize = 0;
+        mPrefix.clear();
         std::vector<unsigned char> ids(4 + 4 * mOpen.size());
         put32(ids.data(), (uint32_t)mOpen.size());
         size_t i = 4;
@@ -84,15 +89,39 @@ class Tap {
             i += 4;
         }
         epoch.fetch_add(1, std::memory_order_relaxed);
-        appendLocked(kHello, 0, kProtocolVersion, ids.data(), ids.size(), nullptr, 0);
+        prefixLocked(kHello, 0, kProtocolVersion, ids.data(), ids.size(), nullptr, 0);
+        mHolding = hold;
         active.store(true, std::memory_order_release);
         mCv.notify_all();
+    }
+
+    // One JOIN record, sent before anything in the ring. Dropped once the copy has been
+    // stopped (the consumer went) since the join began.
+    void joinPart(uint32_t kind, const void* a, size_t an, const void* b, size_t bn) {
+        std::lock_guard<std::mutex> l(mMu);
+        if (!mHolding) return;
+        prefixLocked(kJoin, 0, kind, a, an, b, bn);
+        mCv.notify_all();
+    }
+
+    // The join is written: what the ring holds may follow it.
+    void endJoin() {
+        std::lock_guard<std::mutex> l(mMu);
+        mHolding = false;
+        mCv.notify_all();
+    }
+
+    bool holding() {
+        std::lock_guard<std::mutex> l(mMu);
+        return mHolding;
     }
 
     void stop() {
         std::lock_guard<std::mutex> l(mMu);
         active.store(false, std::memory_order_release);
         mHead = mSize = 0;
+        mPrefix.clear();
+        mHolding = false;
     }
 
     uint32_t openChannel(bool loaded, uint32_t* syncedEpoch) {
@@ -131,13 +160,20 @@ class Tap {
         recordLocked(kData, channel, 0, start + pending, fresh, nullptr, 0);
     }
 
-    // Sender thread: blocks until there are bytes, then moves up to `max` of them into `out`.
-    // False once `stopWaiting` is set.
+    // Sender thread: blocks until there are bytes, then moves them into `out`: the oldest
+    // HELLO or JOIN record whole, or else (no join being written) up to `max` bytes of the
+    // ring. False once `stopWaiting` is set.
     bool take(std::vector<unsigned char>* out, size_t max, const std::atomic<bool>& stopWaiting) {
         std::unique_lock<std::mutex> l(mMu);
-        mCv.wait_for(l, std::chrono::milliseconds(100), [&] { return mSize > 0 || stopWaiting.load(); });
+        mCv.wait_for(l, std::chrono::milliseconds(100),
+                     [&] { return !mPrefix.empty() || (!mHolding && mSize > 0) || stopWaiting.load(); });
         if (stopWaiting.load()) return false;
-        size_t n = std::min(mSize, max);
+        if (!mPrefix.empty()) {
+            out->swap(mPrefix.front());
+            mPrefix.pop_front();
+            return true;
+        }
+        size_t n = mHolding ? 0 : std::min(mSize, max);
         out->resize(n);
         if (n == 0) return true;
         size_t first = std::min(n, mRing.size() - mHead);
@@ -184,6 +220,20 @@ class Tap {
         if (bn) copyIn(b, bn);
     }
 
+    // A record of its own, outside the ring: HELLO and JOIN parts, which the ring does not bound.
+    void prefixLocked(uint32_t type, uint32_t channel, uint32_t aux, const void* a, size_t an, const void* b,
+                      size_t bn) {
+        std::vector<unsigned char> r(kHeaderSize + an + bn);
+        put32(r.data(), type);
+        put32(r.data() + 4, channel);
+        put32(r.data() + 8, (uint32_t)(an + bn));
+        put32(r.data() + 12, aux);
+        put64(r.data() + 16, nowUs());
+        if (an) memcpy(r.data() + kHeaderSize, a, an);
+        if (bn) memcpy(r.data() + kHeaderSize + an, b, bn);
+        mPrefix.push_back(std::move(r));
+    }
+
     void copyIn(const void* p, size_t n) {
         size_t tail = (mHead + mSize) % mRing.size();
         size_t first = std::min(n, mRing.size() - tail);
@@ -198,11 +248,55 @@ class Tap {
     size_t mHead = 0, mSize = 0;
     std::set<uint32_t> mOpen;
     uint32_t mNextId = 0;
+    // HELLO and JOIN records not sent yet, oldest first; while mHolding the ring waits.
+    std::deque<std::vector<unsigned char>> mPrefix;
+    bool mHolding = false;
 };
 
 Tap& tap() {
     static Tap* t = new Tap();  // never destroyed: render threads may outlive static destructors
     return *t;
+}
+
+std::mutex g_joinMu;  // held while a join handler runs, and to change it
+JoinHandler g_join;
+
+class TapJoinWriter : public JoinWriter {
+   public:
+    void begin() override {
+        if (mBegan) return;
+        mBegan = true;
+        tap().start(/*hold=*/true);
+        uint32_t version = kJoinVersion;
+        tap().joinPart(kJoinBegin, &version, 4, nullptr, 0);
+    }
+    void part(uint32_t kind, const void* a, size_t an, const void* b, size_t bn) override {
+        if (mBegan) tap().joinPart(kind, a, an, b, bn);
+    }
+    bool began() const { return mBegan; }
+
+   private:
+    bool mBegan = false;
+};
+
+// 'J': the copy started at the renderer's saved state, or as for 'S' when it cannot save one.
+void join() {
+    std::lock_guard<std::mutex> l(g_joinMu);
+    if (!g_join) {
+        tap().start();
+        return;
+    }
+    TapJoinWriter w;
+    bool ok = g_join(w);
+    if (!w.began()) {
+        tap().start();
+        return;
+    }
+    if (!ok) {
+        uint32_t end[4] = {kJoinFailed, 0, 0, 0};
+        tap().joinPart(kJoinEnd, end, sizeof end, nullptr, 0);
+    }
+    tap().endJoin();
 }
 
 thread_local uint32_t t_channel = 0;
@@ -238,6 +332,7 @@ void serveConsumer(int fd) {
         if (r < 0 && errno == EINTR) continue;
         if (r <= 0) break;
         if (c == 'S') tap().start();
+        if (c == 'J') join();
         if (c == 'X') tap().stop();
     }
     tap().stop();
@@ -291,6 +386,11 @@ void initFromEnv() {
         tap().configure(ring);
         std::thread(listenLoop, std::string(path)).detach();
     });
+}
+
+void setJoinHandler(JoinHandler handler) {
+    std::lock_guard<std::mutex> l(g_joinMu);
+    g_join = std::move(handler);
 }
 
 void registerChannel(bool loadedFromSnapshot) {
@@ -355,6 +455,7 @@ void registerChannel(bool) {}
 void unregisterChannel() {}
 void onGuestData(const unsigned char*, size_t, size_t) {}
 void onReply(const void*, size_t) {}
+void setJoinHandler(JoinHandler) {}
 void startForTest(int, size_t) {}
 void stopForTest() {}
 bool consumerDoneForTest() { return true; }

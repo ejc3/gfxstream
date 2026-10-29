@@ -516,6 +516,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
 
     bool onSave(gfxstream::Stream* stream, const ITextureSaverPtr& textureSaver);
     bool onLoad(gfxstream::Stream* stream, const ITextureLoaderPtr& textureLoader);
+    uint32_t saveColorBuffersForMirror(const FrameBuffer::MirrorColorBufferSink& out);
 
     // lock and unlock handles (EmulatedEglContext, ColorBuffer,
     // EmulatedEglWindowSurface)
@@ -3435,6 +3436,31 @@ bool FrameBuffer::Impl::onSave(Stream* stream,
     return true;
 }
 
+uint32_t FrameBuffer::Impl::saveColorBuffersForMirror(
+        const FrameBuffer::MirrorColorBufferSink& out) NO_THREAD_SAFETY_ANALYSIS {
+    AutoLock mutex(m_lock);
+    AutoLock colorBufferMapLock(m_colorBufferMapLock);
+    // 16384 x 16384 is the largest texture the guest is offered; anything larger is not a
+    // color buffer the mirror could make
+    constexpr uint32_t kMaxSide = 16384;
+    uint32_t skipped = 0;
+    std::vector<uint8_t> pixels;
+    for (const auto& [handle, ref] : m_colorbuffers) {
+        const uint32_t w = ref.cb->getWidth();
+        const uint32_t h = ref.cb->getHeight();
+        if (w == 0 || h == 0 || w > kMaxSide || h > kMaxSide) {
+            skipped++;
+            continue;
+        }
+        pixels.assign((size_t)w * h * 4, 0);
+        ref.cb->readToBytes(0, 0, (int)w, (int)h, GfxstreamFormat::R8G8B8A8_UNORM, pixels.data(),
+                            pixels.size());
+        out(handle, w, h, static_cast<uint32_t>(ref.cb->getFormat()), ref.refcount, ref.opened,
+            pixels.data(), pixels.size());
+    }
+    return skipped;
+}
+
 bool FrameBuffer::Impl::onLoad(Stream* stream,
                                const ITextureLoaderPtr& textureLoader) NO_THREAD_SAFETY_ANALYSIS {
     AutoLock lock(m_lock);
@@ -5032,6 +5058,10 @@ int FrameBuffer::setDisplayPowerMode(uint32_t displayId, uint32_t powerMode) {
 
 
 HandleType FrameBuffer::getLastPostedColorBuffer() { return mImpl->getLastPostedColorBuffer(); }
+
+uint32_t FrameBuffer::saveColorBuffersForMirror(const MirrorColorBufferSink& out) {
+    return mImpl->saveColorBuffersForMirror(out);
+}
 
 void FrameBuffer::asyncWaitForGpuVulkanWithCb(uint64_t deviceHandle, uint64_t fenceHandle,
                                               FenceCompletionCallback cb) {

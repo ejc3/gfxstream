@@ -240,6 +240,88 @@ TEST(MirrorTap, AFullRingStopsTheCopyWithAnOverflowRecord) {
     stopForTest();
 }
 
+// 'J' with a join handler: the HELLO, then the handler's JOIN parts whole (one larger than the
+// ring), then what render threads copied while it ran, in the order they copied it.
+TEST(MirrorTap, AJoinSendsItsPartsBeforeWhatFollowedTheStart) {
+    Consumer c;
+    startForTest(c.tapFd(), 1 << 16);
+    std::string pixels(200000, 'p');
+    setJoinHandler([&](JoinWriter& w) {
+        w.begin();
+        // a render thread copies while the join is written: held back behind it
+        onChannel([] {
+            const unsigned char b[8] = {1, 2, 3, 4, 8, 0, 0, 0};
+            onGuestData(b, 0, sizeof b);
+        });
+        const uint32_t head[6] = {7, 2, 3, 1, 1, 1};
+        w.part(kJoinColorBuffer, head, sizeof head, pixels.data(), pixels.size());
+        const uint32_t end[4] = {kJoinOk, 1234, 7, 0};
+        w.part(kJoinEnd, end, sizeof end, nullptr, 0);
+        return true;
+    });
+    c.send('J');
+    auto r = c.read(7);
+    setJoinHandler(nullptr);
+    std::vector<uint32_t> types, auxes;
+    for (auto& x : r) {
+        types.push_back(x.type);
+        auxes.push_back(x.aux);
+    }
+    ASSERT_EQ(types, (std::vector<uint32_t>{kHello, kJoin, kJoin, kJoin, kOpen, kData, kClose}));
+    EXPECT_EQ(auxes[1], kJoinBegin);
+    EXPECT_EQ(get32((const unsigned char*)r[1].payload.data()), kJoinVersion);
+    EXPECT_EQ(auxes[2], kJoinColorBuffer);
+    EXPECT_EQ(r[2].payload.size(), 24 + pixels.size());
+    EXPECT_EQ(r[2].payload.substr(24), pixels);
+    EXPECT_EQ(auxes[3], kJoinEnd);
+    EXPECT_EQ(get32((const unsigned char*)r[3].payload.data() + 4), 1234u);
+    EXPECT_EQ(r[5].payload.size(), 8u);
+    stopForTest();
+}
+
+// No handler, or one that refuses before it began: 'J' starts the copy as 'S' does.
+TEST(MirrorTap, AJoinWithoutStateIsAStart) {
+    for (bool handler : {false, true}) {
+        Consumer c;
+        startForTest(c.tapFd(), 1 << 16);
+        if (handler) setJoinHandler([](JoinWriter&) { return false; });
+        c.send('J');
+        auto hello = c.read(1);
+        ASSERT_EQ(hello.size(), 1u);
+        EXPECT_EQ(hello[0].type, kHello);
+        onChannel([] {
+            const unsigned char b[8] = {1, 2, 3, 4, 8, 0, 0, 0};
+            onGuestData(b, 0, sizeof b);
+        });
+        auto r = c.read(3);
+        ASSERT_EQ(r.size(), 3u);
+        EXPECT_EQ(r[0].type, kOpen);
+        EXPECT_EQ(r[1].type, kData);
+        setJoinHandler(nullptr);
+        stopForTest();
+    }
+}
+
+// A handler that fails after it began: the join ends with a failed END, then the copy goes on.
+TEST(MirrorTap, AJoinThatFailsEndsWithAFailedEnd) {
+    Consumer c;
+    startForTest(c.tapFd(), 1 << 16);
+    setJoinHandler([](JoinWriter& w) {
+        w.begin();
+        return false;
+    });
+    c.send('J');
+    auto r = c.read(3);
+    setJoinHandler(nullptr);
+    ASSERT_EQ(r.size(), 3u);
+    EXPECT_EQ(r[0].type, kHello);
+    EXPECT_EQ(r[1].aux, kJoinBegin);
+    EXPECT_EQ(r[2].type, kJoin);
+    EXPECT_EQ(r[2].aux, kJoinEnd);
+    EXPECT_EQ(get32((const unsigned char*)r[2].payload.data()), kJoinFailed);
+    stopForTest();
+}
+
 }  // namespace
 }  // namespace mirror
 }  // namespace host

@@ -13,6 +13,7 @@
 // limitations under the License.
 #pragma once
 
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include "gfxstream/host/mem_stream.h"
+#include "mirror_tap.h"
 #include "render_thread.h"
 #include "render_window.h"
 #include "gfxstream/host/features.h"
@@ -149,6 +151,21 @@ private:
     // Stop all render threads and wait until they exit,
     // and also delete them.
     void cleanupRenderThreads();
+
+    // pauseAllPreSave() and resumeAll() without the join's bookkeeping. pauseRenderThreads()
+    // returns the moment the render threads were asked to pause, after the process cleanup
+    // wait that precedes it.
+    bool pauseRenderThreads(std::chrono::steady_clock::time_point* askedAt = nullptr);
+    void resumeRenderThreads();
+    // The GPU mirror's join (mirror_tap.h): the render threads paused, the copy started, every
+    // color buffer saved, the threads resumed. The tap calls it for a consumer's 'J'.
+    bool saveMirrorJoin(mirror::JoinWriter& w);
+
+    // Held by a mirror join from its pause to its resume. pauseAllPreSave() and resumeAll()
+    // take it, so an embedder's pause (a snapshot, a GPU release) waits for a running join,
+    // and a join refuses while the embedder holds the threads paused.
+    std::mutex mJoinMutex;
+    bool mPausedByEmbedder = false;
 
     std::unique_ptr<RenderWindow> mRenderWindow;
 
