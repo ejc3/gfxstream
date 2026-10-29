@@ -27,6 +27,7 @@
 #include <GLES3/gl31.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <numeric>
 #include <optional>
@@ -2151,6 +2152,19 @@ static GLenum s_fallbackImplementationColorReadType(GLEScontext* ctx, GLint inte
     }
 }
 
+// A guest whose command stream can be copied to a mirror (GFXSTREAM_MIRROR_SOCKET,
+// host/mirror_tap.h) is offered no program binary format: a program loaded from a binary
+// (glProgramBinary) sends the mirror no shader source to compile, so a viewer replaying the
+// stream could not draw with it. With no format to save in, Skia's shader cache keeps the
+// sources and compiles them, which the mirror sees.
+static bool mirrorHidesProgramBinaries() {
+    static const bool hides = [] {
+        const char* path = getenv("GFXSTREAM_MIRROR_SOCKET");
+        return path && *path;
+    }();
+    return hides;
+}
+
 template <class T>
 static void s_glStateQueryTv(bool es2, GLenum pname, T* params, GLStateQueryFunc<T> getter) {
     T i;
@@ -2301,6 +2315,18 @@ static void s_glStateQueryTv(bool es2, GLenum pname, T* params, GLStateQueryFunc
             getter(pname,params);
         else
             *params = 0;
+        break;
+
+    case GL_NUM_PROGRAM_BINARY_FORMATS:
+        if (mirrorHidesProgramBinaries())
+            *params = 0;
+        else
+            getter(pname, params);
+        break;
+
+    case GL_PROGRAM_BINARY_FORMATS:
+        if (!mirrorHidesProgramBinaries())
+            getter(pname, params);
         break;
 
     case GL_MAX_VERTEX_UNIFORM_VECTORS:

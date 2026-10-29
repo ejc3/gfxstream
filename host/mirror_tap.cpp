@@ -315,6 +315,11 @@ void onReply(const void* data, size_t size) {
                  std::min(size, kReplyPrefix), nullptr, 0);
 }
 
+void onColorBufferFreed(uint32_t handle) {
+    if (!tap().active.load(std::memory_order_acquire)) return;
+    tap().record(kFree, 0, handle, nullptr, 0, nullptr, 0);
+}
+
 namespace {
 std::thread g_testConsumer;
 int g_testFd = -1;
@@ -355,6 +360,7 @@ void registerChannel(bool) {}
 void unregisterChannel() {}
 void onGuestData(const unsigned char*, size_t, size_t) {}
 void onReply(const void*, size_t) {}
+void onColorBufferFreed(uint32_t) {}
 void startForTest(int, size_t) {}
 void stopForTest() {}
 bool consumerDoneForTest() { return true; }

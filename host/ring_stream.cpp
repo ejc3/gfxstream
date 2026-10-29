@@ -17,12 +17,15 @@
 #include <assert.h>
 #include <memory.h>
 
+#include <algorithm>
+
 #include "gfxstream/host/dma_device.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/stream_utils.h"
 #include "gfxstream/system/System.h"
 #include "render-utils/dma_device.h"
 #include "render-utils/stream.h"
+#include "mirror_tap.h"
 
 namespace gfxstream {
 namespace {
@@ -109,6 +112,7 @@ void* RingStream::allocBuffer(size_t minSize) {
 }
 
 int RingStream::commitBuffer(size_t size) {
+    host::mirror::onReply(mWriteBuffer.data(), std::min(size, mWriteBuffer.size()));
     size_t sent = 0;
     auto data = mWriteBuffer.data();
 
