@@ -22,7 +22,9 @@
 // holding that second's deltas per render thread (fleet/phone, docs/fleet/phone-gpu-remoting.md
 // in ejc3/fcvm reads them). GFXSTREAM_STATS_DUMP names a file the decoded guest->host bytes
 // are appended to while a file of that name plus ".on" exists, up to
-// GFXSTREAM_STATS_DUMP_BYTES (default 512 MiB).
+// GFXSTREAM_STATS_DUMP_BYTES (default 512 MiB), as records: three little-endian u32 (the
+// render thread's id, as in the stats line; the decoder, as Decoder; the byte count), then
+// that many bytes of whole packets.
 #pragma once
 
 #include <stddef.h>

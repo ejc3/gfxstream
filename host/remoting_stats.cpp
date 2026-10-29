@@ -272,10 +272,12 @@ void onConsumed(Decoder decoder, const uint8_t* buf, size_t len) {
     if (sDumpOn.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> l(sDumpMu);
         if (!sDumpFile) sDumpFile = fopen(dumpPath(), "a");
-        if (sDumpFile && sDumpBytes < sDumpCap) {
-            size_t n = (size_t)std::min<uint64_t>(len, sDumpCap - sDumpBytes);
-            sDumpBytes += fwrite(buf, 1, n, sDumpFile);
-            if (sDumpBytes >= sDumpCap) fflush(sDumpFile);
+        // One record per decoder call: the thread's id, the decoder, the byte count, then the
+        // bytes (whole packets). A record that would pass the cap is not written.
+        if (sDumpFile && sDumpBytes + 12 + len <= sDumpCap) {
+            uint32_t hdr[3] = {(uint32_t)t->id, (uint32_t)decoder, (uint32_t)len};
+            sDumpBytes += fwrite(hdr, 1, sizeof(hdr), sDumpFile);
+            sDumpBytes += fwrite(buf, 1, len, sDumpFile);
         }
     }
 }
