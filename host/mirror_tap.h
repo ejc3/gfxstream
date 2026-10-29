@@ -53,7 +53,15 @@
 //                   GL's row 0 (glReadPixels' order)
 //   END          3  status (0: every part above is whole; else the join failed and the state
 //                   is incomplete), the render threads' pause in microseconds, the color buffer
-//                   posted last (0: none), the color buffers skipped (an unreadable format)
+//                   posted last (0: none), the color buffers skipped (an unreadable format),
+//                   flags (bit 0: the GL state parts below were sent)
+//   GL_STATE     4  FrameBuffer::onSave's stream (quickboot's format: contexts, share groups and
+//                   their objects, color buffers, window surfaces), whole
+//   TEXTURE      5  u32 the texture's id in that stream, then what its ITextureSaver saver wrote
+//   CHANNEL      6  u32 a channel open at the start, then RenderThread::save()'s bytes for it
+//                   (its read buffer, stream, checksum state and RenderThreadInfo: the context
+//                   and surfaces current on it)
+// The GL state parts come before END; a renderer that cannot save them sends none.
 #pragma once
 
 #include <stddef.h>
@@ -79,6 +87,9 @@ enum JoinPart : uint32_t {
     kJoinBegin = 1,
     kJoinColorBuffer = 2,
     kJoinEnd = 3,
+    kJoinGlState = 4,
+    kJoinTexture = 5,
+    kJoinChannel = 6,
 };
 
 constexpr uint32_t kJoinVersion = 1;
@@ -92,8 +103,9 @@ constexpr size_t kReplyPrefix = 4096;
 // Starts the listener if GFXSTREAM_MIRROR_SOCKET is set; idempotent.
 void initFromEnv();
 
-// The calling render thread's channel: from its start until its end.
-void registerChannel(bool loadedFromSnapshot);
+// The calling render thread's channel: from its start until its end. Returns its id in the
+// tap's records.
+uint32_t registerChannel(bool loadedFromSnapshot);
 void unregisterChannel();
 
 // ReadBuffer::getData: `pending` bytes the decoders had not consumed yet, then `fresh` bytes

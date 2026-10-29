@@ -393,9 +393,10 @@ void setJoinHandler(JoinHandler handler) {
     g_join = std::move(handler);
 }
 
-void registerChannel(bool loadedFromSnapshot) {
+uint32_t registerChannel(bool loadedFromSnapshot) {
     initFromEnv();
     t_channel = tap().openChannel(loadedFromSnapshot, &t_syncedEpoch);
+    return t_channel;
 }
 
 void unregisterChannel() {
@@ -451,7 +452,7 @@ namespace gfxstream {
 namespace host {
 namespace mirror {
 void initFromEnv() {}
-void registerChannel(bool) {}
+uint32_t registerChannel(bool) { return 0; }
 void unregisterChannel() {}
 void onGuestData(const unsigned char*, size_t, size_t) {}
 void onReply(const void*, size_t) {}

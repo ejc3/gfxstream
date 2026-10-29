@@ -57,6 +57,8 @@ class RenderThread : public gfxstream::base::Thread {
     void pausePreSnapshot();
     void resume();
     void save(gfxstream::Stream* stream);
+    // This thread's channel id in the mirror tap's records (0 before it registered).
+    uint32_t mirrorChannel() const { return mMirrorChannel.load(std::memory_order_relaxed); }
     // After pausePreSnapshot(): blocks until this thread has stopped
     // decoding and finished its pending GPU work (or has exited). No-op if
     // the thread was not paused for a snapshot.
@@ -116,6 +118,7 @@ class RenderThread : public gfxstream::base::Thread {
 
     SnapshotState mState = SnapshotState::Empty;
     std::atomic<bool> mFinished { false };
+    std::atomic<uint32_t> mMirrorChannel { 0 };
     std::atomic_bool mDecodersShouldStop{false};
     gfxstream::base::Lock mLock;
     gfxstream::base::ConditionVariable mSnapshotSignal;

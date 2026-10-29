@@ -356,7 +356,34 @@ void RendererImpl::resumeRenderThreads() {
     repaintOpenGLDisplay();
 }
 
-bool RendererImpl::saveMirrorJoin(mirror::JoinWriter& w) {
+// Textures the frame buffer saves for a GPU release, kept in memory.
+class MemoryTextureStore : public ITextureLoader, public ITextureSaver {
+  public:
+    void saveTexture(uint32_t textureId, const saver_t& saver) override {
+        MemStream stream;
+        saver(&stream, nullptr);
+        mTextures[textureId] = stream.buffer();
+    }
+
+    void loadTexture(uint32_t textureId, const loader_t& callback) override {
+        auto it = mTextures.find(textureId);
+        if (it == mTextures.end()) {
+            return;
+        }
+        std::vector<char> copy = it->second;
+        MemStream stream(std::move(copy));
+        callback(&stream);
+    }
+
+    bool start() override { return true; }
+
+    const std::unordered_map<uint32_t, std::vector<char>>& textures() const { return mTextures; }
+
+  private:
+    std::unordered_map<uint32_t, std::vector<char>> mTextures;
+};
+bool RendererImpl::saveMirrorJoin(
+mirror::JoinWriter& w) {
     std::lock_guard<std::mutex> join(mJoinMutex);
     if (mPausedByEmbedder || mGpuReleased) {
         GFXSTREAM_INFO("mirror join refused: the render threads are paused or the GPU released");
@@ -408,15 +435,46 @@ bool RendererImpl::saveMirrorJoin(mirror::JoinWriter& w) {
             bytes += size;
         });
     const uint32_t lastPosted = fb->getLastPostedColorBuffer();
+    // The GL state (contexts, share groups and their objects, window surfaces), in quickboot's
+    // format, and each paused channel's current context. Skipped with Vulkan snapshots, whose
+    // records change that layout, and when the save fails: the viewer then has the color
+    // buffers alone.
+    uint32_t flags = 0;
+    size_t glBytes = 0;
+    if (!mFeatures.VulkanSnapshots.enabled()) {
+        MemStream state;
+        auto textures = std::make_shared<MemoryTextureStore>();
+        ITextureSaverPtr saver = textures;
+        if (fb->onSave(&state, saver)) {
+            w.part(mirror::kJoinGlState, state.buffer().data(), state.buffer().size(), nullptr, 0);
+            glBytes += state.buffer().size();
+            for (const auto& [id, bytes] : textures->textures()) {
+                w.part(mirror::kJoinTexture, &id, 4, bytes.data(), bytes.size());
+                glBytes += bytes.size();
+            }
+            for (const auto& c : channels) {
+                const uint32_t id = c->renderThread()->mirrorChannel();
+                if (!id || c->renderThread()->isFinished()) continue;
+                MemStream thread;
+                c->renderThread()->save(&thread);
+                w.part(mirror::kJoinChannel, &id, 4, thread.buffer().data(), thread.buffer().size());
+            }
+            flags |= 1;
+        } else {
+            GFXSTREAM_INFO("mirror join: the GL state could not be saved; sending color buffers only");
+        }
+    }
     resumeRenderThreads();
     const auto pauseUs = std::chrono::duration_cast<std::chrono::microseconds>(
                              std::chrono::steady_clock::now() - pausedAt)
                              .count();
-    const uint32_t end[4] = {mirror::kJoinOk, (uint32_t)std::min<int64_t>(pauseUs, UINT32_MAX),
-                             lastPosted, skipped};
+    const uint32_t end[5] = {mirror::kJoinOk, (uint32_t)std::min<int64_t>(pauseUs, UINT32_MAX),
+                             lastPosted, skipped, flags};
     w.part(mirror::kJoinEnd, end, sizeof end, nullptr, 0);
-    GFXSTREAM_INFO("mirror join: %u color buffers (%llu bytes, %u skipped), render threads paused %lld us",
-                   count, (unsigned long long)bytes, skipped, (long long)pauseUs);
+    GFXSTREAM_INFO(
+        "mirror join: %u color buffers (%llu bytes, %u skipped), GL state %zu bytes (flags %u), "
+        "render threads paused %lld us",
+        count, (unsigned long long)bytes, skipped, glBytes, flags, (long long)pauseUs);
     return true;
 }
 
@@ -881,30 +939,6 @@ static std::string gpuDeviceHandles() {
     return "";
 }
 
-// Textures the frame buffer saves for a GPU release, kept in memory.
-class MemoryTextureStore : public ITextureLoader, public ITextureSaver {
-  public:
-    void saveTexture(uint32_t textureId, const saver_t& saver) override {
-        MemStream stream;
-        saver(&stream, nullptr);
-        mTextures[textureId] = stream.buffer();
-    }
-
-    void loadTexture(uint32_t textureId, const loader_t& callback) override {
-        auto it = mTextures.find(textureId);
-        if (it == mTextures.end()) {
-            return;
-        }
-        std::vector<char> copy = it->second;
-        MemStream stream(std::move(copy));
-        callback(&stream);
-    }
-
-    bool start() override { return true; }
-
-  private:
-    std::unordered_map<uint32_t, std::vector<char>> mTextures;
-};
 
 bool RendererImpl::beginGpuRelease(std::string* error) {
     if (mGpuReleased) {
