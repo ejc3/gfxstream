@@ -86,6 +86,7 @@ set(stream-server-core-sources
     render_control.cpp
     renderer_impl.cpp
     render_lib_impl.cpp
+    remoting_stats.cpp
     render_thread.cpp
     render_thread_info.cpp
     render_window.cpp

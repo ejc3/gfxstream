@@ -140,6 +140,7 @@ cc_defaults {
         "render_control.cpp",
         "render_lib_impl.cpp",
         "render_thread_info.cpp",
+        "remoting_stats.cpp",
         "render_thread.cpp",
         "render_window.cpp",
         "renderer_impl.cpp",

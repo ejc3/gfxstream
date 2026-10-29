@@ -15,6 +15,8 @@
 */
 #include "render_thread.h"
 
+#include "remoting_stats.h"
+
 #include <assert.h>
 #include <cstring>
 #include <string.h>
@@ -411,6 +413,7 @@ intptr_t RenderThread::main() {
 
     const ProcessResources* processResources = nullptr;
     bool anyProgress = false;
+    remoting_stats::threadStart();
     while (true) {
         // Let's make sure we read enough data for at least some processing.
         uint32_t packetSize;
@@ -436,6 +439,7 @@ intptr_t RenderThread::main() {
         int stat = 0;
         if (packetSize > readBuf.validData()) {
             stat = readBuf.getData(ioStream, packetSize);
+            if (stat > 0) remoting_stats::onRead(stat);
             if (stat <= 0) {
                 if (saveSnapshot(snapshotObjects)) {
                     continue;
@@ -486,6 +490,8 @@ intptr_t RenderThread::main() {
                 tInfo->setPuid(mContextId);
             }
 
+            remoting_stats::setPuid(tInfo->m_puid);
+
             if (!processResources && tInfo->m_puid && tInfo->m_puid != INVALID_CONTEXT_ID) {
                 processResources = FrameBuffer::getFB()->getProcessResources(tInfo->m_puid);
             }
@@ -508,6 +514,8 @@ intptr_t RenderThread::main() {
                 last = tInfo->m_vkInfo->m_vkDec.decode(readBuf.buf(), readBuf.validData(), ioStream,
                                                       processResources, context);
                 if (last > 0) {
+                    remoting_stats::onConsumed(remoting_stats::Decoder::Vulkan,
+                                               readBuf.buf(), last);
                     if (!processResources) {
                         GFXSTREAM_ERROR(
                             "Processed some Vulkan packets without process resources created. "
@@ -547,6 +555,8 @@ intptr_t RenderThread::main() {
                     last = tInfo->m_glInfo->m_glDec.decode(
                             readBuf.buf(), readBuf.validData(), ioStream, &checksumCalc);
                     if (last > 0) {
+                        remoting_stats::onConsumed(remoting_stats::Decoder::Gles1,
+                                                   readBuf.buf(), last);
                         progress = true;
                         readBuf.consume(last);
                     }
@@ -561,6 +571,8 @@ intptr_t RenderThread::main() {
                                                            ioStream, &checksumCalc);
 
                     if (last > 0) {
+                        remoting_stats::onConsumed(remoting_stats::Decoder::Gles2,
+                                                   readBuf.buf(), last);
                         progress = true;
                         readBuf.consume(last);
                     }
@@ -578,6 +590,8 @@ intptr_t RenderThread::main() {
                 last = tInfo->m_rcDec.decode(readBuf.buf(), readBuf.validData(),
                                             ioStream, &checksumCalc);
                 if (last > 0) {
+                    remoting_stats::onConsumed(remoting_stats::Decoder::RenderControl,
+                                               readBuf.buf(), last);
                     readBuf.consume(last);
                     progress = true;
                 }
@@ -585,6 +599,7 @@ intptr_t RenderThread::main() {
 #endif
         } while (progress);
     }
+    remoting_stats::threadEnd();
 
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (tInfo->m_glInfo) {

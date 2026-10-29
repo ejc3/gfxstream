@@ -67,6 +67,7 @@ files_lib_gfxstream_backend = files(
   'render_channel_impl.cpp',
   'renderer_impl.cpp',
   'render_lib_impl.cpp',
+  'remoting_stats.cpp',
   'render_thread.cpp',
   'render_thread_info.cpp',
   'render_window.cpp',

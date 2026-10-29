@@ -77,6 +77,7 @@ cc_library(
         "render_channel_impl.cpp",
         "render_control.cpp",
         "render_lib_impl.cpp",
+        "remoting_stats.cpp",
         "render_thread.cpp",
         "render_thread_info.cpp",
         "render_window.cpp",

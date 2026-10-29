@@ -13,6 +13,8 @@
 // limitations under the License.
 #include "channel_stream.h"
 
+#include "remoting_stats.h"
+
 #include <assert.h>
 #include <memory.h>
 
@@ -43,6 +45,7 @@ int ChannelStream::commitBuffer(size_t size) {
     if (size > mWriteBuffer.size()) {
         size = mWriteBuffer.size();
     }
+    remoting_stats::onReply(size);
     if (mWriteBuffer.isAllocated()) {
         mWriteBuffer.resize(size);
         mChannel->writeToGuest(std::move(mWriteBuffer));
