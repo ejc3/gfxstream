@@ -24,7 +24,8 @@
 // are appended to while a file of that name plus ".on" exists, up to
 // GFXSTREAM_STATS_DUMP_BYTES (default 512 MiB), as records: three little-endian u32 (the
 // render thread's id, as in the stats line; the decoder, as Decoder; the byte count), then
-// that many bytes of whole packets.
+// that many bytes of whole packets. When the ".on" file goes the dump is closed, and
+// "dump_bytes" in the next stats line is 0.
 #pragma once
 
 #include <stddef.h>

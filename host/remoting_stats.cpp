@@ -122,7 +122,20 @@ void loggerLoop() {
     for (;;) {
         next += std::chrono::seconds(1);
         std::this_thread::sleep_until(next);
-        if (dp) sDumpOn.store(access(onFile.c_str(), F_OK) == 0, std::memory_order_relaxed);
+        if (dp) {
+            bool on = access(onFile.c_str(), F_OK) == 0;
+            sDumpOn.store(on, std::memory_order_relaxed);
+            if (!on) {
+                // A dump ends when its ".on" file goes: the file is closed, so the caller may
+                // move it once the next stats line is written, and the next dump starts anew.
+                std::lock_guard<std::mutex> l(sDumpMu);
+                if (sDumpFile) {
+                    fclose(sDumpFile);
+                    sDumpFile = nullptr;
+                    sDumpBytes = 0;
+                }
+            }
+        }
 
         std::vector<std::shared_ptr<ThreadStats>> threads;
         {
