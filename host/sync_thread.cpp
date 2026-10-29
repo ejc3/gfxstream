@@ -16,6 +16,8 @@
 
 #include "sync_thread.h"
 
+#include "remoting_stats.h"
+
 #if GFXSTREAM_ENABLE_HOST_GLES
 #include "OpenGLESDispatch/OpenGLDispatchLoader.h"
 #endif
@@ -137,6 +139,7 @@ void SyncThread::triggerWait(EmulatedEglFenceSync* fenceSync,
         [fenceSync, timeline, this](WorkerId) {
             doSyncWait(fenceSync, [timeline] {
                 DPRINT("wait done (with fence), use goldfish sync timeline inc");
+                remoting_stats::onFenceSignal();
                 gfxstream_sync_timeline_inc(timeline, kTimelineInterval);
             });
         },
@@ -286,6 +289,7 @@ void SyncThread::triggerWaitVk(VkFence vkFence, uint64_t timeline) {
         [vkFence, timeline](WorkerId) {
             doSyncWaitVk(vkFence, [timeline] {
                 DPRINT("vk wait done, use goldfish sync timeline inc");
+                remoting_stats::onFenceSignal();
                 gfxstream_sync_timeline_inc(timeline, kTimelineInterval);
             });
         },
@@ -325,11 +329,13 @@ void SyncThread::triggerWaitVkQsri(VkImage vkImage, uint64_t timeline) {
         [vkImage, timeline](WorkerId) {
             auto decoder = vk::VkDecoderGlobalState::get();
             auto res = decoder->registerQsriCallback(vkImage, [timeline](){
+                 remoting_stats::onFenceSignal();
                  gfxstream_sync_timeline_inc(timeline, kTimelineInterval);
             });
             // If registerQsriCallback does not schedule the callback, we still need to complete
             // the task, otherwise we may hit deadlocks on tasks on the same ring.
             if (!res.CallbackScheduledOrFired()) {
+                remoting_stats::onFenceSignal();
                 gfxstream_sync_timeline_inc(timeline, kTimelineInterval);
             }
         },

@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "renderControl_opcodes.h"
+#include "remoting_stats.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/ChecksumCalculatorThreadInfo.h"
 #include "gfxstream/host/ProtocolUtils.h"
@@ -44,6 +45,7 @@ size_t renderControl_decoder_context_t::decode(void *buf, size_t len, IOStream *
 	while (end - ptr >= 8) {
 		uint32_t opcode;
 		std::memcpy(&opcode, ptr, sizeof(uint32_t));
+		gfxstream::host::remoting_stats::setOpcode(opcode);
 
 		uint32_t packetLen;
 		std::memcpy(&packetLen, ptr + 4, sizeof(uint32_t));

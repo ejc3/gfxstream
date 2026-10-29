@@ -28,6 +28,7 @@
 // $CEREAL_OUTPUT_DIR
 //
 
+#include "remoting_stats.h"
 #include "vk_decoder.h"
 
 #include <cstring>
@@ -125,6 +126,7 @@ size_t VkDecoder::Impl::decode(void* buf, size_t len, IOStream* ioStream,
         const uint8_t* packet = (const uint8_t*)ptr;
         uint32_t opcode;
         std::memcpy(&opcode, ptr, sizeof(uint32_t));
+        gfxstream::host::remoting_stats::setOpcode(opcode);
 
         uint32_t packetLen;
         std::memcpy(&packetLen, ptr + 4, sizeof(uint32_t));

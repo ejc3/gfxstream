@@ -1037,6 +1037,7 @@ int ApiGen::genDecoderImpl(const std::string& filename) {
     fprintf(fp, "#include <string.h>\n");
     fprintf(fp, "\n");
     fprintf(fp, "#include \"%s_opcodes.h\"\n", m_basename.c_str());
+    fprintf(fp, "#include \"remoting_stats.h\"\n");
     fprintf(fp, "#include \"gfxstream/common/logging.h\"\n");
     fprintf(fp, "#include \"gfxstream/host/ChecksumCalculatorThreadInfo.h\"\n");
     fprintf(fp, "#include \"gfxstream/host/ProtocolUtils.h\"\n");
@@ -1083,6 +1084,7 @@ int ApiGen::genDecoderImpl(const std::string& filename) {
             "\twhile (end - ptr >= 8) {\n\
 \t\tuint32_t opcode;\n\
 \t\tstd::memcpy(&opcode, ptr, sizeof(uint32_t));\n\
+\t\tgfxstream::host::remoting_stats::setOpcode(opcode);\n\
 \n\
 \t\tuint32_t packetLen;\n\
 \t\tstd::memcpy(&packetLen, ptr + 4, sizeof(uint32_t));\n\
