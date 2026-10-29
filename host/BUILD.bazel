@@ -73,6 +73,7 @@ cc_library(
         "color_buffer.cpp",
         "color_buffer.h",
         "frame_buffer.cpp",
+        "mirror_tap.cpp",
         "read_buffer.cpp",
         "render_channel_impl.cpp",
         "render_control.cpp",
@@ -94,6 +95,7 @@ cc_library(
     hdrs = [
         "color_buffer.h",
         "frame_buffer.h",
+        "mirror_tap.h",
         "read_buffer.h",
         "render_channel_impl.h",
         "render_control.h",

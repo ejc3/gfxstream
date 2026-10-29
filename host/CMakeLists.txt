@@ -81,6 +81,7 @@ set(stream-server-core-sources
     channel_stream.cpp
     color_buffer.cpp
     frame_buffer.cpp
+    mirror_tap.cpp
     read_buffer.cpp
     render_channel_impl.cpp
     render_control.cpp
@@ -243,7 +244,8 @@ endfunction()
     add_executable(
         gfxstream_backend_unittests
         gfxstream_unittest.cpp
-        features/features_unittest.cpp)
+        features/features_unittest.cpp
+        mirror_tap_unittest.cpp)
     target_link_libraries(
         gfxstream_backend_unittests
         PRIVATE

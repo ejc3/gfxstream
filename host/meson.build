@@ -62,6 +62,7 @@ files_lib_gfxstream_backend = files(
   'channel_stream.cpp',
   'color_buffer.cpp',
   'frame_buffer.cpp',
+  'mirror_tap.cpp',
   'read_buffer.cpp',
   'render_api.cpp',
   'render_channel_impl.cpp',
