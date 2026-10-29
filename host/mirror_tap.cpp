@@ -14,6 +14,8 @@
 
 #include "mirror_tap.h"
 
+#if defined(__linux__)
+
 #include <errno.h>
 #include <poll.h>
 #include <stdio.h>
@@ -93,8 +95,10 @@ class Tap {
         mHead = mSize = 0;
     }
 
-    uint32_t openChannel(bool loaded) {
+    uint32_t openChannel(bool loaded, uint32_t* syncedEpoch) {
         std::lock_guard<std::mutex> l(mMu);
+        // A channel that opens while the copy runs is copied from its first byte.
+        *syncedEpoch = epoch.load(std::memory_order_relaxed);
         uint32_t id = ++mNextId;
         mOpen.insert(id);
         if (active.load(std::memory_order_relaxed)) recordLocked(kOpen, id, loaded ? 1 : 0, nullptr, 0, nullptr, 0);
@@ -111,6 +115,20 @@ class Tap {
         std::lock_guard<std::mutex> l(mMu);
         if (!active.load(std::memory_order_relaxed)) return;
         recordLocked(type, channel, aux, a, an, b, bn);
+    }
+
+    // One read's bytes. Under the lock with start(), so a channel's first copy after a start
+    // (by the epoch it last copied in) always begins at its oldest unconsumed byte.
+    void data(uint32_t channel, uint32_t* syncedEpoch, const unsigned char* start, size_t pending, size_t fresh) {
+        std::lock_guard<std::mutex> l(mMu);
+        if (!active.load(std::memory_order_relaxed)) return;
+        uint32_t e = epoch.load(std::memory_order_relaxed);
+        if (*syncedEpoch != e) {
+            *syncedEpoch = e;
+            recordLocked(kData, channel, 0, start, pending + fresh, nullptr, 0);
+            return;
+        }
+        recordLocked(kData, channel, 0, start + pending, fresh, nullptr, 0);
     }
 
     // Sender thread: blocks until there are bytes, then moves up to `max` of them into `out`.
@@ -224,6 +242,8 @@ void serveConsumer(int fd) {
     }
     tap().stop();
     gone.store(true);
+    // A consumer that stopped reading leaves the sender blocked in send(): end the socket first.
+    ::shutdown(fd, SHUT_RDWR);
     sender.join();
     ::close(fd);
 }
@@ -275,9 +295,7 @@ void initFromEnv() {
 
 void registerChannel(bool loadedFromSnapshot) {
     initFromEnv();
-    t_channel = tap().openChannel(loadedFromSnapshot);
-    // A channel that opens while the copy runs is copied from its first byte.
-    t_syncedEpoch = tap().epoch.load(std::memory_order_relaxed);
+    t_channel = tap().openChannel(loadedFromSnapshot, &t_syncedEpoch);
 }
 
 void unregisterChannel() {
@@ -288,14 +306,7 @@ void unregisterChannel() {
 
 void onGuestData(const unsigned char* start, size_t pending, size_t fresh) {
     if (!tap().active.load(std::memory_order_acquire) || !t_channel) return;
-    uint32_t e = tap().epoch.load(std::memory_order_relaxed);
-    if (t_syncedEpoch != e) {
-        // First copy since the start: from the oldest unconsumed packet, a packet boundary.
-        t_syncedEpoch = e;
-        tap().record(kData, t_channel, 0, start, pending + fresh, nullptr, 0);
-        return;
-    }
-    tap().record(kData, t_channel, 0, start + pending, fresh, nullptr, 0);
+    tap().data(t_channel, &t_syncedEpoch, start, pending, fresh);
 }
 
 void onReply(const void* data, size_t size) {
@@ -307,14 +318,21 @@ void onReply(const void* data, size_t size) {
 namespace {
 std::thread g_testConsumer;
 int g_testFd = -1;
+std::atomic<bool> g_testConsumerDone{false};
 }  // namespace
 
 void startForTest(int fd, size_t ringBytes) {
     stopForTest();
     tap().configure(ringBytes);
     g_testFd = fd;
-    g_testConsumer = std::thread([fd] { serveConsumer(fd); });
+    g_testConsumerDone = false;
+    g_testConsumer = std::thread([fd] {
+        serveConsumer(fd);
+        g_testConsumerDone = true;
+    });
 }
+
+bool consumerDoneForTest() { return g_testConsumerDone.load(); }
 
 void stopForTest() {
     tap().stop();
@@ -326,3 +344,22 @@ void stopForTest() {
 }  // namespace mirror
 }  // namespace host
 }  // namespace gfxstream
+
+#else  // the tap is Linux only: elsewhere every hook does nothing
+
+namespace gfxstream {
+namespace host {
+namespace mirror {
+void initFromEnv() {}
+void registerChannel(bool) {}
+void unregisterChannel() {}
+void onGuestData(const unsigned char*, size_t, size_t) {}
+void onReply(const void*, size_t) {}
+void startForTest(int, size_t) {}
+void stopForTest() {}
+bool consumerDoneForTest() { return true; }
+}  // namespace mirror
+}  // namespace host
+}  // namespace gfxstream
+
+#endif

@@ -16,7 +16,7 @@
 // every reply, for one consumer on a Unix socket, so a viewer can replay the guest's GL
 // command stream on a GPU of its own while this renderer keeps answering every call.
 //
-// Off unless GFXSTREAM_MIRROR_SOCKET names a socket path; then a consumer connects there
+// Linux only: elsewhere the hooks do nothing. Off unless GFXSTREAM_MIRROR_SOCKET names a socket path; then a consumer connects there
 // and sends 'S' to start the copy and 'X' to stop it. While stopped, each hook costs one
 // relaxed atomic load. While started, a hook copies its bytes into one bounded ring
 // (GFXSTREAM_MIRROR_RING_BYTES, default 32 MiB) under a mutex held for that copy only, and
@@ -32,7 +32,8 @@
 //   OPEN     2  a render channel started; aux 1 when its state was loaded from a snapshot
 //   CLOSE    3  a render channel ended
 //   DATA     4  bytes the guest sent on the channel, in the order they arrived
-//   REPLY    5  a reply to the guest; aux its full size, payload its first 256 bytes at most
+//   REPLY    5  a reply to the guest; aux its full size, payload its first 4096 bytes at most
+//               (every name a reply returns fits: a reply cut short is a readback)
 //   OVERFLOW 6  the ring was full; aux the size of the record that did not fit. The copy
 //               has stopped.
 #pragma once
@@ -55,7 +56,7 @@ enum RecordType : uint32_t {
 
 constexpr uint32_t kProtocolVersion = 1;
 constexpr size_t kHeaderSize = 24;
-constexpr size_t kReplyPrefix = 256;
+constexpr size_t kReplyPrefix = 4096;
 
 // Starts the listener if GFXSTREAM_MIRROR_SOCKET is set; idempotent.
 void initFromEnv();
@@ -75,6 +76,8 @@ void onReply(const void* data, size_t size);
 // For tests: serves `fd` as the consumer, with a ring of `ringBytes`.
 void startForTest(int fd, size_t ringBytes);
 void stopForTest();
+// Whether the consumer served by startForTest has finished on its own.
+bool consumerDoneForTest();
 
 }  // namespace mirror
 }  // namespace host

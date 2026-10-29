@@ -49,6 +49,7 @@ class Consumer {
     ~Consumer() { close(mFd); }
     int tapFd() const { return mTapFd; }
     void send(char c) { ASSERT_EQ(::write(mFd, &c, 1), 1); }
+    void hangUp() { ::shutdown(mFd, SHUT_WR); }
     // Reads until `n` records arrived or `ms` passed.
     std::vector<Record> read(size_t n, int ms = 2000) {
         auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
@@ -93,6 +94,49 @@ void onChannel(F f, bool loaded = false) {
     }).join();
 }
 
+// A reply that returns names is copied whole: 1024 sampler names are 4096 bytes. One longer
+// (a readback) is cut, its full size in aux.
+TEST(MirrorTap, RepliesWithNamesAreWholeAndReadbacksAreCut) {
+    Consumer c;
+    startForTest(c.tapFd(), 1 << 20);
+    c.send('S');
+    ASSERT_EQ(c.read(1).size(), 1u);
+    std::string names(4096, 'n'), pixels(100000, 'p');
+    onChannel([&] {
+        onReply(names.data(), names.size());
+        onReply(pixels.data(), pixels.size());
+    });
+    auto r = c.read(4);
+    ASSERT_EQ(r.size(), 4u);
+    EXPECT_EQ(r[1].payload, names);
+    EXPECT_EQ(r[2].aux, 100000u);
+    EXPECT_EQ(r[2].payload.size(), kReplyPrefix);
+    stopForTest();
+}
+
+// A consumer that stops reading does not keep the tap from its next consumer: its socket is
+// ended before its sender is joined.
+TEST(MirrorTap, AConsumerThatStopsReadingIsLetGo) {
+    Consumer c;
+    startForTest(c.tapFd(), 8 << 20);
+    c.send('S');
+    ASSERT_EQ(c.read(1).size(), 1u);
+    std::string chunk(1 << 20, 'x');
+    // more than the socket buffers hold, never read: the sender blocks in send()
+    onChannel([&] {
+        for (int i = 0; i < 6; i++) onGuestData((const unsigned char*)chunk.data(), 0, chunk.size());
+    });
+    // the consumer hangs up its side and goes on not reading
+    c.hangUp();
+    bool done = false;
+    for (int i = 0; i < 300 && !done; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        done = consumerDoneForTest();
+    }
+    EXPECT_TRUE(done) << "the tap still waits on a consumer that went";
+    stopForTest();
+}
+
 TEST(MirrorTap, StoppedCopiesNothing) {
     Consumer c;
     startForTest(c.tapFd(), 1 << 20);
@@ -130,7 +174,7 @@ TEST(MirrorTap, CopiesDataRepliesAndChannelLifetimes) {
     EXPECT_EQ(r[1].payload.size(), 12u);
     EXPECT_EQ(r[2].type, kReply);
     EXPECT_EQ(r[2].aux, 1000u);                    // the full size
-    EXPECT_EQ(r[2].payload, big.substr(0, 256));   // its start only
+    EXPECT_EQ(r[2].payload, big);                  // whole: it is under the 4096-byte cut
     EXPECT_EQ(r[3].type, kClose);
     EXPECT_LE(r[1].t, r[2].t);
     stopForTest();
@@ -175,20 +219,20 @@ TEST(MirrorTap, AFullRingStopsTheCopyWithAnOverflowRecord) {
     startForTest(c.tapFd(), 1 << 16);
     c.send('S');
     ASSERT_EQ(c.read(1).size(), 1u);
-    std::string chunk(40000, 'd');
+    // a read the ring cannot hold whatever the sender has drained: overflow, deterministically
+    std::string small(100, 'd'), big(70000, 'b');
     onChannel([&] {
-        onGuestData((const unsigned char*)chunk.data(), 0, chunk.size());
-        // too big for what is left: overflow
-        onGuestData((const unsigned char*)chunk.data(), 0, chunk.size());
+        onGuestData((const unsigned char*)small.data(), 0, small.size());
+        onGuestData((const unsigned char*)big.data(), 0, big.size());
         // after the overflow: not copied
-        onGuestData((const unsigned char*)chunk.data(), 0, 10);
+        onGuestData((const unsigned char*)small.data(), 0, 10);
     });
     auto r = c.read(10, 500);
     std::vector<uint32_t> types;
     for (auto& x : r) types.push_back(x.type);
     // OPEN, DATA, OVERFLOW; the CLOSE after the overflow is not copied either
     ASSERT_EQ(types, (std::vector<uint32_t>{kOpen, kData, kOverflow}));
-    EXPECT_EQ(r[2].aux, kHeaderSize + chunk.size());
+    EXPECT_EQ(r[2].aux, kHeaderSize + big.size());
     c.send('S');
     auto again = c.read(1);
     ASSERT_EQ(again.size(), 1u);
