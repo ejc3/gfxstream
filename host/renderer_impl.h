@@ -188,6 +188,9 @@ private:
     // textures it saved, which the loaded frame buffer may read lazily after.
     std::unique_ptr<MemStream> mReleasedState;
     std::shared_ptr<MemoryTextureStore> mReleasedTextures;
+    // Whether the released frame buffer had Vulkan: its render threads' saved state then
+    // holds Vulkan thread state, which a frame buffer without Vulkan cannot load.
+    bool mReleasedWithVulkan = false;
     // The loader of the last load, whose background texture loading a release stops.
     std::weak_ptr<ITextureLoader> mLastTextureLoader;
 };

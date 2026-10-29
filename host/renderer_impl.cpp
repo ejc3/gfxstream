@@ -860,6 +860,8 @@ bool RendererImpl::beginGpuRelease(std::string* error) {
     }
     mReleasedState = std::move(state);
     mReleasedTextures = std::move(textures);
+    const auto fb = FrameBuffer::getFB();
+    mReleasedWithVulkan = fb && fb->hasEmulationVk();
     return true;
 }
 
@@ -934,6 +936,19 @@ bool RendererImpl::retakeGpu(std::string* error) {
         return false;
     }
     mRenderWindow = std::move(renderWindow);
+    // A frame buffer whose Vulkan instance could not be created carries on without Vulkan
+    // (FrameBuffer::create's recovery), but the saved render threads still hold Vulkan
+    // thread state, and loading them would abort ("VkDecoderGlobalState not initialized").
+    // Stay released instead: the saved state is kept and a later retake can bring Vulkan up.
+    if (mReleasedWithVulkan) {
+        const auto fb = FrameBuffer::getFB();
+        if (!fb || !fb->hasEmulationVk()) {
+            backToReleased();
+            *error = "Vulkan did not come back on the GPU (no Vulkan instance), and the saved "
+                     "render threads need it";
+            return false;
+        }
+    }
     for (FrameBufferChangeEventListener* listener : mListeners) {
         mRenderWindow->addListener(listener);
     }
