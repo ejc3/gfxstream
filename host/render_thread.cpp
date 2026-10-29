@@ -39,6 +39,7 @@
 #include "render_thread_info.h"
 #include "vulkan/vk_common_operations.h"
 #include "vulkan/vk_decoder_context.h"
+#include "mirror_tap.h"
 
 namespace gfxstream {
 namespace host {
@@ -402,6 +403,10 @@ intptr_t RenderThread::main() {
         (void)flags;
     }
 
+    // From here every byte this channel reads, and every reply it sends, goes to the mirror
+    // tap while a consumer has it started (mirror_tap.h).
+    mirror::registerChannel(needRestoreFromSnapshot);
+
     int stats_totalBytes = 0;
     uint64_t stats_progressTimeUs = 0;
     auto stats_t0 = gfxstream::base::getHighResTimeUs() / 1000;
@@ -602,6 +607,7 @@ intptr_t RenderThread::main() {
     }
 #endif
 
+    mirror::unregisterChannel();
     setFinished();
     // Since we now control when the thread exits, we must make sure the RenderThreadInfo is
     // destroyed after the RenderThread is finished, as the RenderThreadInfo cleanup thread is

@@ -22,6 +22,7 @@
 #include <algorithm>
 
 #include "gfxstream/common/logging.h"
+#include "mirror_tap.h"
 
 namespace gfxstream {
 namespace host {
@@ -87,6 +88,7 @@ int ReadBuffer::getData(IOStream* stream, size_t minSize) {
     }
 
     // get fresh data into the buffer;
+    const size_t pending = m_validData;
     size_t readTotal = 0;
     do {
         const size_t readNow = stream->read(m_readPtr + m_validData,
@@ -94,6 +96,7 @@ int ReadBuffer::getData(IOStream* stream, size_t minSize) {
 
         if (!readNow) {
             if (readTotal > 0) {
+                mirror::onGuestData(m_readPtr, pending, readTotal);
                 return readTotal;
             } else {
                 return -1;
@@ -103,6 +106,7 @@ int ReadBuffer::getData(IOStream* stream, size_t minSize) {
         m_validData += readNow;
     } while (readTotal < minSizeToRead);
 
+    mirror::onGuestData(m_readPtr, pending, readTotal);
     return readTotal;
 }
 

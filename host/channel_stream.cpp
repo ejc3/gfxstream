@@ -16,10 +16,13 @@
 #include <assert.h>
 #include <memory.h>
 
+#include <algorithm>
+
 #include "gfxstream/host/stream_utils.h"
 #include "gfxstream/host/dma_device.h"
 #include "gfxstream/common/logging.h"
 #include "render-utils/RenderChannel.h"
+#include "mirror_tap.h"
 
 namespace gfxstream {
 namespace host {
@@ -39,6 +42,7 @@ void* ChannelStream::allocBuffer(size_t minSize) {
 }
 
 int ChannelStream::commitBuffer(size_t size) {
+    mirror::onReply(mWriteBuffer.data(), std::min(size, mWriteBuffer.size()));
     assert(size <= mWriteBuffer.size());
     if (size > mWriteBuffer.size()) {
         size = mWriteBuffer.size();

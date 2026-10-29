@@ -15,6 +15,7 @@
 #include "emulation_gl.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <vector>
@@ -474,6 +475,23 @@ std::unique_ptr<EmulationGl> EmulationGl::create(uint32_t width, uint32_t height
             // Intel gpu driver has crashes when guest is running
             // gles 3.1. so we have to cap the max gles to 3.0
             if (!ChooseGlesVersionAndPopulateDispatch(GLES_DISPATCH_MAX_VERSION_3_0)) {
+                return nullptr;
+            }
+        }
+    }
+
+    // GFXSTREAM_MAX_GLES_VERSION=2.0 or 3.0 caps what the guest is offered, whatever the host
+    // GPU supports. A guest whose command stream is replayed on WebGL2 (the mirror tap,
+    // mirror_tap.h) is offered no more than WebGL2 can honor. The guest reads its version at
+    // boot, so a running guest keeps the version it booted with.
+    if (const char* cap = getenv("GFXSTREAM_MAX_GLES_VERSION")) {
+        GLESDispatchMaxVersion want = GLES_DISPATCH_MAX_VERSION_3_2;
+        if (!strcmp(cap, "2.0")) want = GLES_DISPATCH_MAX_VERSION_2;
+        if (!strcmp(cap, "3.0")) want = GLES_DISPATCH_MAX_VERSION_3_0;
+        if (!strcmp(cap, "3.1")) want = GLES_DISPATCH_MAX_VERSION_3_1;
+        if (emulationGl->mGlesDispatchMaxVersion > want) {
+            GFXSTREAM_INFO("Capping the guest's GLES version at %s (GFXSTREAM_MAX_GLES_VERSION).", cap);
+            if (!ChooseGlesVersionAndPopulateDispatch(want)) {
                 return nullptr;
             }
         }
