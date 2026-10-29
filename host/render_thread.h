@@ -54,7 +54,8 @@ class RenderThread : public gfxstream::base::Thread {
     bool isFinished() const { return mFinished.load(std::memory_order_relaxed); }
     void waitForFinished();
 
-    void pausePreSnapshot();
+    // `guestRunning`: a mirror join, whose guest keeps running (RenderChannelImpl::pausePreSnapshot).
+    void pausePreSnapshot(bool guestRunning = false);
     void resume();
     void save(gfxstream::Stream* stream);
     // After pausePreSnapshot(): blocks until this thread has stopped

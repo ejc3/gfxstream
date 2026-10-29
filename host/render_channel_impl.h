@@ -98,7 +98,11 @@ class RenderChannelImpl final : public RenderChannel {
     // channel, but it should not return any data back. This way we can make
     // sure all data at the snapshot time is here and is saved, and we won't
     // miss some important rendering call.
-    void pausePreSnapshot();
+    // Stops the render thread at its next read: guest-to-host reads fail once that queue is
+    // empty, which wakes the thread into its pause. With `guestRunning` (a mirror join, whose
+    // guest keeps running) the host-to-guest queue is left alone, so a guest reading an
+    // empty queue still gets TryAgain instead of an error that ends its connection.
+    void pausePreSnapshot(bool guestRunning = false);
 
     // Resume the normal operation after saving or loading a snapshot.
     void resume();

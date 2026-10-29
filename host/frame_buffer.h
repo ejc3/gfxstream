@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -416,6 +417,15 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     static const uint32_t s_maxNumMultiDisplay = 11;
 
     HandleType getLastPostedColorBuffer();
+
+    // For the GPU mirror's join (mirror_tap.h): every color buffer, read back as RGBA8 in
+    // glReadPixels' row order, handed to `out` one at a time. Call with every render thread
+    // paused. Returns the number of color buffers it could not read.
+    using MirrorColorBufferSink =
+        std::function<void(HandleType handle, uint32_t width, uint32_t height, uint32_t format,
+                           uint32_t refcount, bool opened, const uint8_t* rgba, size_t size)>;
+    uint32_t saveColorBuffersForMirror(const MirrorColorBufferSink& out);
+
     void asyncWaitForGpuVulkanWithCb(uint64_t deviceHandle, uint64_t fenceHandle, FenceCompletionCallback cb);
     void asyncWaitForGpuVulkanQsriWithCb(uint64_t image, FenceCompletionCallback cb);
 

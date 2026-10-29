@@ -143,7 +143,7 @@ RenderThread::~RenderThread() {
     decrementRenderThreadCount();
 }
 
-void RenderThread::pausePreSnapshot() {
+void RenderThread::pausePreSnapshot(bool guestRunning) {
     AutoLock lock(mLock);
     assert(mState == SnapshotState::Empty);
     mStream.emplace();
@@ -154,7 +154,7 @@ void RenderThread::pausePreSnapshot() {
         // mSnapshotSignal.broadcastAndUnlock(&lock);
     }
     if (mChannel) {
-        mChannel->pausePreSnapshot();
+        mChannel->pausePreSnapshot(guestRunning);
         mSnapshotSignal.broadcastAndUnlock(&lock);
     }
 }
