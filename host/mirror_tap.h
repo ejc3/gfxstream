@@ -36,6 +36,10 @@
 //               (every name a reply returns fits: a reply cut short is a readback)
 //   OVERFLOW 6  the ring was full; aux the size of the record that did not fit. The copy
 //               has stopped.
+//   FREE     7  channel 0; aux the handle of a color buffer the host destroyed, however its
+//               last reference went (rcCloseColorBuffer, the guest's refcount pipe, or the
+//               cleanup of a process that ended). The handle names nothing until the guest
+//               creates a color buffer with it again.
 #pragma once
 
 #include <stddef.h>
@@ -52,6 +56,7 @@ enum RecordType : uint32_t {
     kData = 4,
     kReply = 5,
     kOverflow = 6,
+    kFree = 7,
 };
 
 constexpr uint32_t kProtocolVersion = 1;
@@ -70,8 +75,11 @@ void unregisterChannel();
 // copy started includes `pending`, so it starts at a packet boundary.
 void onGuestData(const unsigned char* start, size_t pending, size_t fresh);
 
-// ChannelStream::commitBuffer: a reply to the guest.
+// ChannelStream::commitBuffer and RingStream::commitBuffer: a reply to the guest.
 void onReply(const void* data, size_t size);
+
+// FrameBuffer: the color buffer `handle` was destroyed. Any thread.
+void onColorBufferFreed(uint32_t handle);
 
 // For tests: serves `fd` as the consumer, with a ring of `ringBytes`.
 void startForTest(int fd, size_t ringBytes);

@@ -114,6 +114,27 @@ TEST(MirrorTap, RepliesWithNamesAreWholeAndReadbacksAreCut) {
     stopForTest();
 }
 
+// A color buffer the host destroys is named in a FREE record from whichever thread destroyed
+// it, while the copy runs, and in none while it is stopped.
+TEST(MirrorTap, AColorBufferTheHostFreesIsNamed) {
+    Consumer c;
+    startForTest(c.tapFd(), 1 << 20);
+    onColorBufferFreed(5);  // stopped: nothing
+    c.send('S');
+    ASSERT_EQ(c.read(1).size(), 1u);
+    std::thread([] { onColorBufferFreed(42); }).join();  // not a render thread
+    auto r = c.read(1);
+    ASSERT_EQ(r.size(), 1u);
+    EXPECT_EQ(r[0].type, (uint32_t)kFree);
+    EXPECT_EQ(r[0].channel, 0u);
+    EXPECT_EQ(r[0].aux, 42u);
+    EXPECT_EQ(r[0].len, 0u);
+    c.send('X');
+    onColorBufferFreed(43);
+    EXPECT_TRUE(c.read(1, 200).empty());
+    stopForTest();
+}
+
 // A consumer that stops reading does not keep the tap from its next consumer: its socket is
 // ended before its sender is joined.
 TEST(MirrorTap, AConsumerThatStopsReadingIsLetGo) {

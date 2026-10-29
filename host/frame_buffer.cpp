@@ -43,6 +43,7 @@
 #endif
 
 #include "color_buffer.h"
+#include "mirror_tap.h"
 #include "gfxstream/ThreadAnnotations.h"
 #include "gfxstream/Tracing.h"
 #include "gfxstream/common/logging.h"
@@ -2354,6 +2355,7 @@ bool FrameBuffer::Impl::closeColorBufferLocked(HandleType p_colorbuffer, bool fo
         if (--c->second.refcount == 0) {
             if (forced) {
                 eraseDelayedCloseColorBufferLocked(c->first, c->second.closedTs);
+                mirror::onColorBufferFreed(p_colorbuffer);
                 m_colorbuffers.erase(c);
                 deleted = true;
             } else {
@@ -2398,6 +2400,7 @@ void FrameBuffer::Impl::performDelayedColorBufferCloseLocked(bool forced) {
             AutoLock colorBufferMapLock(m_colorBufferMapLock);
             const auto& cb = m_colorbuffers.find(it->cbHandle);
             if (cb != m_colorbuffers.end()) {
+                mirror::onColorBufferFreed(it->cbHandle);
                 m_colorbuffers.erase(cb);
             }
         }
@@ -3164,6 +3167,7 @@ bool FrameBuffer::Impl::decColorBufferRefCountLocked(HandleType p_colorbuffer) {
     if (it != m_colorbuffers.end()) {
         it->second.refcount -= 1;
         if (it->second.refcount == 0) {
+            mirror::onColorBufferFreed(p_colorbuffer);
             m_colorbuffers.erase(p_colorbuffer);
             return true;
         }
