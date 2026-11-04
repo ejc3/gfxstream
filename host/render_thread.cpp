@@ -405,7 +405,7 @@ intptr_t RenderThread::main() {
 
     // From here every byte this channel reads, and every reply it sends, goes to the mirror
     // tap while a consumer has it started (mirror_tap.h).
-    mirror::registerChannel(needRestoreFromSnapshot);
+    mMirrorChannel.store(mirror::registerChannel(needRestoreFromSnapshot), std::memory_order_relaxed);
 
     int stats_totalBytes = 0;
     uint64_t stats_progressTimeUs = 0;

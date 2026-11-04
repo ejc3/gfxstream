@@ -320,8 +320,12 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     AsyncResult composeWithCallback(uint32_t bufferSize, void* buffer,
                              Post::CompletionCallback callback);
 
+    // `waitForCleanup` false: a mirror join, whose render threads are paused with the guest
+    // running. A process that ends meanwhile queues a cleanup that waits for those paused
+    // threads to exit, so waiting for it would never return; that cleanup frees nothing until
+    // they have exited (cleanupGuestProcess), after the join resumes them.
     bool onSave(Stream* stream,
-                const ITextureSaverPtr& textureSaver);
+                const ITextureSaverPtr& textureSaver, bool waitForCleanup = true);
     bool onLoad(Stream* stream,
                 const ITextureLoaderPtr& textureLoader);
 

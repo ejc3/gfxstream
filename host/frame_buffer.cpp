@@ -515,7 +515,8 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     AsyncResult composeWithCallback(uint32_t bufferSize, void* buffer,
                                     Post::CompletionCallback callback);
 
-    bool onSave(gfxstream::Stream* stream, const ITextureSaverPtr& textureSaver);
+    bool onSave(gfxstream::Stream* stream, const ITextureSaverPtr& textureSaver,
+                bool waitForCleanup = true);
     bool onLoad(gfxstream::Stream* stream, const ITextureLoaderPtr& textureLoader);
     uint32_t saveColorBuffersForMirror(const FrameBuffer::MirrorColorBufferSink& out);
 
@@ -3262,9 +3263,11 @@ AsyncResult FrameBuffer::Impl::composeWithCallback(uint32_t bufferSize, void* bu
     }
 }
 
-bool FrameBuffer::Impl::onSave(Stream* stream,
-                               const ITextureSaverPtr& textureSaver) NO_THREAD_SAFETY_ANALYSIS {
-    waitForProcessCleanup();
+bool FrameBuffer::Impl::onSave(Stream* stream, const ITextureSaverPtr& textureSaver,
+                               bool waitForCleanup) NO_THREAD_SAFETY_ANALYSIS {
+    if (waitForCleanup) {
+        waitForProcessCleanup();
+    }
 
     // Things we do not need to snapshot:
     //     m_eglSurface
@@ -4932,8 +4935,9 @@ AsyncResult FrameBuffer::composeWithCallback(uint32_t bufferSize, void* buffer,
     return mImpl->composeWithCallback(bufferSize, buffer, callback);
 }
 
-bool FrameBuffer::onSave(gfxstream::Stream* stream, const ITextureSaverPtr& textureSaver) {
-    return mImpl->onSave(stream, textureSaver);
+bool FrameBuffer::onSave(gfxstream::Stream* stream, const ITextureSaverPtr& textureSaver,
+                         bool waitForCleanup) {
+    return mImpl->onSave(stream, textureSaver, waitForCleanup);
 }
 
 bool FrameBuffer::onLoad(gfxstream::Stream* stream, const ITextureLoaderPtr& textureLoader) {
