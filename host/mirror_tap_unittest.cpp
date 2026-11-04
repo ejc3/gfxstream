@@ -303,16 +303,20 @@ TEST(MirrorTap, AJoinSendsItsPartsBeforeWhatFollowedTheStart) {
     stopForTest();
 }
 
-// No handler, or one that refuses before it began: 'J' starts the copy as 'S' does.
-TEST(MirrorTap, AJoinWithoutStateIsAStart) {
+// No handler, or one that refuses before it began: the copy starts with a refused END after
+// the HELLO, so the consumer knows no snapshot follows, then goes on as for 'S'.
+TEST(MirrorTap, AJoinWithoutStateIsAStartWithARefusedEnd) {
     for (bool handler : {false, true}) {
         Consumer c;
         startForTest(c.tapFd(), 1 << 16);
         if (handler) setJoinHandler([](JoinWriter&) { return false; });
         c.send('J');
-        auto hello = c.read(1);
-        ASSERT_EQ(hello.size(), 1u);
+        auto hello = c.read(2);
+        ASSERT_EQ(hello.size(), 2u);
         EXPECT_EQ(hello[0].type, kHello);
+        EXPECT_EQ(hello[1].type, kJoin);
+        EXPECT_EQ(hello[1].aux, kJoinEnd);
+        EXPECT_EQ(get32((const unsigned char*)hello[1].payload.data()), kJoinRefused);
         onChannel([] {
             const unsigned char b[8] = {1, 2, 3, 4, 8, 0, 0, 0};
             onGuestData(b, 0, sizeof b);

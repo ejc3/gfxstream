@@ -279,21 +279,29 @@ class TapJoinWriter : public JoinWriter {
     bool mBegan = false;
 };
 
-// 'J': the copy started at the renderer's saved state, or as for 'S' when it cannot save one.
+// The copy started with no snapshot: the HELLO, then a refused END.
+void startRefused() {
+    tap().start(/*hold=*/true);
+    const uint32_t end[5] = {kJoinRefused, 0, 0, 0, 0};
+    tap().joinPart(kJoinEnd, end, sizeof end, nullptr, 0);
+    tap().endJoin();
+}
+
+// 'J': the copy started at the renderer's saved state, or with a refused END when it has none.
 void join() {
     std::lock_guard<std::mutex> l(g_joinMu);
     if (!g_join) {
-        tap().start();
+        startRefused();
         return;
     }
     TapJoinWriter w;
     bool ok = g_join(w);
     if (!w.began()) {
-        tap().start();
+        startRefused();
         return;
     }
     if (!ok) {
-        uint32_t end[4] = {kJoinFailed, 0, 0, 0};
+        uint32_t end[5] = {kJoinFailed, 0, 0, 0, 0};
         tap().joinPart(kJoinEnd, end, sizeof end, nullptr, 0);
     }
     tap().endJoin();

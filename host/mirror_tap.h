@@ -48,15 +48,16 @@
 // the copy (JoinWriter::begin) while they are paused, saves its state as JOIN parts, resumes
 // them and writes END. Records that render threads make meanwhile wait in the ring until the
 // handler returns. The JOIN parts are not bounded by the ring: they are sent as they are
-// written. With no handler, or one that refuses before it began, 'J' is 'S'.
+// written. With no handler, or one that refuses before it began, the copy starts as for 'S'
+// with one END (status 2, refused) after the HELLO, so the consumer knows no snapshot follows.
 //
 // JOIN parts, little-endian u32s:
 //   BEGIN        1  version (1)
 //   COLOR_BUFFER 2  handle, width, height, format (gfxstream's GfxstreamFormat), refcount,
 //                   flags (bit 0: opened); then width * height * 4 bytes of RGBA8: its rows from
 //                   GL's row 0 (glReadPixels' order)
-//   END          3  status (0: every part above is whole; else the join failed and the state
-//                   is incomplete), the render threads' pause in microseconds, the color buffer
+//   END          3  status (0: every part above is whole; 1: the join failed and the state is
+//                   incomplete; 2: refused, no snapshot, and nothing came before it but the HELLO), the render threads' pause in microseconds, the color buffer
 //                   posted last (0: none), the color buffers skipped (an unreadable format)
 #pragma once
 
@@ -89,6 +90,7 @@ enum JoinPart : uint32_t {
 constexpr uint32_t kJoinVersion = 1;
 constexpr uint32_t kJoinOk = 0;
 constexpr uint32_t kJoinFailed = 1;
+constexpr uint32_t kJoinRefused = 2;
 
 constexpr uint32_t kProtocolVersion = 1;
 constexpr size_t kHeaderSize = 24;
@@ -124,7 +126,7 @@ class JoinWriter {
 };
 
 // Runs on the consumer's thread for a 'J'. Returns false when it could not save the state: if
-// it began, the tap ends the join with a failed END; if not, the copy starts as for 'S'.
+// it began, the tap ends the join with a failed END; if not, with a refused one.
 using JoinHandler = std::function<bool(JoinWriter&)>;
 
 // The renderer's join handler (an empty function: none). Blocks until a running join ends.
