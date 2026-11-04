@@ -447,7 +447,7 @@ mirror::JoinWriter& w) {
         MemStream state;
         auto textures = std::make_shared<MemoryTextureStore>();
         ITextureSaverPtr saver = textures;
-        if (fb->onSave(&state, saver)) {
+        if (fb->onSave(&state, saver, /*waitForCleanup=*/false)) {
             w.part(mirror::kJoinGlState, state.buffer().data(), state.buffer().size(), nullptr, 0);
             glBytes += state.buffer().size();
             for (const auto& [id, bytes] : textures->textures()) {
