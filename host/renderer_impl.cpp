@@ -108,10 +108,14 @@ bool RendererImpl::initialize(int width, int height, const gfxstream::host::Feat
     mLoaderRenderThread.reset(new RenderThread(nullptr));
     mLoaderRenderThread->start();
 
+    mirror::setJoinHandler([this](mirror::JoinWriter& w) { return saveMirrorJoin(w); });
+
     return true;
 }
 
 void RendererImpl::stop(bool wait) {
+    // waits for a running join, which pauses and resumes these channels
+    mirror::setJoinHandler(nullptr);
     std::unique_lock<std::mutex> lock(mChannelsMutex);
     mStopped = true;
     auto channels = std::move(mChannels);
@@ -289,6 +293,16 @@ void RendererImpl::addressSpaceGraphicsConsumerReloadRingConfig(void* consumer) 
 }
 
 bool RendererImpl::pauseAllPreSave() {
+    std::lock_guard<std::mutex> join(mJoinMutex);
+    if (!pauseRenderThreads()) {
+        return false;
+    }
+    mPausedByEmbedder = true;
+    return true;
+}
+
+bool RendererImpl::pauseRenderThreads(std::chrono::steady_clock::time_point* askedAt,
+                                      bool guestRunning) {
     {
         std::lock_guard<std::mutex> lock(mChannelsMutex);
         if (mStopped) {
@@ -303,14 +317,23 @@ bool RendererImpl::pauseAllPreSave() {
         if (mStopped) {
             return true;
         }
+        if (askedAt) {
+            *askedAt = std::chrono::steady_clock::now();
+        }
         for (const auto& c : mChannels) {
-            c->renderThread()->pausePreSnapshot();
+            c->renderThread()->pausePreSnapshot(guestRunning);
         }
     }
     return true;
 }
 
 void RendererImpl::resumeAll() {
+    std::lock_guard<std::mutex> join(mJoinMutex);
+    mPausedByEmbedder = false;
+    resumeRenderThreads();
+}
+
+void RendererImpl::resumeRenderThreads() {
     {
         std::lock_guard<std::mutex> lock(mAddressSpaceRenderThreadMutex);
         for (const auto t : mAdditionalPostLoadRenderThreads) {
@@ -332,6 +355,71 @@ void RendererImpl::resumeAll() {
     }
 
     repaintOpenGLDisplay();
+}
+
+bool RendererImpl::saveMirrorJoin(mirror::JoinWriter& w) {
+    std::lock_guard<std::mutex> join(mJoinMutex);
+    if (mPausedByEmbedder || mGpuReleased) {
+        GFXSTREAM_INFO("mirror join refused: the render threads are paused or the GPU released");
+        return false;
+    }
+    {
+        // the join pauses render channels only, not address space graphics threads
+        std::lock_guard<std::mutex> lock(mAddressSpaceRenderThreadMutex);
+        if (!mAddressSpaceRenderThreads.empty()) {
+            GFXSTREAM_INFO("mirror join refused: the guest uses address space graphics");
+            return false;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(mChannelsMutex);
+        if (mStopped) {
+            return false;
+        }
+    }
+    auto fb = FrameBuffer::getFB();
+    if (!fb) {
+        return false;
+    }
+    std::chrono::steady_clock::time_point pausedAt;
+    // the guest keeps running: its reads must not fail while the threads are paused
+    if (!pauseRenderThreads(&pausedAt, /*guestRunning=*/true)) {
+        GFXSTREAM_INFO("mirror join refused: timed out waiting for guest process cleanup");
+        return false;
+    }
+    // pausePreSnapshot() only asks: wait until every thread has stopped at a read boundary
+    std::vector<std::shared_ptr<RenderChannelImpl>> channels;
+    {
+        std::lock_guard<std::mutex> lock(mChannelsMutex);
+        channels = mChannels;
+    }
+    for (const auto& c : channels) {
+        c->renderThread()->waitForPausePreSnapshot();
+    }
+    // Every thread is at a read boundary: the copy starts here, and each channel's first copy
+    // begins at its oldest unconsumed byte, where the saved state leaves off.
+    w.begin();
+    uint32_t count = 0;
+    uint64_t bytes = 0;
+    const uint32_t skipped = fb->saveColorBuffersForMirror(
+        [&](HandleType handle, uint32_t width, uint32_t height, uint32_t format, uint32_t refcount,
+            bool opened, const uint8_t* rgba, size_t size) {
+            const uint32_t head[6] = {handle, width, height, format, refcount, opened ? 1u : 0u};
+            w.part(mirror::kJoinColorBuffer, head, sizeof head, rgba, size);
+            count++;
+            bytes += size;
+        });
+    const uint32_t lastPosted = fb->getLastPostedColorBuffer();
+    resumeRenderThreads();
+    const auto pauseUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - pausedAt)
+                             .count();
+    const uint32_t end[4] = {mirror::kJoinOk, (uint32_t)std::min<int64_t>(pauseUs, UINT32_MAX),
+                             lastPosted, skipped};
+    w.part(mirror::kJoinEnd, end, sizeof end, nullptr, 0);
+    GFXSTREAM_INFO("mirror join: %u color buffers (%llu bytes, %u skipped), render threads paused %lld us",
+                   count, (unsigned long long)bytes, skipped, (long long)pauseUs);
+    return true;
 }
 
 bool RendererImpl::save(gfxstream::Stream* stream,

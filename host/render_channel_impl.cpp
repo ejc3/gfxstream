@@ -183,10 +183,10 @@ RenderThread* RenderChannelImpl::renderThread() const {
     return mRenderThread.get();
 }
 
-void RenderChannelImpl::pausePreSnapshot() {
+void RenderChannelImpl::pausePreSnapshot(bool guestRunning) {
     AutoLock lock(mLock);
     mFromGuest.setSnapshotModeLocked(true);
-    mToGuest.setSnapshotModeLocked(true);
+    if (!guestRunning) mToGuest.setSnapshotModeLocked(true);
 }
 
 void RenderChannelImpl::resume() {
