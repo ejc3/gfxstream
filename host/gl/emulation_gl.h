@@ -212,10 +212,11 @@ class EmulationGl {
     void createTrivialContext(HandleType shared, HandleType* contextOut, HandleType* surfOut);
     // Restores every share group a snapshot load left for its first use, on the calling
     // thread: the translator restores a loaded share group when one of its contexts is first
-    // made current, recompiling and relinking each program it holds, and the guest thread
-    // that makes it current waits for that. This makes a context of each group current here
-    // first (a temporary one sharing with each loaded context), so the guest's finds it
-    // restored. Stops between contexts once |stop| is set; returns the contexts visited.
+    // made current, compiling and linking again each program it holds, and the guest thread
+    // that makes it current waits for that, holding the graphics driver lock. This restores
+    // each loaded context's group here first (eglRestoreContextShareGroup, outside that lock),
+    // so the guest finds it restored. Stops between groups once |stop| is set; returns how
+    // many groups it restored.
     int restoreShareGroups(const std::atomic<bool>& stop);
     void createSharedTrivialContext(EGLContext* contextOut, EGLSurface* surfOut);
     void destroySharedTrivialContext(EGLContext context, EGLSurface surface);

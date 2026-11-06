@@ -451,11 +451,9 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
 
     void postWithCallback(HandleType p_colorbuffer, Post::CompletionCallback callback,
                           bool needLockAndBind = true);
-    bool hasGuestPostedAFrame() { return m_guestPostedAFrame.load(std::memory_order_acquire); }
-    void resetGuestPostedAFrame() {
-        m_guestPostedAFrameTime = std::nullopt;
-        m_guestPostedAFrame.store(false, std::memory_order_release);
-    }
+    bool hasGuestPostedAFrame() { return m_guestPostedAFrameTime.has_value(); }
+    void resetGuestPostedAFrame() { m_guestPostedAFrameTime = std::nullopt; }
+    uint64_t guestPostCount() const { return m_guestPosts.load(std::memory_order_acquire); }
 
     void doPostCallback(void* pixels, uint32_t displayId);
 
@@ -857,7 +855,6 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     bool postImplSync(HandleType p_colorbuffer, bool needLockAndBind = true, bool repaint = false);
     void setGuestPostedAFrame() {
         m_guestPostedAFrameTime = std::chrono::steady_clock::now();
-        m_guestPostedAFrame.store(true, std::memory_order_release);
         m_framebuffer->fireEvent({FrameBufferChange::FrameReady, mFrameNumber++});
     }
     bool createColorBufferWithResourceHandleLocked(int p_width, int p_height,
@@ -941,9 +938,10 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     };
     gfxstream::base::WorkerProcessingResult sendReadbackWorkerCmd(const Readback& readback);
     std::optional<std::chrono::steady_clock::time_point> m_guestPostedAFrameTime;
-    // Whether m_guestPostedAFrameTime is set, for threads other than the posting one
-    // (RendererImpl's share group restore waits on it).
-    std::atomic<bool> m_guestPostedAFrame{false};
+    // The frames the guest posted (post() and postWithCallback()), not the frame buffer's own
+    // reposts, which a snapshot load makes before the guest runs: RendererImpl's share group
+    // restore waits for the guest's first frame after a retake.
+    std::atomic<uint64_t> m_guestPosts{0};
 
     struct onPost {
         Renderer::OnPostCallback cb;
@@ -2695,7 +2693,10 @@ bool FrameBuffer::Impl::updateColorBufferDeprecated(HandleType colorbuffer, int 
 
 bool FrameBuffer::Impl::post(HandleType p_colorbuffer, bool needLockAndBind) {
     auto res = postImplSync(p_colorbuffer, needLockAndBind);
-    if (res) setGuestPostedAFrame();
+    if (res) {
+        setGuestPostedAFrame();
+        m_guestPosts.fetch_add(1, std::memory_order_acq_rel);
+    }
     return res;
 }
 
@@ -2704,6 +2705,7 @@ void FrameBuffer::Impl::postWithCallback(HandleType p_colorbuffer,
     AsyncResult res = postImpl(p_colorbuffer, callback, needLockAndBind);
     if (res.Succeeded()) {
         setGuestPostedAFrame();
+        m_guestPosts.fetch_add(1, std::memory_order_acq_rel);
     }
 
     if (!res.CallbackScheduledOrFired()) {
@@ -4887,6 +4889,8 @@ void FrameBuffer::postWithCallback(HandleType p_colorbuffer, Post::CompletionCal
 }
 
 bool FrameBuffer::hasGuestPostedAFrame() { return mImpl->hasGuestPostedAFrame(); }
+
+uint64_t FrameBuffer::guestPostCount() const { return mImpl->guestPostCount(); }
 
 void FrameBuffer::resetGuestPostedAFrame() { mImpl->resetGuestPostedAFrame(); }
 

@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <string>
+#include <chrono>
 #include <thread>
 
 #include "gfxstream/common/testing/graphics_test_environment.h"
@@ -633,8 +634,10 @@ TEST(FrameBufferReleaseTest, ReleaseDetachesTheLastSnapshotLoader) {
 // A retake restores the share groups it loaded on a thread of its own once the guest has
 // posted a frame, so the guest's first use of a loaded context finds its group restored:
 // making it current restores nothing on the guest's thread. Without it, the first
-// makeCurrent recompiles and relinks every program of the group while the guest waits (in
-// fcvm, a phone's browser brought to the front after a retake waited 2.7 s).
+// makeCurrent compiles and links every program of the group again while the guest waits (in
+// fcvm, a phone's browser brought to the front after a retake waited 2.7 s). The restore waits
+// for the guest's own frame: the load's repost of the last posted frame is not one, and a
+// restore started by it delayed the retake's first frame from 0.6 to 3.0 s.
 TEST(FrameBufferReleaseTest, RetakeRestoresShareGroupsBeforeTheGuestUsesThem) {
     ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
     if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
@@ -646,7 +649,7 @@ TEST(FrameBufferReleaseTest, RetakeRestoresShareGroupsBeforeTheGuestUsesThem) {
     auto renderer = std::make_shared<RendererImpl>();
     ASSERT_TRUE(renderer->initialize(256, 256, features, false));
     FrameBuffer* fb = FrameBuffer::getFB();
-    auto* threadInfo = new RenderThreadInfo();
+    auto threadInfo = std::make_unique<RenderThreadInfo>();
     threadInfo->initGl(fb->getEmulationGl());
     const HandleType context = fb->createEmulatedEglContext(0, 0, GLESApi_3_0);
     const HandleType surface = fb->createEmulatedEglWindowSurface(0, 256, 256);
@@ -660,7 +663,10 @@ TEST(FrameBufferReleaseTest, RetakeRestoresShareGroupsBeforeTheGuestUsesThem) {
         "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n");
     ASSERT_NE(0, program);
     ASSERT_TRUE(fb->bindContext(0, 0, 0));
-    delete threadInfo;
+    // a posted frame, which the load reposts (opened, as a guest's window holds it)
+    fb->openColorBuffer(colorBuffer);
+    ASSERT_TRUE(fb->post(colorBuffer));
+    threadInfo.reset();
 
     std::string error;
     ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
@@ -668,11 +674,18 @@ TEST(FrameBufferReleaseTest, RetakeRestoresShareGroupsBeforeTheGuestUsesThem) {
     ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
     renderer->resumeAll();
     fb = FrameBuffer::getFB();
-    threadInfo = new RenderThreadInfo();
+    threadInfo = std::make_unique<RenderThreadInfo>();
     threadInfo->initGl(fb->getEmulationGl());
-    // the guest's first frame after the retake starts the restore
-    fb->post(colorBuffer);
-    renderer->waitForShareGroupRestore();
+    // the load reposted the last frame; that is not the guest's, and the restore waits
+    EXPECT_TRUE(fb->hasGuestPostedAFrame()) << "the load did not repost the last frame";
+    EXPECT_EQ(0u, fb->guestPostCount());
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_EQ(-1, renderer->shareGroupsRestored()) << "the restore ran before the guest posted a frame";
+    // the guest's first frame after the retake starts it
+    const HandleType frame = fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
+    ASSERT_TRUE(fb->post(frame));
+    EXPECT_EQ(1u, fb->guestPostCount());
+    EXPECT_EQ(1, renderer->waitForShareGroupRestore());
 
     const uint64_t before = ShareGroup::loadRestoresOnThisThread();
     ASSERT_TRUE(fb->bindContext(context, surface, surface));
@@ -680,7 +693,7 @@ TEST(FrameBufferReleaseTest, RetakeRestoresShareGroupsBeforeTheGuestUsesThem) {
         << "the guest's first use of the loaded context restored its share group itself";
     EXPECT_TRUE(LazyLoadedGLESv2Dispatch::get()->glIsProgram(program));
     fb->bindContext(0, 0, 0);
-    delete threadInfo;
+    threadInfo.reset();
     renderer->stop(true);
 }
 

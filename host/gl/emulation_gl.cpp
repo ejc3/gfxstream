@@ -1561,59 +1561,47 @@ void EmulationGl::createSharedTrivialContext(EGLContext* contextOut, EGLSurface*
 }
 
 int EmulationGl::restoreShareGroups(const std::atomic<bool>& stop) {
-    if (mEglDisplay == EGL_NO_DISPLAY || mEglConfig == EGL_NO_CONFIG) {
+    if (!s_egl.eglRestoreContextShareGroup || mEglDisplay == EGL_NO_DISPLAY) {
         return 0;
     }
-    std::vector<std::pair<EGLContext, GLESApi>> contexts;
+    std::vector<HandleType> handles;
     {
         gfxstream::base::AutoReadLock contextLock(mContextStructureLock);
         for (const auto& [handle, ctx] : mContexts) {
-            contexts.emplace_back(ctx->getEGLContext(), ctx->clientVersion());
+            handles.push_back(handle);
         }
     }
-    const EGLint pbufAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
-    EGLSurface surface = s_egl.eglCreatePbufferSurface(mEglDisplay, mEglConfig, pbufAttribs);
-    if (surface == EGL_NO_SURFACE) {
-        GFXSTREAM_ERROR("share group restore: could not create a pbuffer surface");
+    // A context of the frame buffer's own share group, which a load never leaves to restore:
+    // the restore's GL calls go to it.
+    EGLContext context = EGL_NO_CONTEXT;
+    EGLSurface surface = EGL_NO_SURFACE;
+    createSharedTrivialContext(&context, &surface);
+    if (context == EGL_NO_CONTEXT || surface == EGL_NO_SURFACE ||
+        !s_egl.eglMakeCurrent(mEglDisplay, surface, surface, context)) {
+        GFXSTREAM_ERROR("share group restore: no context to restore on");
+        destroySharedTrivialContext(context, surface);
         return 0;
     }
-    int visited = 0;
-    for (const auto& [shared, api] : contexts) {
+    int restored = 0;
+    for (HandleType handle : handles) {
         if (stop.load(std::memory_order_acquire)) {
             break;
         }
-        // the version and profile of the loaded context: a context of another version
-        // belongs to another object name manager and would not share its group
-        std::vector<EGLint> attribs = {
-            EGL_CONTEXT_CLIENT_VERSION, api == GLESApi_3_0 || api == GLESApi_3_1 ? 3 : (int)api,
-            EGL_CONTEXT_MINOR_VERSION_KHR, api == GLESApi_3_1 ? 1 : 0,
-        };
-        if (shouldEnableCoreProfile()) {
-            attribs.push_back(EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR);
-            attribs.push_back(EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR);
+        // held while its group restores; one the guest destroyed since is not found
+        EmulatedEglContextPtr loaded;
+        {
+            gfxstream::base::AutoReadLock contextLock(mContextStructureLock);
+            loaded = getContext(handle);
         }
-        attribs.push_back(EGL_NONE);
-        // A loaded context the guest destroyed since is no longer found: EGL_NO_CONTEXT.
-        EGLContext context = s_egl.eglCreateContext(mEglDisplay, mEglConfig, shared, attribs.data());
-        if (context == EGL_NO_CONTEXT) {
-            continue;
+        if (loaded && s_egl.eglRestoreContextShareGroup(mEglDisplay, loaded->getEGLContext())) {
+            restored++;
         }
-        if (s_egl.eglMakeCurrent(mEglDisplay, surface, surface, context)) {
-            // the restore's objects are complete before any other context uses them
-            if (api == GLESApi_CM) {
-                s_gles1.glFinish();
-            } else {
-                s_gles2.glFinish();
-            }
-            s_egl.eglMakeCurrent(mEglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        }
-        s_egl.eglDestroyContext(mEglDisplay, context);
-        visited++;
     }
-    s_egl.eglDestroySurface(mEglDisplay, surface);
-    // the translator's state for this thread, which ends here
+    s_egl.eglMakeCurrent(mEglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    destroySharedTrivialContext(context, surface);
+    // the translator's and the host EGL's state for this thread, which ends here
     s_egl.eglReleaseThread();
-    return visited;
+    return restored;
 }
 
 void EmulationGl::destroySharedTrivialContext(EGLContext context, EGLSurface surface) {

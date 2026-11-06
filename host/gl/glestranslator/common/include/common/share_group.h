@@ -114,8 +114,11 @@ public:
     void preSave(GlobalNameSpace *globalNameSpace);
     void onSave(gfxstream::Stream* stream);
     void postSave(gfxstream::Stream* stream);
-    // postLoadRestore() restores resources on hardware GPU
-    void postLoadRestore();
+    // postLoadRestore() restores resources on hardware GPU. With |finish|, it also waits
+    // for the GPU to finish that work before it marks the group restored: for a restore on
+    // a context of another group, whose work the group's own contexts may otherwise read
+    // before it is done. Returns whether there was anything to restore.
+    bool postLoadRestore(bool finish = false);
     bool needRestore();
     // How many loaded share groups this thread restored (postLoadRestore() calls that had
     // something to restore). Tests read it to tell which thread a restore ran on.

@@ -113,25 +113,30 @@ thread_local uint64_t tLoadRestores = 0;
 
 uint64_t ShareGroup::loadRestoresOnThisThread() { return tLoadRestores; }
 
-void ShareGroup::postLoadRestore() {
+bool ShareGroup::postLoadRestore(bool finish) {
     gfxstream::base::AutoLock lock(m_restoreLock);
-    if (m_needLoadRestore) {
-        ++tLoadRestores;
-        int i = 0;
-        (void)i;
-        for (auto ns : m_nameSpace) {
-            GFXSTREAM_DEBUG("ShareGroup::%s: %p: start post load restore namespace for type %d\n",
-                            __func__, this, i);
-            ns->postLoadRestore([this](NamedObjectType p_type,
-                                ObjectLocalName p_localName) {
-                                    return getGlobalName(p_type, p_localName);
-                            });
-            GFXSTREAM_DEBUG("ShareGroup::%s: %p: end post load restore namespace for type %d\n",
-                            __func__, this, i);
-            ++i;
-        }
-        m_needLoadRestore = false;
+    if (!m_needLoadRestore) {
+        return false;
     }
+    ++tLoadRestores;
+    int i = 0;
+    (void)i;
+    for (auto ns : m_nameSpace) {
+        GFXSTREAM_DEBUG("ShareGroup::%s: %p: start post load restore namespace for type %d\n",
+                        __func__, this, i);
+        ns->postLoadRestore([this](NamedObjectType p_type,
+                            ObjectLocalName p_localName) {
+                                return getGlobalName(p_type, p_localName);
+                        });
+        GFXSTREAM_DEBUG("ShareGroup::%s: %p: end post load restore namespace for type %d\n",
+                        __func__, this, i);
+        ++i;
+    }
+    if (finish) {
+        GLEScontext::dispatcher().glFinish();
+    }
+    m_needLoadRestore = false;
+    return true;
 }
 
 bool ShareGroup::needRestore() {

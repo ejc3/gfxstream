@@ -29,6 +29,7 @@
   X(EGLBoolean, eglSaveAllImages, (EGLDisplay display, EGLStreamKHR stream, const void* textureSaver)) \
   X(EGLBoolean, eglPreSaveContext, (EGLDisplay display, EGLContext contex, EGLStreamKHR stream)) \
   X(EGLBoolean, eglPostLoadAllImages, (EGLDisplay display, EGLStreamKHR stream)) \
+  X(EGLBoolean, eglRestoreContextShareGroup, (EGLDisplay display, EGLContext context)) \
   X(EGLBoolean, eglPostSaveContext, (EGLDisplay display, EGLConfig config, EGLStreamKHR stream)) \
   X(void, eglUseOsEglApi, (EGLBoolean enable, EGLBoolean nullEgl)) \
   X(void, eglSetMaxGLESVersion, (EGLint glesVersion)) \
@@ -42,6 +43,7 @@ EGLAPI EGLBoolean EGLAPIENTRY eglSaveContext(EGLDisplay display, EGLContext cont
 EGLAPI EGLBoolean EGLAPIENTRY eglSaveAllImages(EGLDisplay display, EGLStreamKHR stream, const void* textureSaver);
 EGLAPI EGLBoolean EGLAPIENTRY eglPreSaveContext(EGLDisplay display, EGLContext contex, EGLStreamKHR stream);
 EGLAPI EGLBoolean EGLAPIENTRY eglPostLoadAllImages(EGLDisplay display, EGLStreamKHR stream);
+EGLAPI EGLBoolean EGLAPIENTRY eglRestoreContextShareGroup(EGLDisplay display, EGLContext context);
 EGLAPI EGLBoolean EGLAPIENTRY eglPostSaveContext(EGLDisplay display, EGLConfig config, EGLStreamKHR stream);
 EGLAPI void EGLAPIENTRY eglUseOsEglApi(EGLBoolean enable, EGLBoolean nullEgl);
 EGLAPI void EGLAPIENTRY eglSetMaxGLESVersion(EGLint glesVersion);

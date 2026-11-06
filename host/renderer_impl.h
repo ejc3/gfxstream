@@ -223,15 +223,18 @@ private:
     void startShareGroupRestore();
     void stopShareGroupRestore();
   public:
-    // Waits until the share group restore a retake started has finished. For tests.
-    void waitForShareGroupRestore() {
-        if (mShareGroupRestore.joinable()) {
-            mShareGroupRestore.join();
-        }
-    }
+    // Waits until the share group restore a retake started has finished, and returns how
+    // many groups it restored (-1: none ran). For tests.
+    int waitForShareGroupRestore();
+    // How many groups the last restore restored; -1 until one has finished. For tests.
+    int shareGroupsRestored() const { return mShareGroupsRestored.load(std::memory_order_acquire); }
   private:
+    // Starts, stops and waits are serialized: a mirror join and an embedder's save or stop
+    // can come at once, and only one of them may join the thread.
+    std::mutex mShareGroupRestoreMutex;
     std::thread mShareGroupRestore;
     std::atomic<bool> mShareGroupRestoreStop{false};
+    std::atomic<int> mShareGroupsRestored{-1};
 };
 
 }  // namespace host

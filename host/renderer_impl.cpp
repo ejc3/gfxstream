@@ -526,6 +526,8 @@ bool RendererImpl::save(gfxstream::Stream* stream,
 
 bool RendererImpl::load(gfxstream::Stream* stream,
                         const ITextureLoaderPtr& textureLoader) {
+    // a load replaces the contexts the restore walks
+    stopShareGroupRestore();
     if (!waitForProcessCleanup()) {
         GFXSTREAM_ERROR("Failed to load snapshot: timed out waiting for process cleanup.");
         return false;
@@ -854,6 +856,7 @@ struct AndroidVirtioGpuOps* RendererImpl::getVirtioGpuOps() {
 }
 
 void RendererImpl::preLoad() {
+    stopShareGroupRestore();
     mRenderWindow->setPaused(true);
     cleanupRenderThreads();
 }
@@ -1117,16 +1120,27 @@ bool RendererImpl::retakeGpu(std::string* error) {
 
 void RendererImpl::startShareGroupRestore() {
 #if GFXSTREAM_ENABLE_HOST_GLES
-    stopShareGroupRestore();
+    std::lock_guard<std::mutex> lock(mShareGroupRestoreMutex);
+    mShareGroupRestoreStop.store(true, std::memory_order_release);
+    if (mShareGroupRestore.joinable()) {
+        mShareGroupRestore.join();
+    }
+    const auto fb = FrameBuffer::getFB();
+    if (!fb) {
+        return;
+    }
+    // the frames the guest posted before it resumes: none, since the load's repost is not one
+    const uint64_t posted = fb->guestPostCount();
     mShareGroupRestoreStop.store(false, std::memory_order_release);
-    mShareGroupRestore = std::thread([this]() {
+    mShareGroupsRestored.store(-1, std::memory_order_release);
+    mShareGroupRestore = std::thread([this, posted]() {
         using namespace std::chrono;
         // The retake's first frame is in the restore's critical path; the restore is not.
         // A guest that posts nothing within 10 s (its screen off) is restored then.
         const auto deadline = steady_clock::now() + seconds(10);
         while (!mShareGroupRestoreStop.load(std::memory_order_acquire)) {
             const auto fb = FrameBuffer::getFB();
-            if (!fb || fb->hasGuestPostedAFrame() || steady_clock::now() >= deadline) {
+            if (!fb || fb->guestPostCount() > posted || steady_clock::now() >= deadline) {
                 break;
             }
             std::this_thread::sleep_for(milliseconds(10));
@@ -1140,8 +1154,9 @@ void RendererImpl::startShareGroupRestore() {
             return;
         }
         const auto t0 = steady_clock::now();
-        const int contexts = emulationGl->restoreShareGroups(mShareGroupRestoreStop);
-        GFXSTREAM_INFO("Restored the loaded share groups of %d contexts in %lld ms%s", contexts,
+        const int groups = emulationGl->restoreShareGroups(mShareGroupRestoreStop);
+        mShareGroupsRestored.store(groups, std::memory_order_release);
+        GFXSTREAM_INFO("Restored %d loaded share groups in %lld ms%s", groups,
                        (long long)duration_cast<milliseconds>(steady_clock::now() - t0).count(),
                        mShareGroupRestoreStop.load() ? " (stopped early)" : "");
     });
@@ -1149,10 +1164,19 @@ void RendererImpl::startShareGroupRestore() {
 }
 
 void RendererImpl::stopShareGroupRestore() {
+    std::lock_guard<std::mutex> lock(mShareGroupRestoreMutex);
     mShareGroupRestoreStop.store(true, std::memory_order_release);
     if (mShareGroupRestore.joinable()) {
         mShareGroupRestore.join();
     }
+}
+
+int RendererImpl::waitForShareGroupRestore() {
+    std::lock_guard<std::mutex> lock(mShareGroupRestoreMutex);
+    if (mShareGroupRestore.joinable()) {
+        mShareGroupRestore.join();
+    }
+    return mShareGroupsRestored.load(std::memory_order_acquire);
 }
 
 bool RendererImpl::isGpuReleased() const { return mGpuReleased; }
