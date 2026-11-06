@@ -1611,6 +1611,8 @@ int EmulationGl::restoreShareGroups(const std::atomic<bool>& stop) {
         visited++;
     }
     s_egl.eglDestroySurface(mEglDisplay, surface);
+    // the translator's state for this thread, which ends here
+    s_egl.eglReleaseThread();
     return visited;
 }
 
