@@ -107,9 +107,16 @@ void ShareGroup::postSave(gfxstream::Stream* stream) {
     }
 }
 
+namespace {
+thread_local uint64_t tLoadRestores = 0;
+}  // namespace
+
+uint64_t ShareGroup::loadRestoresOnThisThread() { return tLoadRestores; }
+
 void ShareGroup::postLoadRestore() {
     gfxstream::base::AutoLock lock(m_restoreLock);
     if (m_needLoadRestore) {
+        ++tLoadRestores;
         int i = 0;
         (void)i;
         for (auto ns : m_nameSpace) {

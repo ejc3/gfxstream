@@ -117,6 +117,9 @@ public:
     // postLoadRestore() restores resources on hardware GPU
     void postLoadRestore();
     bool needRestore();
+    // How many loaded share groups this thread restored (postLoadRestore() calls that had
+    // something to restore). Tests read it to tell which thread a restore ran on.
+    static uint64_t loadRestoresOnThisThread();
 private:
     explicit ShareGroup(GlobalNameSpace *globalNameSpace,
                         uint64_t sharedGroupID,

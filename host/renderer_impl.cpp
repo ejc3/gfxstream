@@ -70,6 +70,7 @@ static constexpr auto kCleanupTimeout = std::chrono::milliseconds(15000);
 RendererImpl::RendererImpl() = default;
 
 RendererImpl::~RendererImpl() {
+    stopShareGroupRestore();
     stop(true);
     // We can't finish until the loader render thread has
     // completed else can get a crash at the end of the destructor.
@@ -114,6 +115,7 @@ bool RendererImpl::initialize(int width, int height, const gfxstream::host::Feat
 }
 
 void RendererImpl::stop(bool wait) {
+    stopShareGroupRestore();
     // waits for a running join, which pauses and resumes these channels
     mirror::setJoinHandler(nullptr);
     std::unique_lock<std::mutex> lock(mChannelsMutex);
@@ -293,6 +295,8 @@ void RendererImpl::addressSpaceGraphicsConsumerReloadRingConfig(void* consumer) 
 }
 
 bool RendererImpl::pauseAllPreSave() {
+    // a save reads the share groups the restore writes
+    stopShareGroupRestore();
     std::lock_guard<std::mutex> join(mJoinMutex);
     if (!pauseRenderThreads()) {
         return false;
@@ -385,6 +389,8 @@ class MemoryTextureStore : public ITextureLoader, public ITextureSaver {
 };
 bool RendererImpl::saveMirrorJoin(
 mirror::JoinWriter& w) {
+    // the join saves the share groups the restore writes
+    stopShareGroupRestore();
     std::lock_guard<std::mutex> join(mJoinMutex);
     if (mPausedByEmbedder || mGpuReleased) {
         GFXSTREAM_INFO("mirror join refused: the render threads are paused or the GPU released");
@@ -1102,10 +1108,51 @@ bool RendererImpl::retakeGpu(std::string* error) {
             return false;
         }
         mReleasedState.reset();
+        startShareGroupRestore();
     }
     mGpuReleased = false;
     GFXSTREAM_INFO("Took the host GPU up again.");
     return true;
+}
+
+void RendererImpl::startShareGroupRestore() {
+#if GFXSTREAM_ENABLE_HOST_GLES
+    stopShareGroupRestore();
+    mShareGroupRestoreStop.store(false, std::memory_order_release);
+    mShareGroupRestore = std::thread([this]() {
+        using namespace std::chrono;
+        // The retake's first frame is in the restore's critical path; the restore is not.
+        // A guest that posts nothing within 10 s (its screen off) is restored then.
+        const auto deadline = steady_clock::now() + seconds(10);
+        while (!mShareGroupRestoreStop.load(std::memory_order_acquire)) {
+            const auto fb = FrameBuffer::getFB();
+            if (!fb || fb->hasGuestPostedAFrame() || steady_clock::now() >= deadline) {
+                break;
+            }
+            std::this_thread::sleep_for(milliseconds(10));
+        }
+        if (mShareGroupRestoreStop.load(std::memory_order_acquire)) {
+            return;
+        }
+        const auto fb = FrameBuffer::getFB();
+        gl::EmulationGl* emulationGl = fb ? fb->getEmulationGl() : nullptr;
+        if (!emulationGl) {
+            return;
+        }
+        const auto t0 = steady_clock::now();
+        const int contexts = emulationGl->restoreShareGroups(mShareGroupRestoreStop);
+        GFXSTREAM_INFO("Restored the loaded share groups of %d contexts in %lld ms%s", contexts,
+                       (long long)duration_cast<milliseconds>(steady_clock::now() - t0).count(),
+                       mShareGroupRestoreStop.load() ? " (stopped early)" : "");
+    });
+#endif
+}
+
+void RendererImpl::stopShareGroupRestore() {
+    mShareGroupRestoreStop.store(true, std::memory_order_release);
+    if (mShareGroupRestore.joinable()) {
+        mShareGroupRestore.join();
+    }
 }
 
 bool RendererImpl::isGpuReleased() const { return mGpuReleased; }

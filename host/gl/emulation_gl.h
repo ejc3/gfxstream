@@ -20,6 +20,7 @@
 #include <GLES3/gl3.h>
 
 #include <array>
+#include <atomic>
 #include <functional>
 #include <future>
 #include <memory>
@@ -209,6 +210,13 @@ class EmulationGl {
     void unlockContextStructureRead() { mContextStructureLock.unlockRead(); }
 
     void createTrivialContext(HandleType shared, HandleType* contextOut, HandleType* surfOut);
+    // Restores every share group a snapshot load left for its first use, on the calling
+    // thread: the translator restores a loaded share group when one of its contexts is first
+    // made current, recompiling and relinking each program it holds, and the guest thread
+    // that makes it current waits for that. This makes a context of each group current here
+    // first (a temporary one sharing with each loaded context), so the guest's finds it
+    // restored. Stops between contexts once |stop| is set; returns the contexts visited.
+    int restoreShareGroups(const std::atomic<bool>& stop);
     void createSharedTrivialContext(EGLContext* contextOut, EGLSurface* surfOut);
     void destroySharedTrivialContext(EGLContext context, EGLSurface surface);
     bool setEmulatedEglWindowSurfaceColorBuffer(HandleType surfaceHandle,

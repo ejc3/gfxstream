@@ -451,8 +451,11 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
 
     void postWithCallback(HandleType p_colorbuffer, Post::CompletionCallback callback,
                           bool needLockAndBind = true);
-    bool hasGuestPostedAFrame() { return m_guestPostedAFrameTime.has_value(); }
-    void resetGuestPostedAFrame() { m_guestPostedAFrameTime = std::nullopt; }
+    bool hasGuestPostedAFrame() { return m_guestPostedAFrame.load(std::memory_order_acquire); }
+    void resetGuestPostedAFrame() {
+        m_guestPostedAFrameTime = std::nullopt;
+        m_guestPostedAFrame.store(false, std::memory_order_release);
+    }
 
     void doPostCallback(void* pixels, uint32_t displayId);
 
@@ -854,6 +857,7 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     bool postImplSync(HandleType p_colorbuffer, bool needLockAndBind = true, bool repaint = false);
     void setGuestPostedAFrame() {
         m_guestPostedAFrameTime = std::chrono::steady_clock::now();
+        m_guestPostedAFrame.store(true, std::memory_order_release);
         m_framebuffer->fireEvent({FrameBufferChange::FrameReady, mFrameNumber++});
     }
     bool createColorBufferWithResourceHandleLocked(int p_width, int p_height,
@@ -937,6 +941,9 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     };
     gfxstream::base::WorkerProcessingResult sendReadbackWorkerCmd(const Readback& readback);
     std::optional<std::chrono::steady_clock::time_point> m_guestPostedAFrameTime;
+    // Whether m_guestPostedAFrameTime is set, for threads other than the posting one
+    // (RendererImpl's share group restore waits on it).
+    std::atomic<bool> m_guestPostedAFrame{false};
 
     struct onPost {
         Renderer::OnPostCallback cb;

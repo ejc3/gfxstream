@@ -1560,6 +1560,60 @@ void EmulationGl::createSharedTrivialContext(EGLContext* contextOut, EGLSurface*
     *surfOut = s_egl.eglCreatePbufferSurface(mEglDisplay, mEglConfig, pbufAttribs);
 }
 
+int EmulationGl::restoreShareGroups(const std::atomic<bool>& stop) {
+    if (mEglDisplay == EGL_NO_DISPLAY || mEglConfig == EGL_NO_CONFIG) {
+        return 0;
+    }
+    std::vector<std::pair<EGLContext, GLESApi>> contexts;
+    {
+        gfxstream::base::AutoReadLock contextLock(mContextStructureLock);
+        for (const auto& [handle, ctx] : mContexts) {
+            contexts.emplace_back(ctx->getEGLContext(), ctx->clientVersion());
+        }
+    }
+    const EGLint pbufAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+    EGLSurface surface = s_egl.eglCreatePbufferSurface(mEglDisplay, mEglConfig, pbufAttribs);
+    if (surface == EGL_NO_SURFACE) {
+        GFXSTREAM_ERROR("share group restore: could not create a pbuffer surface");
+        return 0;
+    }
+    int visited = 0;
+    for (const auto& [shared, api] : contexts) {
+        if (stop.load(std::memory_order_acquire)) {
+            break;
+        }
+        // the version and profile of the loaded context: a context of another version
+        // belongs to another object name manager and would not share its group
+        std::vector<EGLint> attribs = {
+            EGL_CONTEXT_CLIENT_VERSION, api == GLESApi_3_0 || api == GLESApi_3_1 ? 3 : (int)api,
+            EGL_CONTEXT_MINOR_VERSION_KHR, api == GLESApi_3_1 ? 1 : 0,
+        };
+        if (shouldEnableCoreProfile()) {
+            attribs.push_back(EGL_CONTEXT_OPENGL_PROFILE_MASK_KHR);
+            attribs.push_back(EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR);
+        }
+        attribs.push_back(EGL_NONE);
+        // A loaded context the guest destroyed since is no longer found: EGL_NO_CONTEXT.
+        EGLContext context = s_egl.eglCreateContext(mEglDisplay, mEglConfig, shared, attribs.data());
+        if (context == EGL_NO_CONTEXT) {
+            continue;
+        }
+        if (s_egl.eglMakeCurrent(mEglDisplay, surface, surface, context)) {
+            // the restore's objects are complete before any other context uses them
+            if (api == GLESApi_CM) {
+                s_gles1.glFinish();
+            } else {
+                s_gles2.glFinish();
+            }
+            s_egl.eglMakeCurrent(mEglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        }
+        s_egl.eglDestroyContext(mEglDisplay, context);
+        visited++;
+    }
+    s_egl.eglDestroySurface(mEglDisplay, surface);
+    return visited;
+}
+
 void EmulationGl::destroySharedTrivialContext(EGLContext context, EGLSurface surface) {
     if (mEglDisplay != EGL_NO_DISPLAY) {
         s_egl.eglDestroyContext(mEglDisplay, context);

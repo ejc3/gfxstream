@@ -13,12 +13,14 @@
 // limitations under the License.
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -212,6 +214,24 @@ private:
     bool mReleasedWithVulkan = false;
     // The loader of the last load, whose background texture loading a release stops.
     std::weak_ptr<ITextureLoader> mLastTextureLoader;
+    // After a retake has posted its first frame, a thread of its own restores the share
+    // groups the load left for their first use, so no guest context waits for them (a
+    // browser brought to the front after a retake waited 2.7 s). Anything that saves,
+    // releases or stops the renderer ends it first: stopShareGroupRestore() returns once
+    // the context it is restoring is done, and what it did not reach is restored at first
+    // use, as before.
+    void startShareGroupRestore();
+    void stopShareGroupRestore();
+  public:
+    // Waits until the share group restore a retake started has finished. For tests.
+    void waitForShareGroupRestore() {
+        if (mShareGroupRestore.joinable()) {
+            mShareGroupRestore.join();
+        }
+    }
+  private:
+    std::thread mShareGroupRestore;
+    std::atomic<bool> mShareGroupRestoreStop{false};
 };
 
 }  // namespace host

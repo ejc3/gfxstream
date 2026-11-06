@@ -630,6 +630,60 @@ TEST(FrameBufferReleaseTest, ReleaseDetachesTheLastSnapshotLoader) {
     renderer->stop(true);
 }
 
+// A retake restores the share groups it loaded on a thread of its own once the guest has
+// posted a frame, so the guest's first use of a loaded context finds its group restored:
+// making it current restores nothing on the guest's thread. Without it, the first
+// makeCurrent recompiles and relinks every program of the group while the guest waits (in
+// fcvm, a phone's browser brought to the front after a retake waited 2.7 s).
+TEST(FrameBufferReleaseTest, RetakeRestoresShareGroupsBeforeTheGuestUsesThem) {
+    ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
+    if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+        GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+    }
+    gfxstream::base::setEnvironmentVariable("ANDROID_EMU_HEADLESS", "1");
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    auto renderer = std::make_shared<RendererImpl>();
+    ASSERT_TRUE(renderer->initialize(256, 256, features, false));
+    FrameBuffer* fb = FrameBuffer::getFB();
+    auto* threadInfo = new RenderThreadInfo();
+    threadInfo->initGl(fb->getEmulationGl());
+    const HandleType context = fb->createEmulatedEglContext(0, 0, GLESApi_3_0);
+    const HandleType surface = fb->createEmulatedEglWindowSurface(0, 256, 256);
+    const HandleType colorBuffer = fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
+    ASSERT_NE(0u, context);
+    ASSERT_NE(0u, colorBuffer);
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    // a program: what a share group's restore compiles and links again
+    const GLint program = compileAndLinkShaderProgram(
+        "#version 300 es\nin vec4 p;\nvoid main() { gl_Position = p; }\n",
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n");
+    ASSERT_NE(0, program);
+    ASSERT_TRUE(fb->bindContext(0, 0, 0));
+    delete threadInfo;
+
+    std::string error;
+    ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
+    ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
+    ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
+    renderer->resumeAll();
+    fb = FrameBuffer::getFB();
+    threadInfo = new RenderThreadInfo();
+    threadInfo->initGl(fb->getEmulationGl());
+    // the guest's first frame after the retake starts the restore
+    fb->post(colorBuffer);
+    renderer->waitForShareGroupRestore();
+
+    const uint64_t before = ShareGroup::loadRestoresOnThisThread();
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    EXPECT_EQ(before, ShareGroup::loadRestoresOnThisThread())
+        << "the guest's first use of the loaded context restored its share group itself";
+    EXPECT_TRUE(LazyLoadedGLESv2Dispatch::get()->glIsProgram(program));
+    fb->bindContext(0, 0, 0);
+    delete threadInfo;
+    renderer->stop(true);
+}
+
 // A renderer that never initialized GL emulation (a Vulkan-only one) releases
 // nothing GL: releasing the host driver must not reach the unloaded EGL dispatch.
 TEST(FrameBufferReleaseTest, ReleasingTheHostDriverWithoutGlDoesNothing) {
