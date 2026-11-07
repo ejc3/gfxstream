@@ -509,6 +509,7 @@ void ProgramData::restore(ObjectLocalName localName,
             if (linked) {
                 fromBinary = true;
                 cost.programBinaries++;
+                countProgramBinaryRestore();
                 mTransformFeedbacks.clear();
                 dispatcher.glUseProgram(globalName);
             }
@@ -544,7 +545,6 @@ void ProgramData::restore(ObjectLocalName localName,
             std::string parsedSrc;
             if (!isGles2Gles()) {
 #ifdef USE_ANGLE_SHADER_PARSER
-                const auto translateStart = Clock::now();
                 std::string infoLog;
                 ANGLEShaderParser::translate(
                             isCoreProfile(),
@@ -554,7 +554,6 @@ void ProgramData::restore(ObjectLocalName localName,
                             &parsedSrc,
                             &s.linkInfo);
                 src = parsedSrc.c_str();
-                cost.translateUs += usSince(translateStart);
 #endif
             }
             dispatcher.glShaderSource(tmpShaders[i], 1, &src, NULL);

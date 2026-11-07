@@ -41,6 +41,7 @@
 #include "gfxstream/system/System.h"
 #include "common/gles_context.h"
 #include "common/gles_pointer.h"
+#include "common/object_data.h"
 #include "host/gl/gles2_dec/gles2_opcodes.h"
 #include "host/gl/emulation_gl.h"
 #include "host/gl/yuv_converter.h"
@@ -776,6 +777,93 @@ TEST(FrameBufferReleaseTest, AContextOfAGroupBeingRestoredWaitsForTheRestore) {
     EXPECT_EQ(0u, restoresOnGuest.load()) << "the guest's thread restored the group itself";
     EXPECT_EQ(1, renderer->waitForShareGroupRestore());
     ShareGroup::setRestoreHookForTesting(nullptr);
+    renderer->stop(true);
+}
+
+// A retake's restore loads each program from the host binary its release kept, when the host
+// driver gives binaries, and leaves the program's shader objects uncompiled on the host until a
+// use needs them: in fcvm a phone browser's 122 programs and 244 shaders took 2.3 s to compile
+// and link again, which a browser brought to the front right after the retake waited for. The
+// program must still link again from its shaders afterwards: a link compiles a shader the
+// restore left pending, and new source set without a compile does not replace the source that
+// was compiled, since a link uses the last compiled source.
+TEST(FrameBufferReleaseTest, ARetakeRestoresProgramsFromBinariesAndTheirShadersStillLink) {
+    ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
+    if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+        GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+    }
+    gfxstream::base::setEnvironmentVariable("ANDROID_EMU_HEADLESS", "1");
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    auto renderer = std::make_shared<RendererImpl>();
+    ASSERT_TRUE(renderer->initialize(256, 256, features, false));
+    renderer->setShareGroupRestoreFallbackForTesting(std::chrono::minutes(5));
+    FrameBuffer* fb = FrameBuffer::getFB();
+    auto threadInfo = std::make_unique<RenderThreadInfo>();
+    threadInfo->initGl(fb->getEmulationGl());
+    const HandleType context = fb->createEmulatedEglContext(0, 0, GLESApi_3_0);
+    const HandleType surface = fb->createEmulatedEglWindowSurface(0, 256, 256);
+    ASSERT_NE(0u, context);
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    auto gl = LazyLoadedGLESv2Dispatch::get();
+    const GLint program = compileAndLinkShaderProgram(
+        "#version 300 es\nin vec4 p;\nvoid main() { gl_Position = p; }\n",
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n");
+    ASSERT_NE(0, program);
+    GLint binaryFormats = 0;
+    gl->glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &binaryFormats);
+    ASSERT_TRUE(fb->bindContext(0, 0, 0));
+    threadInfo.reset();
+
+    std::string error;
+    ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
+    ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
+    ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
+    renderer->resumeAll();
+    fb = FrameBuffer::getFB();
+    const uint64_t binariesBefore = programBinaryRestores();
+    const HandleType frame = fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
+    ASSERT_TRUE(fb->post(frame));
+    for (int i = 0; i < 500 && !renderer->shareGroupRestoreBegan(); i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_EQ(1, renderer->waitForShareGroupRestore());
+    if (binaryFormats > 0) {
+        EXPECT_EQ(binariesBefore + 1, programBinaryRestores())
+            << "the restore compiled and linked the program instead of loading its binary";
+    } else {
+        EXPECT_EQ(binariesBefore, programBinaryRestores());
+    }
+
+    threadInfo = std::make_unique<RenderThreadInfo>();
+    threadInfo->initGl(fb->getEmulationGl());
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    gl = LazyLoadedGLESv2Dispatch::get();
+    GLint linked = GL_FALSE;
+    gl->glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    EXPECT_EQ(GL_TRUE, linked);
+    GLuint shaders[2] = {};
+    GLsizei count = 0;
+    gl->glGetAttachedShaders(program, 2, &count, shaders);
+    ASSERT_EQ(2, count);
+    GLuint vertex = shaders[0], fragment = shaders[1];
+    GLint type = 0;
+    gl->glGetShaderiv(vertex, GL_SHADER_TYPE, &type);
+    if (type != GL_VERTEX_SHADER) {
+        std::swap(vertex, fragment);
+    }
+    // new source, never compiled: the link still uses the source compiled before the release
+    const char* broken = "#version 300 es\nthis does not compile\n";
+    gl->glShaderSource(fragment, 1, &broken, nullptr);
+    gl->glLinkProgram(program);
+    linked = GL_FALSE;
+    gl->glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    EXPECT_EQ(GL_TRUE, linked) << "a link after the retake failed: a shader object was not compiled";
+    GLint compiled = GL_FALSE;
+    gl->glGetShaderiv(vertex, GL_COMPILE_STATUS, &compiled);
+    EXPECT_EQ(GL_TRUE, compiled);
+    fb->bindContext(0, 0, 0);
+    threadInfo.reset();
     renderer->stop(true);
 }
 

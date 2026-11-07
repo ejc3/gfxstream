@@ -38,11 +38,10 @@ enum ObjectDataType {
 class ObjectData;
 typedef std::shared_ptr<ObjectData> ObjectDataPtr;
 
-// Where a snapshot restore's time goes on this thread, in microseconds: shader translation,
-// glCompileShader, and glLinkProgram up to the program's first query. ShareGroup reports and
+// Where a snapshot restore's time goes on this thread, in microseconds: glCompileShader, and
+// glLinkProgram up to the program's first query. ShareGroup reports and
 // resets it per restored group.
 struct RestoreCost {
-    uint64_t translateUs = 0;
     uint64_t compileUs = 0;
     uint64_t linkUs = 0;
     uint64_t programs = 0;
@@ -50,6 +49,9 @@ struct RestoreCost {
     uint64_t shaders = 0;
 };
 RestoreCost& restoreCostOnThisThread();
+// Programs any thread restored from a kept host binary since the process started. For tests.
+uint64_t programBinaryRestores();
+void countProgramBinaryRestore();
 
 extern NamedObjectType ObjectDataType2NamedObjectType(ObjectDataType objDataType);
 

@@ -121,7 +121,7 @@ void ShareGroup::setRestoreHookForTesting(std::function<void()> hook) {
     sRestoreHookForTesting = std::move(hook);
 }
 
-bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& between) {
+bool ShareGroup::postLoadRestore(bool finish) {
     gfxstream::base::AutoLock lock(m_restoreLock);
     if (!m_needLoadRestore.load(std::memory_order_acquire)) {
         return false;
@@ -145,7 +145,7 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
         ns->postLoadRestore([this](NamedObjectType p_type,
                             ObjectLocalName p_localName) {
                                 return getGlobalName(p_type, p_localName);
-                        }, between);
+                        });
         const long long nsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - nsStart).count();
         if (objects) {
@@ -157,17 +157,16 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
     if (finish) {
         GLEScontext::dispatcher().glFinish();
     }
-    GFXSTREAM_INFO("Restored share group %p in %lld ms (%s):%s; %llu programs, %llu shaders: "
-                   "translate %llu ms, compile %llu ms, link %llu ms, %llu from binaries",
+    GFXSTREAM_INFO("Restored share group %p in %lld ms:%s; %llu programs (%llu from binaries), "
+                   "%llu shaders: compile %llu ms, link %llu ms",
                    this,
                    (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start).count(),
-                   between ? "paced" : "at once", spent.c_str(),
-                   (unsigned long long)cost.programs, (unsigned long long)cost.shaders,
-                   (unsigned long long)(cost.translateUs / 1000),
+                   spent.c_str(),
+                   (unsigned long long)cost.programs, (unsigned long long)cost.programBinaries,
+                   (unsigned long long)cost.shaders,
                    (unsigned long long)(cost.compileUs / 1000),
-                   (unsigned long long)(cost.linkUs / 1000),
-                   (unsigned long long)cost.programBinaries);
+                   (unsigned long long)(cost.linkUs / 1000));
     m_needLoadRestore.store(false, std::memory_order_release);
     return true;
 }
