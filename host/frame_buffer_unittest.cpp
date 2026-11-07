@@ -817,8 +817,10 @@ TEST(FrameBufferReleaseTest, ARetakeRestoresProgramsFromBinariesAndTheirShadersS
     // A release and retake, the restore started by the guest's frame and waited for; then the
     // program's context current again on a guest thread.
     auto retake = [&]() {
-        fb->bindContext(0, 0, 0);
-        threadInfo.reset();
+        if (threadInfo) {
+            fb->bindContext(0, 0, 0);
+            threadInfo.reset();
+        }
         std::string error;
         ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
         ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
