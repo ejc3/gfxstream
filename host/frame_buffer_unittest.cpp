@@ -42,6 +42,7 @@
 #include "common/gles_context.h"
 #include "common/gles_pointer.h"
 #include "common/object_data.h"
+#include "host/gl/glestranslator/gles_v2/shader_parser.h"
 #include "host/gl/gles2_dec/gles2_opcodes.h"
 #include "host/gl/emulation_gl.h"
 #include "host/gl/yuv_converter.h"
@@ -882,6 +883,85 @@ TEST(FrameBufferReleaseTest, ARetakeRestoresProgramsFromBinariesAndTheirShadersS
 
     fb->bindContext(0, 0, 0);
     threadInfo.reset();
+    renderer->stop(true);
+}
+
+// A shader a restore left to compile is compiled once, and a thread that needs it while
+// another compiles it waits for that compile: it must not see the host's "not compiled" in
+// between. The compile is held in its test hook while a context of the same share group on a
+// second thread asks the shader's compile status.
+TEST(FrameBufferReleaseTest, AShaderCompiledOnUseIsCompiledBeforeAnotherThreadSeesIt) {
+    ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
+    if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+        GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+    }
+    gfxstream::base::setEnvironmentVariable("ANDROID_EMU_HEADLESS", "1");
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    auto renderer = std::make_shared<RendererImpl>();
+    ASSERT_TRUE(renderer->initialize(256, 256, features, false));
+    renderer->setShareGroupRestoreFallbackForTesting(std::chrono::minutes(5));
+    FrameBuffer* fb = FrameBuffer::getFB();
+    auto threadInfo = std::make_unique<RenderThreadInfo>();
+    threadInfo->initGl(fb->getEmulationGl());
+    const HandleType context = fb->createEmulatedEglContext(0, 0, GLESApi_3_0);
+    const HandleType surface = fb->createEmulatedEglWindowSurface(0, 256, 256);
+    ASSERT_NE(0u, context);
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    const GLuint shader = compileShader(GL_VERTEX_SHADER,
+        "#version 300 es\nin vec4 p;\nvoid main() { gl_Position = p; }\n");
+    ASSERT_NE(0u, shader);
+    ASSERT_TRUE(fb->bindContext(0, 0, 0));
+    threadInfo.reset();
+
+    std::string error;
+    ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
+    ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
+    ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
+    renderer->resumeAll();
+    fb = FrameBuffer::getFB();
+    ASSERT_TRUE(fb->post(fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM)));
+    ASSERT_EQ(1, renderer->waitForShareGroupRestore());
+
+    std::promise<void> entered, letGo;
+    std::shared_future<void> go = letGo.get_future().share();
+    std::atomic<bool> enteredOnce{false};
+    ShaderParser::setHostCompileHookForTesting([&]() {
+        if (!enteredOnce.exchange(true)) {
+            entered.set_value();
+            go.wait();
+        }
+    });
+    std::atomic<GLint> first{-1}, second{-1};
+    std::thread a([&]() {
+        RenderThreadInfo info;
+        info.initGl(fb->getEmulationGl());
+        fb->bindContext(context, surface, surface);
+        GLint compiled = GL_FALSE;
+        LazyLoadedGLESv2Dispatch::get()->glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+        first = compiled;
+        fb->bindContext(0, 0, 0);
+    });
+    ASSERT_EQ(std::future_status::ready, entered.get_future().wait_for(std::chrono::seconds(10)));
+    std::thread b([&]() {
+        RenderThreadInfo info;
+        info.initGl(fb->getEmulationGl());
+        const HandleType sharing = fb->createEmulatedEglContext(0, context, GLESApi_3_0);
+        const HandleType s = fb->createEmulatedEglWindowSurface(0, 16, 16);
+        fb->bindContext(sharing, s, s);
+        GLint compiled = GL_FALSE;
+        LazyLoadedGLESv2Dispatch::get()->glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+        second = compiled;
+        fb->bindContext(0, 0, 0);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_EQ(-1, second.load()) << "a second thread read the shader's status while its compile was held";
+    letGo.set_value();
+    a.join();
+    b.join();
+    EXPECT_EQ(GL_TRUE, first.load());
+    EXPECT_EQ(GL_TRUE, second.load()) << "a second thread saw the shader uncompiled";
+    ShaderParser::setHostCompileHookForTesting(nullptr);
     renderer->stop(true);
 }
 

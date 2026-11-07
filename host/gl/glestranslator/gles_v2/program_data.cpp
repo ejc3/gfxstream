@@ -123,6 +123,15 @@ bool findProgramBinary(const std::string& key, ProgramBinary* out) {
 
 }  // namespace
 
+bool ProgramData::hasLinkedSource() const {
+    for (const auto& s : attachedShaders) {
+        if (!s.linkedSource.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string ProgramData::binaryKey(const std::vector<std::string>& transformFeedbacks,
                                    GLenum transformFeedbackBufferMode) const {
     std::string key;
@@ -420,7 +429,13 @@ void ProgramData::onSave(gfxstream::Stream* stream, unsigned int globalName) con
         saveTransformFeedbacks(stream, transformFeedbacks);
         stream->putBe32(mTransformFeedbackBufferMode);
         GLDispatch& dispatcher = GLEScontext::dispatcher();
-        if (LinkStatus && dispatcher.glGetProgramBinary) {
+        // a separable program's binary carries that state, which the key does not; a program
+        // made by glCreateShaderProgramv has no linked source to key it by
+        GLint separable = GL_FALSE;
+        if (mGlesMajorVersion > 3 || (mGlesMajorVersion == 3 && mGlesMinorVersion >= 1)) {
+            dispatcher.glGetProgramiv(ProgramName, GL_PROGRAM_SEPARABLE, &separable);
+        }
+        if (LinkStatus && mBinaryCacheable && !separable && dispatcher.glGetProgramBinary) {
             GLint length = 0;
             dispatcher.glGetProgramiv(ProgramName, GL_PROGRAM_BINARY_LENGTH, &length);
             if (length > 0 && length <= kMaxOneProgramBinaryBytes) {
@@ -498,7 +513,7 @@ void ProgramData::restore(ObjectLocalName localName,
             .count();
     };
     bool fromBinary = false;
-    if (shoudLoadLinked && dispatcher.glProgramBinary) {
+    if (shoudLoadLinked && hasLinkedSource() && dispatcher.glProgramBinary) {
         ProgramBinary binary;
         if (findProgramBinary(binaryKey(mTransformFeedbacks, mTransformFeedbackBufferMode),
                               &binary)) {
@@ -520,7 +535,10 @@ void ProgramData::restore(ObjectLocalName localName,
         // the one that is already linked, and the one that is not yet linked.
         // We need to restore both.
         GLint tmpShaders[NUM_SHADER_TYPE] = {};
-        for (int i = 0; i < NUM_SHADER_TYPE && !fromBinary; i++) {
+        // From a binary the stages are still translated: the translation regenerates each
+        // stage's link info (its renamed variables), which is not saved, and the uniform and
+        // location restore below reads it. Only the host compile and link are skipped.
+        for (int i = 0; i < NUM_SHADER_TYPE; i++) {
             AttachedShader& s = attachedShaders[i];
             if (s.linkedSource.empty()) {
                 tmpShaders[i] = 0;
@@ -540,7 +558,6 @@ void ProgramData::restore(ObjectLocalName localName,
             default:
                 assert(0);
             }
-            tmpShaders[i] = dispatcher.glCreateShader(type);
             const GLchar* src = (const GLchar *)s.linkedSource.c_str();
             std::string parsedSrc;
             if (!isGles2Gles()) {
@@ -556,6 +573,10 @@ void ProgramData::restore(ObjectLocalName localName,
                 src = parsedSrc.c_str();
 #endif
             }
+            if (fromBinary) {
+                continue;
+            }
+            tmpShaders[i] = dispatcher.glCreateShader(type);
             dispatcher.glShaderSource(tmpShaders[i], 1, &src, NULL);
             const auto compileStart = Clock::now();
             dispatcher.glCompileShader(tmpShaders[i]);
@@ -591,6 +612,8 @@ void ProgramData::restore(ObjectLocalName localName,
             dispatcher.glUseProgram(globalName);
             cost.linkUs += usSince(linkStart);
         }
+        // built from the linked sources (or their binary): its binary may be kept under them
+        mBinaryCacheable = hasLinkedSource();
 #ifdef DEBUG
         for (const auto& attribLocs : linkedAttribLocs) {
             assert(dispatcher.glGetAttribLocation(globalName,
@@ -918,8 +941,10 @@ void ProgramData::setLinkStatus(GLint status) {
 #if defined(TOLERATE_PROGRAM_LINK_ERROR) && TOLERATE_PROGRAM_LINK_ERROR == 1
     status = 1;
 #endif
+    mBinaryCacheable = false;
     if (status && HostLinkStatus) {
         bool is310 = false;
+        bool sourcesCompiled = true;
 
 #ifdef USE_ANGLE_SHADER_PARSER
 	std::vector<ST_ShaderVariable> allUniforms;
@@ -928,6 +953,7 @@ void ProgramData::setLinkStatus(GLint status) {
             if (s.localName) {
                 assert(s.shader);
                 s.linkedSource = s.shader->getOriginalSrc();
+                sourcesCompiled = sourcesCompiled && s.shader->currentSourceCompiled();
 #ifdef USE_ANGLE_SHADER_PARSER
                 s.linkInfo = s.shader->getShaderLinkInfo();
                 is310 = is310 || (s.linkInfo.esslVersion == 310);
@@ -949,6 +975,7 @@ void ProgramData::setLinkStatus(GLint status) {
             // overwrite
             linkedAttribLocs[attribLoc.first] = attribLoc.second;
         }
+        mBinaryCacheable = sourcesCompiled && hasLinkedSource();
     } else {
         for (auto& s : attachedShaders) {
             s.linkedSource.clear();

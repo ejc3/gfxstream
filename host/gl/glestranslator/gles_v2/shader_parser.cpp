@@ -95,14 +95,33 @@ void ShaderParser::restore(ObjectLocalName localName,
     if (m_compileStatus) {
         RestoreCost& cost = restoreCostOnThisThread();
         cost.shaders++;
-        m_hostCompilePending.store(true);
+        gfxstream::base::AutoLock lock(m_hostCompileLock);
+        m_hostCompilePending = true;
     }
 }
 
+static std::function<void()> sHostCompileHookForTesting;
+
+void ShaderParser::setHostCompileHookForTesting(std::function<void()> hook) {
+    sHostCompileHookForTesting = std::move(hook);
+}
+
 void ShaderParser::ensureHostCompiled(GLuint globalName) {
-    if (m_hostCompilePending.exchange(false)) {
-        GLEScontext::dispatcher().glCompileShader(globalName);
+    // held across the compile: a thread that finds it pending waits until it is done
+    gfxstream::base::AutoLock lock(m_hostCompileLock);
+    if (!m_hostCompilePending) {
+        return;
     }
+    if (sHostCompileHookForTesting) {
+        sHostCompileHookForTesting();
+    }
+    GLEScontext::dispatcher().glCompileShader(globalName);
+    m_hostCompilePending = false;
+}
+
+void ShaderParser::clearHostCompilePending() {
+    gfxstream::base::AutoLock lock(m_hostCompileLock);
+    m_hostCompilePending = false;
 }
 
 static const char kAlwaysInvalidShader[] =

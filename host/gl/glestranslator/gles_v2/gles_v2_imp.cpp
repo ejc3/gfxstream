@@ -3945,6 +3945,12 @@ GL_APICALL void  GL_APIENTRY glShaderBinary(GLsizei n, const GLuint* shaders, GL
             const GLuint globalShaderName = ctx->shareGroup()->getGlobalName(
                     NamedObjectType::SHADER_OR_PROGRAM, shaders[i]);
             SET_ERROR_IF(globalShaderName == 0,GL_INVALID_VALUE);
+            // a binary replaces what a restore left to compile
+            auto shaderData = ctx->shareGroup()->getObjectData(
+                    NamedObjectType::SHADER_OR_PROGRAM, shaders[i]);
+            if (shaderData && shaderData->getDataType() == SHADER_DATA) {
+                ((ShaderParser*)shaderData)->clearHostCompilePending();
+            }
             ctx->dispatcher().glShaderBinary(1,&globalShaderName,binaryformat,binary,length);
         }
     }

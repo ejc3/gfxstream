@@ -22,7 +22,7 @@
 #include "gles_v2_context.h"
 #include <string>
 #include <common/share_group.h>
-#include <atomic>
+#include <functional>
 #include <unordered_set>
 
 class ShaderParser : public ObjectData {
@@ -57,9 +57,15 @@ public:
     // A restore sets a compiled shader's source on the host and leaves the compile to the first
     // host use that needs it (a link of a program it is attached to, a host query of it): a
     // program restored from its binary needs no compiled shader objects. Compiles it then.
+    // Another thread that needs it meanwhile waits for that compile.
     void ensureHostCompiled(GLuint globalName);
-    // The guest compiles it again itself.
-    void clearHostCompilePending() { m_hostCompilePending.store(false); }
+    // The guest compiles it again itself, or loads a binary into it.
+    void clearHostCompilePending();
+    // Whether the host's compile of this shader is of its current source: a link of a program
+    // it is attached to runs what was compiled, which differs once new source is set.
+    bool currentSourceCompiled() const { return m_compileStatus && m_compiledSrc == m_parsedSrc; }
+    // Runs in ensureHostCompiled() between taking a pending compile and compiling. For tests.
+    static void setHostCompileHookForTesting(std::function<void()> hook);
 
     void setDeleteStatus(bool val) { m_deleteStatus = val; }
     bool getDeleteStatus() const { return m_deleteStatus; }
@@ -77,7 +83,8 @@ public:
     const char* getCompiledSrc() const { return m_compiledSrc.c_str(); }
 
 private:
-    std::atomic<bool> m_hostCompilePending{false};
+    gfxstream::base::Lock m_hostCompileLock;
+    bool m_hostCompilePending = false;
     void convertESSLToGLSL();
 
     std::string m_originalSrc;

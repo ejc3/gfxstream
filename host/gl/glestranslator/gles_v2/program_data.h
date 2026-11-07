@@ -125,6 +125,11 @@ public:
     int getHostUniformLocation(int guestLocation);
 
 private:
+    // Whether the host executable is the one the linked sources describe, so its binary may be
+    // kept under them: set at a link whose shaders' current sources were what was compiled, and
+    // at a restore, which builds it from those sources (or their binary).
+    bool mBinaryCacheable = false;
+    bool hasLinkedSource() const;
     // What a linked program's host binary depends on: each stage's linked source, the attribute
     // locations bound at its link, and its transform feedback varyings and mode.
     std::string binaryKey(const std::vector<std::string>& transformFeedbacks,
