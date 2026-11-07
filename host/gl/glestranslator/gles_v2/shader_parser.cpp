@@ -92,8 +92,32 @@ void ShaderParser::restore(ObjectLocalName localName,
     } else {
         GLEScontext::dispatcher().glShaderSource(globalName, 1, parsedLines(), NULL);
     }
-    if (m_compileStatus)
-        GLEScontext::dispatcher().glCompileShader(globalName);
+    if (m_compileStatus) {
+        RestoreCost& cost = restoreCostOnThisThread();
+        cost.shaders++;
+        gfxstream::base::AutoLock lock(m_hostCompileLock);
+        m_hostCompilePending = true;
+    }
+}
+
+void ShaderParser::ensureHostCompiled(GLuint globalName) {
+    // held across the compile: a thread that finds it pending waits until it is done
+    gfxstream::base::AutoLock lock(m_hostCompileLock);
+    if (!m_hostCompilePending) {
+        return;
+    }
+    if (shaderCompileOnUseHookForTesting()) {
+        shaderCompileOnUseHookForTesting()();
+    }
+    GLEScontext::dispatcher().glCompileShader(globalName);
+    // what the host now runs for it is the source the restore set
+    m_compiledSrc = m_parsedSrc;
+    m_hostCompilePending = false;
+}
+
+void ShaderParser::clearHostCompilePending() {
+    gfxstream::base::AutoLock lock(m_hostCompileLock);
+    m_hostCompilePending = false;
 }
 
 static const char kAlwaysInvalidShader[] =

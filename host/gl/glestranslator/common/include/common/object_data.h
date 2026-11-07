@@ -19,6 +19,7 @@
 #include "render-utils/stream.h"
 #include "common/named_object.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -36,6 +37,32 @@ enum ObjectDataType {
 
 class ObjectData;
 typedef std::shared_ptr<ObjectData> ObjectDataPtr;
+
+// Where a snapshot restore's time goes on this thread, in microseconds: glCompileShader, and
+// glLinkProgram up to the program's first query. ShareGroup reports and
+// resets it per restored group.
+struct RestoreCost {
+    uint64_t compileUs = 0;
+    uint64_t linkUs = 0;
+    uint64_t programs = 0;
+    uint64_t programBinaries = 0;
+    uint64_t shaders = 0;
+};
+RestoreCost& restoreCostOnThisThread();
+// The share group and local name of the object a save or a restore on this thread is at:
+// what a program's kept binary is filed under, so it only ever restores that same program.
+struct ObjectIdentity {
+    uint64_t shareGroup = 0;
+    uint64_t localName = 0;
+};
+ObjectIdentity& currentObjectIdentityOnThisThread();
+// Programs any thread restored from a kept host binary since the process started. For tests.
+uint64_t programBinaryRestores();
+void countProgramBinaryRestore();
+// Runs when a shader a restore left to compile is compiled on use, between taking the
+// compile and compiling it. For tests; set it only while no restore or GL use runs.
+void setShaderCompileOnUseHookForTesting(std::function<void()> hook);
+const std::function<void()>& shaderCompileOnUseHookForTesting();
 
 extern NamedObjectType ObjectDataType2NamedObjectType(ObjectDataType objDataType);
 

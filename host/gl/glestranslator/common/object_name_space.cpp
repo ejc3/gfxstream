@@ -122,6 +122,7 @@ void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName
                 continue;
             }
             genName(obj.second->getGenNameInfo(), obj.first, false);
+            currentObjectIdentityOnThisThread().localName = obj.first;
             obj.second->restore(obj.first, getGlobalName);
         }
     }
@@ -145,6 +146,7 @@ void NameSpace::onSave(gfxstream::Stream* stream) {
     stream->putBe32(m_objectDataMap.size());
     for (const auto& obj : m_objectDataMap) {
         stream->putBe64(obj.first);
+        currentObjectIdentityOnThisThread().localName = obj.first;
         obj.second->onSave(stream, getGlobalName(obj.first));
     }
 }

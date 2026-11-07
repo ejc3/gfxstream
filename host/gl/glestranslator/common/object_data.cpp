@@ -16,6 +16,8 @@
 
 #include "common/object_data.h"
 
+#include <atomic>
+
 NamedObjectType ObjectDataType2NamedObjectType(ObjectDataType objDataType) {
     switch (objDataType) {
         case SHADER_DATA:
@@ -65,4 +67,32 @@ bool ObjectData::needRestore() const {
 
 GenNameInfo ObjectData::getGenNameInfo() const {
     return GenNameInfo(ObjectDataType2NamedObjectType(m_dataType));
+}
+
+RestoreCost& restoreCostOnThisThread() {
+    thread_local RestoreCost cost;
+    return cost;
+}
+
+namespace {
+std::atomic<uint64_t> sProgramBinaryRestores{0};
+}  // namespace
+
+uint64_t programBinaryRestores() { return sProgramBinaryRestores.load(); }
+
+void countProgramBinaryRestore() { sProgramBinaryRestores.fetch_add(1); }
+
+namespace {
+std::function<void()> sShaderCompileOnUseHook;
+}  // namespace
+
+void setShaderCompileOnUseHookForTesting(std::function<void()> hook) {
+    sShaderCompileOnUseHook = std::move(hook);
+}
+
+const std::function<void()>& shaderCompileOnUseHookForTesting() { return sShaderCompileOnUseHook; }
+
+ObjectIdentity& currentObjectIdentityOnThisThread() {
+    thread_local ObjectIdentity identity;
+    return identity;
 }

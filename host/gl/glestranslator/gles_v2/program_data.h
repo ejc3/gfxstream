@@ -125,6 +125,16 @@ public:
     int getHostUniformLocation(int guestLocation);
 
 private:
+    // Whether the host executable is the one the linked sources describe: set at a link whose
+    // shaders' current sources were what was compiled, and at a restore, which builds it from
+    // those sources (or their binary). Only such a program's binary is kept, so a later save
+    // never files a different executable under the same sources.
+    bool mBinaryCacheable = false;
+    // What a linked program's kept host binary is filed under: the program itself (its share
+    // group and local name, from the save or restore at it), then each stage's linked source,
+    // the attribute locations bound at its link, and its transform feedback varyings and mode.
+    std::string binaryKey(const std::vector<std::string>& transformFeedbacks,
+                          GLenum transformFeedbackBufferMode) const;
     // linkedAttribLocs stores the attribute locations the guest might
     // know about. It includes all boundAttribLocs before the previous
     // glLinkProgram and all attribute locations retrieved by glGetAttribLocation
