@@ -488,7 +488,8 @@ void ProgramData::restoreFinish() {
     RestoreCost& cost = restoreCostOnThisThread();
     using Clock = std::chrono::steady_clock;
     const int globalName = mRestoreGlobalName;
-    const getGlobalName_t getGlobalName = std::move(mRestoreGetGlobalName);
+    const std::function<int(NamedObjectType, ObjectLocalName)> getGlobalName =
+        std::move(mRestoreGetGlobalName);
     mRestoreGetGlobalName = nullptr;
     if (mRestoreLinked) {
         GLint (&tmpShaders)[NUM_SHADER_TYPE] = mRestoreTmpShaders;

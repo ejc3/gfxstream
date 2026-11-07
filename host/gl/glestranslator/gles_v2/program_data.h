@@ -131,7 +131,7 @@ private:
     bool mRestoreLinked = false;
     int mRestoreGlobalName = 0;
     GLint mRestoreTmpShaders[NUM_SHADER_TYPE] = {};
-    getGlobalName_t mRestoreGetGlobalName;
+    std::function<int(NamedObjectType, ObjectLocalName)> mRestoreGetGlobalName;
     // linkedAttribLocs stores the attribute locations the guest might
     // know about. It includes all boundAttribLocs before the previous
     // glLinkProgram and all attribute locations retrieved by glGetAttribLocation
