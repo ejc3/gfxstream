@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -111,7 +112,10 @@ public:
     void setObjectData(ObjectLocalName p_localName, ObjectDataPtr data);
     // snapshot functions
     void postLoad(const ObjectData::getObjDataPtr_t& getObjDataPtr);
-    void postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName);
+    // Restores this namespace's objects on the host GPU. |between|, when set, runs after each
+    // object: a restore off the guest's critical path paces itself there.
+    void postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName,
+                         const std::function<void()>& between = nullptr);
     void preSave(GlobalNameSpace *globalNameSpace);
     void onSave(gfxstream::Stream* stream);
     ObjectDataMap::const_iterator objDataMapBegin() const;
@@ -126,7 +130,7 @@ private:
     GlobalNameSpace *m_globalNameSpace = nullptr;
     // touchTextures loads all textures onto GPU
     // Please only call it if the NameSpace is for textures
-    void touchTextures();
+    void touchTextures(const std::function<void()>& between = nullptr);
 };
 
 struct EglImage;

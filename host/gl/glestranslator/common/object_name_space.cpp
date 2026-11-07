@@ -74,7 +74,7 @@ void NameSpace::postLoad(const ObjectData::getObjDataPtr_t& getObjDataPtr) {
     }
 }
 
-void NameSpace::touchTextures() {
+void NameSpace::touchTextures(const std::function<void()>& between) {
     assert(m_type == NamedObjectType::TEXTURE);
     for (const auto& obj : m_objectDataMap) {
         TextureData* texData = (TextureData*)obj.second.get();
@@ -96,14 +96,18 @@ void NameSpace::touchTextures() {
         setGlobalObject(obj.first, texNamedObj);
         texData->setGlobalName(texNamedObj->getGlobalName());
         texData->restore(0, nullptr);
+        if (between) {
+            between();
+        }
     }
 }
 
-void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName) {
+void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName,
+                                const std::function<void()>& between) {
     // Texture data are special, they got the global name from SaveableTexture
     // This is because texture data can be shared across multiple share groups
     if (m_type == NamedObjectType::TEXTURE) {
-        touchTextures();
+        touchTextures(between);
         return;
     }
     // 2 passes are needed for SHADER_OR_PROGRAM type, because (1) they
@@ -123,6 +127,9 @@ void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName
             }
             genName(obj.second->getGenNameInfo(), obj.first, false);
             obj.second->restore(obj.first, getGlobalName);
+            if (between) {
+                between();
+            }
         }
     }
 }

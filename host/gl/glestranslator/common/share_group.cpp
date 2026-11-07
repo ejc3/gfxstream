@@ -18,6 +18,8 @@
 #include <common/share_group.h>
 
 #include <array>
+#include <chrono>
+#include <string>
 #include <utility>
 
 #include "common/framebuffer_data.h"
@@ -119,7 +121,7 @@ void ShareGroup::setRestoreHookForTesting(std::function<void()> hook) {
     sRestoreHookForTesting = std::move(hook);
 }
 
-bool ShareGroup::postLoadRestore(bool finish) {
+bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& between) {
     gfxstream::base::AutoLock lock(m_restoreLock);
     if (!m_needLoadRestore.load(std::memory_order_acquire)) {
         return false;
@@ -128,22 +130,35 @@ bool ShareGroup::postLoadRestore(bool finish) {
         sRestoreHookForTesting();
     }
     ++tLoadRestores;
+    // Where a restore's time goes: per namespace, its object count and milliseconds.
+    const auto start = std::chrono::steady_clock::now();
+    std::string spent;
     int i = 0;
-    (void)i;
     for (auto ns : m_nameSpace) {
-        GFXSTREAM_DEBUG("ShareGroup::%s: %p: start post load restore namespace for type %d\n",
-                        __func__, this, i);
+        const auto nsStart = std::chrono::steady_clock::now();
+        size_t objects = 0;
+        for (auto it = ns->objDataMapBegin(); it != ns->objDataMapEnd(); ++it) {
+            ++objects;
+        }
         ns->postLoadRestore([this](NamedObjectType p_type,
                             ObjectLocalName p_localName) {
                                 return getGlobalName(p_type, p_localName);
-                        });
-        GFXSTREAM_DEBUG("ShareGroup::%s: %p: end post load restore namespace for type %d\n",
-                        __func__, this, i);
+                        }, between);
+        const long long nsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - nsStart).count();
+        if (objects) {
+            spent += " type" + std::to_string(i) + "=" + std::to_string(objects) + "/" +
+                     std::to_string(nsMs) + "ms";
+        }
         ++i;
     }
     if (finish) {
         GLEScontext::dispatcher().glFinish();
     }
+    GFXSTREAM_INFO("Restored share group %p in %lld ms (%s):%s", this,
+                   (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start).count(),
+                   between ? "paced" : "at once", spent.c_str());
     m_needLoadRestore.store(false, std::memory_order_release);
     return true;
 }

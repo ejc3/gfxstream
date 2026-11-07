@@ -118,8 +118,10 @@ public:
     // postLoadRestore() restores resources on hardware GPU. With |finish|, it also waits
     // for the GPU to finish that work before it marks the group restored: for a restore on
     // a context of another group, whose work the group's own contexts may otherwise read
-    // before it is done. Returns whether there was anything to restore.
-    bool postLoadRestore(bool finish = false);
+    // before it is done. |between|, when set, runs after each restored object, with the
+    // restore lock held: a restore off the guest's critical path paces itself there. Returns
+    // whether there was anything to restore.
+    bool postLoadRestore(bool finish = false, const std::function<void()>& between = nullptr);
     bool needRestore();
     // How many loaded share groups this thread restored (postLoadRestore() calls that had
     // something to restore). Tests read it to tell which thread a restore ran on.

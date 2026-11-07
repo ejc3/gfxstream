@@ -26,6 +26,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <functional>
+#include <thread>
+
 #include "client_api_exts.h"
 #include "egl_config.h"
 #include "egl_context.h"
@@ -1776,7 +1781,33 @@ EGLAPI EGLBoolean EGLAPIENTRY eglRestoreContextShareGroup(EGLDisplay display, EG
         return EGL_FALSE;
     }
     ShareGroupPtr group = ctx->getShareGroup();
-    return group && group->postLoadRestore(/*finish=*/true) ? EGL_TRUE : EGL_FALSE;
+    if (!group) {
+        return EGL_FALSE;
+    }
+    // Pacing: after every |every| objects, wait for the GPU to finish what the restore issued
+    // and then sleep |pauseUs|, so the guest's own frames are not queued behind a burst of
+    // restore work. FCVM_RESTORE_PACE_US and FCVM_RESTORE_PACE_EVERY set them; 0 turns it off.
+    static const long pauseUs = [] {
+        const char* v = getenv("FCVM_RESTORE_PACE_US");
+        return v ? atol(v) : 0L;
+    }();
+    static const long every = [] {
+        const char* v = getenv("FCVM_RESTORE_PACE_EVERY");
+        long n = v ? atol(v) : 1L;
+        return n > 0 ? n : 1L;
+    }();
+    long count = 0;
+    std::function<void()> between;
+    if (pauseUs > 0) {
+        between = [&count] {
+            if (++count % every) {
+                return;
+            }
+            GLEScontext::dispatcher().glFinish();
+            std::this_thread::sleep_for(std::chrono::microseconds(pauseUs));
+        };
+    }
+    return group->postLoadRestore(/*finish=*/true, between) ? EGL_TRUE : EGL_FALSE;
 }
 
 EGLAPI void EGLAPIENTRY eglUseOsEglApi(EGLBoolean enable, EGLBoolean nullEgl) {
