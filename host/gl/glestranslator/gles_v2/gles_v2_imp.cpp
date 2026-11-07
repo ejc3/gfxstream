@@ -895,6 +895,7 @@ GL_APICALL void  GL_APIENTRY glCompileShader(GLuint shader){
         SET_ERROR_IF(objData->getDataType()!= SHADER_DATA,GL_INVALID_OPERATION);
         ShaderParser* sp = (ShaderParser*)objData;
         SET_ERROR_IF(sp->getDeleteStatus(), GL_INVALID_VALUE);
+        sp->clearHostCompilePending();
         GLint compileStatus;
         if (sp->validShader()) {
             ctx->dispatcher().glCompileShader(globalShaderName);
@@ -2956,6 +2957,7 @@ GL_APICALL void  GL_APIENTRY glGetShaderiv(GLuint shader, GLenum pname, GLint* p
             }
             break;
         default:
+            sp->ensureHostCompiled(globalShaderName);
             ctx->dispatcher().glGetShaderiv(globalShaderName,pname,params);
         }
     }
@@ -3400,6 +3402,20 @@ GL_APICALL void  GL_APIENTRY glLinkProgram(GLuint program){
         ProgramData* programData = (ProgramData*)objData;
         GLint fragmentShader   = programData->getAttachedFragmentShader();
         GLint vertexShader =  programData->getAttachedVertexShader();
+        // a shader object a restore left uncompiled on the host is compiled before it links
+        for (GLuint attached : {programData->getAttachedVertexShader(),
+                                programData->getAttachedFragmentShader(),
+                                programData->getAttachedComputeShader()}) {
+            if (!attached) {
+                continue;
+            }
+            auto shaderData = ctx->shareGroup()->getObjectData(
+                    NamedObjectType::SHADER_OR_PROGRAM, attached);
+            if (shaderData && shaderData->getDataType() == SHADER_DATA) {
+                ((ShaderParser*)shaderData)->ensureHostCompiled(ctx->shareGroup()->getGlobalName(
+                        NamedObjectType::SHADER_OR_PROGRAM, attached));
+            }
+        }
 
         if (ctx->getMajorVersion() >= 3 && ctx->getMinorVersion() >= 1) {
             ctx->dispatcher().glLinkProgram(globalProgramName);
@@ -3947,6 +3963,8 @@ GL_APICALL void  GL_APIENTRY glShaderSource(GLuint shader, GLsizei count, const 
         SET_ERROR_IF(objData->getDataType() != SHADER_DATA,
                      GL_INVALID_OPERATION);
         ShaderParser* sp = (ShaderParser*)objData;
+        // a link uses the last compiled source: one a restore left pending is compiled first
+        sp->ensureHostCompiled(globalShaderName);
         sp->setSrc(count, string, length);
         if (isGles2Gles()) {
             if (sDebugPrintShaders) { // save repeated checks

@@ -82,6 +82,12 @@ void ShaderParser::onSave(gfxstream::Stream* stream, unsigned int globalName) co
     stream->putByte(m_coreProfile);
 }
 
+// FCVM_RESTORE_DEFER_SHADERS=0 compiles every shader object during the restore, as before.
+static const bool sDeferShaderCompiles = [] {
+    const char* v = getenv("FCVM_RESTORE_DEFER_SHADERS");
+    return !v || strcmp(v, "0") != 0;
+}();
+
 void ShaderParser::restore(ObjectLocalName localName,
            const getGlobalName_t& getGlobalName) {
     ObjectData::restore(localName, getGlobalName);
@@ -97,11 +103,21 @@ void ShaderParser::restore(ObjectLocalName localName,
     if (m_compileStatus) {
         RestoreCost& cost = restoreCostOnThisThread();
         cost.shaders++;
+        if (sDeferShaderCompiles) {
+            m_hostCompilePending.store(true);
+            return;
+        }
         const auto start = std::chrono::steady_clock::now();
         GLEScontext::dispatcher().glCompileShader(globalName);
         cost.compileUs += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
                               std::chrono::steady_clock::now() - start)
                               .count();
+    }
+}
+
+void ShaderParser::ensureHostCompiled(GLuint globalName) {
+    if (m_hostCompilePending.exchange(false)) {
+        GLEScontext::dispatcher().glCompileShader(globalName);
     }
 }
 
