@@ -473,10 +473,30 @@ void ProgramData::restore(ObjectLocalName localName,
                     mTransformFeedbackBufferMode);
             mTransformFeedbacks.clear();
         }
-        const auto linkStart = Clock::now();
         dispatcher.glLinkProgram(globalName);
+        for (int i = 0; i < NUM_SHADER_TYPE; i++) {
+            mRestoreTmpShaders[i] = tmpShaders[i];
+        }
+    }
+    mRestoreLinked = shoudLoadLinked;
+    mRestoreGlobalName = globalName;
+    mRestoreGetGlobalName = getGlobalName;
+}
+
+void ProgramData::restoreFinish() {
+    GLDispatch& dispatcher = GLEScontext::dispatcher();
+    RestoreCost& cost = restoreCostOnThisThread();
+    using Clock = std::chrono::steady_clock;
+    const int globalName = mRestoreGlobalName;
+    const getGlobalName_t getGlobalName = std::move(mRestoreGetGlobalName);
+    mRestoreGetGlobalName = nullptr;
+    if (mRestoreLinked) {
+        GLint (&tmpShaders)[NUM_SHADER_TYPE] = mRestoreTmpShaders;
+        const auto linkStart = Clock::now();
         dispatcher.glUseProgram(globalName);
-        cost.linkUs += usSince(linkStart);
+        cost.linkUs += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+                           Clock::now() - linkStart)
+                           .count();
 #ifdef DEBUG
         for (const auto& attribLocs : linkedAttribLocs) {
             assert(dispatcher.glGetAttribLocation(globalName,

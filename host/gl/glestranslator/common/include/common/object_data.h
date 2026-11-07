@@ -75,6 +75,9 @@ public:
     //          because it messes up context object bindings.
     virtual void restore(ObjectLocalName localName,
                          const getGlobalName_t& getGlobalName) = 0;
+    // A namespace restores all its objects, then finishes each: restore() issues the GL work
+    // and restoreFinish() reads its results, so the driver can work on many objects at once.
+    virtual void restoreFinish() {}
     virtual GenNameInfo getGenNameInfo() const;
     bool needRestore() const;
 private:

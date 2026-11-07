@@ -18,6 +18,8 @@
 
 #include <assert.h>
 
+#include <vector>
+
 #include "common/gles_context.h"
 #include "common/translator_ifaces.h"
 #include "gfxstream/containers/Lookup.h"
@@ -116,6 +118,7 @@ void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName
     int numPasses = m_type == NamedObjectType::SHADER_OR_PROGRAM
             ? 2 : 1;
     for (int pass = 0; pass < numPasses; pass ++) {
+        std::vector<ObjectData*> issued;
         for (const auto& obj : m_objectDataMap) {
             assert(m_type == ObjectDataType2NamedObjectType(
                     obj.second->getDataType()));
@@ -127,6 +130,10 @@ void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName
             }
             genName(obj.second->getGenNameInfo(), obj.first, false);
             obj.second->restore(obj.first, getGlobalName);
+            issued.push_back(obj.second.get());
+        }
+        for (ObjectData* data : issued) {
+            data->restoreFinish();
             if (between) {
                 between();
             }

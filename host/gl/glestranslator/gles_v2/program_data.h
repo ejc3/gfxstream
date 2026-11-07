@@ -69,6 +69,8 @@ public:
     // restore() in ProgramData must be executed after shaders
     virtual void restore(ObjectLocalName localName,
            const getGlobalName_t& getGlobalName) override;
+    // the half of restore() that waits for the link: locations, uniforms, the unlinked program
+    virtual void restoreFinish() override;
 
     GLuint getAttachedVertexShader() const;
     GLuint getAttachedFragmentShader() const;
@@ -125,6 +127,11 @@ public:
     int getHostUniformLocation(int guestLocation);
 
 private:
+    // what restore() leaves to restoreFinish()
+    bool mRestoreLinked = false;
+    int mRestoreGlobalName = 0;
+    GLint mRestoreTmpShaders[NUM_SHADER_TYPE] = {};
+    getGlobalName_t mRestoreGetGlobalName;
     // linkedAttribLocs stores the attribute locations the guest might
     // know about. It includes all boundAttribLocs before the previous
     // glLinkProgram and all attribute locations retrieved by glGetAttribLocation

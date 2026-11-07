@@ -134,6 +134,11 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
     const auto start = std::chrono::steady_clock::now();
     RestoreCost& cost = restoreCostOnThisThread();
     cost = RestoreCost();
+    // the driver compiles and links on threads of its own; the restore finishes each program
+    // after it has issued all of them
+    if (GLEScontext::dispatcher().glMaxShaderCompilerThreadsKHR) {
+        GLEScontext::dispatcher().glMaxShaderCompilerThreadsKHR(0xFFFFFFFFu);
+    }
     std::string spent;
     int i = 0;
     for (auto ns : m_nameSpace) {

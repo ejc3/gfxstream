@@ -200,6 +200,8 @@ void GLDispatch::clearDispatchFuncs() {
     m_isLoaded = false;
 }
 
+void (*GLDispatch::glMaxShaderCompilerThreadsKHR)(GLuint) = nullptr;
+
 void GLDispatch::dispatchFuncs(GLESVersion version, GlLibrary* glLib, EGLGetProcAddressFunc eglGPA) {
     gfxstream::base::AutoLock mutex(s_lock);
     if(m_isLoaded)
@@ -211,6 +213,16 @@ void GLDispatch::dispatchFuncs(GLESVersion version, GlLibrary* glLib, EGLGetProc
 
     LIST_GLES_EXTENSIONS_FUNCTIONS(LOAD_GLEXT_FUNC)
     LIST_GLES_EXTENSIONS_FUNCTIONS(LOAD_GLEXT_FUNC_DEBUG_LOG_WRAPPER)
+
+    for (const char* name : {"glMaxShaderCompilerThreadsKHR", "glMaxShaderCompilerThreadsARB"}) {
+        if (!glMaxShaderCompilerThreadsKHR) {
+            void* address = (void*)getGLFuncAddress(name, glLib);
+            if (!address) {
+                address = eglGPA(name);
+            }
+            glMaxShaderCompilerThreadsKHR = (void (*)(GLuint))address;
+        }
+    }
 
     /* Load both GLES1 and GLES2. On core profile, GLES 1 implementation will
      * require GLES 3 function supports and set version to GLES_3_0. Thus

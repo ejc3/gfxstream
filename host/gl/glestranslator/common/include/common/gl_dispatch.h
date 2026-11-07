@@ -65,6 +65,10 @@ public:
 
     LIST_GLES_FUNCTIONS(GLES_DECLARE_METHOD, GLES_DECLARE_METHOD)
 
+    // GL_KHR_parallel_shader_compile (or ARB's): lets the driver compile and link on threads of
+    // its own until a query needs the result. Null when the host GL does not have it.
+    static void (*glMaxShaderCompilerThreadsKHR)(GLuint count);
+
     #if defined(ENABLE_DISPATCH_LOG)
     LIST_GLES_FUNCTIONS(GLES_DECLARE_UNDERLYING_METHOD, GLES_DECLARE_UNDERLYING_METHOD)
     #endif
