@@ -52,7 +52,7 @@ ShareGroup::ShareGroup(GlobalNameSpace *globalNameSpace,
                                        globalNameSpace, stream, loadObject);
     }
     if (stream) {
-        m_needLoadRestore = true;
+        m_needLoadRestore.store(true, std::memory_order_release);
         int i = 0;
         (void)i;
         for (auto ns : m_nameSpace) {
@@ -113,10 +113,19 @@ thread_local uint64_t tLoadRestores = 0;
 
 uint64_t ShareGroup::loadRestoresOnThisThread() { return tLoadRestores; }
 
+std::function<void()> ShareGroup::sRestoreHookForTesting;
+
+void ShareGroup::setRestoreHookForTesting(std::function<void()> hook) {
+    sRestoreHookForTesting = std::move(hook);
+}
+
 bool ShareGroup::postLoadRestore(bool finish) {
     gfxstream::base::AutoLock lock(m_restoreLock);
-    if (!m_needLoadRestore) {
+    if (!m_needLoadRestore.load(std::memory_order_acquire)) {
         return false;
+    }
+    if (sRestoreHookForTesting) {
+        sRestoreHookForTesting();
     }
     ++tLoadRestores;
     int i = 0;
@@ -135,12 +144,12 @@ bool ShareGroup::postLoadRestore(bool finish) {
     if (finish) {
         GLEScontext::dispatcher().glFinish();
     }
-    m_needLoadRestore = false;
+    m_needLoadRestore.store(false, std::memory_order_release);
     return true;
 }
 
 bool ShareGroup::needRestore() {
-    return m_needLoadRestore;
+    return m_needLoadRestore.load(std::memory_order_acquire);
 }
 
 void ShareGroup::lockObjectData() {

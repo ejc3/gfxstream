@@ -218,6 +218,10 @@ static void initContext(GLEScontext* ctx, ShareGroupPtr grp, bool nativeTextureD
     if (!ctx->shareGroup()) {
         ctx->setShareGroup(grp);
     }
+    // the group's restore first, as in GLESv2's initContext
+    if (ctx->shareGroup()) {
+        ctx->shareGroup()->postLoadRestore();
+    }
     if (!ctx->isInitialized()) {
         ctx->init(nativeTextureDecompressionEnabled, programBinaryLinkStatusEnabled);
         translator::gles1::glBindTexture(GL_TEXTURE_2D,0);

@@ -244,6 +244,12 @@ static void initContext(GLEScontext* ctx, ShareGroupPtr grp, bool nativeTextureD
     if (!ctx->shareGroup()) {
         ctx->setShareGroup(grp);
     }
+    // The group's restore first, before this context touches its objects (init binds its
+    // default textures): it waits for one another thread is running (RendererImpl restores
+    // a retake's groups outside the driver lock) or does it here.
+    if (ctx->shareGroup()) {
+        ctx->shareGroup()->postLoadRestore();
+    }
     if (!ctx->isInitialized()) {
         ctx->init(nativeTextureDecompressionEnabled, programBinaryLinkStatusEnabled);
         translator::gles2::glBindTexture(GL_TEXTURE_2D,0);

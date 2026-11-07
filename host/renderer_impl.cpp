@@ -1133,11 +1133,13 @@ void RendererImpl::startShareGroupRestore() {
     const uint64_t posted = fb->guestPostCount();
     mShareGroupRestoreStop.store(false, std::memory_order_release);
     mShareGroupsRestored.store(-1, std::memory_order_release);
-    mShareGroupRestore = std::thread([this, posted]() {
+    mShareGroupRestoreBegan.store(false, std::memory_order_release);
+    const auto fallback = mShareGroupRestoreFallback;
+    mShareGroupRestore = std::thread([this, posted, fallback]() {
         using namespace std::chrono;
         // The retake's first frame is in the restore's critical path; the restore is not.
         // A guest that posts nothing within 10 s (its screen off) is restored then.
-        const auto deadline = steady_clock::now() + seconds(10);
+        const auto deadline = steady_clock::now() + fallback;
         while (!mShareGroupRestoreStop.load(std::memory_order_acquire)) {
             const auto fb = FrameBuffer::getFB();
             if (!fb || fb->guestPostCount() > posted || steady_clock::now() >= deadline) {
@@ -1153,6 +1155,7 @@ void RendererImpl::startShareGroupRestore() {
         if (!emulationGl) {
             return;
         }
+        mShareGroupRestoreBegan.store(true, std::memory_order_release);
         const auto t0 = steady_clock::now();
         const int groups = emulationGl->restoreShareGroups(mShareGroupRestoreStop);
         mShareGroupsRestored.store(groups, std::memory_order_release);

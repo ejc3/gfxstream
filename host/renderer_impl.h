@@ -228,6 +228,10 @@ private:
     int waitForShareGroupRestore();
     // How many groups the last restore restored; -1 until one has finished. For tests.
     int shareGroupsRestored() const { return mShareGroupsRestored.load(std::memory_order_acquire); }
+    // Whether the last restore has begun restoring (past its wait for the guest's frame).
+    bool shareGroupRestoreBegan() const { return mShareGroupRestoreBegan.load(std::memory_order_acquire); }
+    // How long a restore waits for the guest's first frame before it restores anyway (10 s).
+    void setShareGroupRestoreFallbackForTesting(std::chrono::milliseconds ms) { mShareGroupRestoreFallback = ms; }
   private:
     // Starts, stops and waits are serialized: a mirror join and an embedder's save or stop
     // can come at once, and only one of them may join the thread.
@@ -235,6 +239,8 @@ private:
     std::thread mShareGroupRestore;
     std::atomic<bool> mShareGroupRestoreStop{false};
     std::atomic<int> mShareGroupsRestored{-1};
+    std::atomic<bool> mShareGroupRestoreBegan{false};
+    std::chrono::milliseconds mShareGroupRestoreFallback{10000};
 };
 
 }  // namespace host
