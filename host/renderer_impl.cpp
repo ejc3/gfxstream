@@ -20,6 +20,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -1155,6 +1159,11 @@ void RendererImpl::startShareGroupRestore() {
         if (!emulationGl) {
             return;
         }
+#ifdef __linux__
+        // the guest's own threads first: the restore compiles programs, which it may take
+        // seconds over, and must not take the app's frames
+        setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 19);
+#endif
         mShareGroupRestoreBegan.store(true, std::memory_order_release);
         const auto t0 = steady_clock::now();
         const int groups = emulationGl->restoreShareGroups(mShareGroupRestoreStop);
