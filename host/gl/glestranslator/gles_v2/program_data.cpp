@@ -17,9 +17,13 @@
 #include "program_data.h"
 
 #include <chrono>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
 #include "gfxstream/host/glUtils.h"
 
 #include "gfxstream/containers/Lookup.h"
+#include "gfxstream/synchronization/Lock.h"
 #include "gfxstream/host/stream_utils.h"
 #include "angle_shader_parser.h"
 #include "common/gl_utils.h"
@@ -67,6 +71,78 @@ static int s_glShaderType2ShaderType(GLenum type) {
         break;
     }
     return ProgramData::NUM_SHADER_TYPE;
+}
+
+namespace {
+
+// Host program binaries of the guest's linked programs, kept in the emulator's memory and
+// keyed by ProgramData::binaryKey(). A save (a GPU release, or the warm snapshot's) stores each
+// live program's binary; a restore on the same GPU model and driver loads it with
+// glProgramBinary instead of compiling and linking again, which for a browser's 122 programs
+// took 1.8 s of a 2.3 s restore on a T4. The memory is the process's, so a retake in the same
+// emulator and a clone of a VM snapshot both find it. A binary the driver refuses falls back to
+// the compile and link.
+struct ProgramBinary {
+    GLenum format = 0;
+    std::vector<uint8_t> data;
+};
+constexpr size_t kMaxProgramBinaryBytes = 64u << 20;
+constexpr GLint kMaxOneProgramBinaryBytes = 4 << 20;
+gfxstream::base::Lock sProgramBinaryLock;
+std::unordered_map<std::string, ProgramBinary> sProgramBinaries;
+size_t sProgramBinaryBytes = 0;
+
+void storeProgramBinary(std::string key, ProgramBinary binary) {
+    gfxstream::base::AutoLock lock(sProgramBinaryLock);
+    auto it = sProgramBinaries.find(key);
+    if (it != sProgramBinaries.end()) {
+        sProgramBinaryBytes -= it->second.data.size();
+        sProgramBinaries.erase(it);
+    }
+    if (binary.data.size() > kMaxProgramBinaryBytes) {
+        return;
+    }
+    // At the cap the oldest generation goes: the next save stores what is live again.
+    if (sProgramBinaryBytes + binary.data.size() > kMaxProgramBinaryBytes) {
+        sProgramBinaries.clear();
+        sProgramBinaryBytes = 0;
+    }
+    sProgramBinaryBytes += binary.data.size();
+    sProgramBinaries.emplace(std::move(key), std::move(binary));
+}
+
+bool findProgramBinary(const std::string& key, ProgramBinary* out) {
+    gfxstream::base::AutoLock lock(sProgramBinaryLock);
+    auto it = sProgramBinaries.find(key);
+    if (it == sProgramBinaries.end()) {
+        return false;
+    }
+    *out = it->second;
+    return true;
+}
+
+}  // namespace
+
+std::string ProgramData::binaryKey(const std::vector<std::string>& transformFeedbacks,
+                                   GLenum transformFeedbackBufferMode) const {
+    std::string key;
+    for (const auto& s : attachedShaders) {
+        key += std::to_string(s.linkedSource.size());
+        key += ':';
+        key += s.linkedSource;
+    }
+    std::vector<std::pair<std::string, GLuint>> attribs(linkedAttribLocs.begin(),
+                                                        linkedAttribLocs.end());
+    std::sort(attribs.begin(), attribs.end());
+    for (const auto& attrib : attribs) {
+        key += "|a" + std::to_string(attrib.first.size()) + ':' + attrib.first + '=' +
+               std::to_string(attrib.second);
+    }
+    for (const auto& varying : transformFeedbacks) {
+        key += "|v" + std::to_string(varying.size()) + ':' + varying;
+    }
+    key += "|m" + std::to_string(transformFeedbackBufferMode);
+    return key;
 }
 
 ProgramData::ProgramData(int glesMaj, int glesMin)
@@ -343,6 +419,23 @@ void ProgramData::onSave(gfxstream::Stream* stream, unsigned int globalName) con
         gfxstream::host::saveCollection(stream, uniformBlocks, saveUniformBlock);
         saveTransformFeedbacks(stream, transformFeedbacks);
         stream->putBe32(mTransformFeedbackBufferMode);
+        GLDispatch& dispatcher = GLEScontext::dispatcher();
+        if (LinkStatus && dispatcher.glGetProgramBinary) {
+            GLint length = 0;
+            dispatcher.glGetProgramiv(ProgramName, GL_PROGRAM_BINARY_LENGTH, &length);
+            if (length > 0 && length <= kMaxOneProgramBinaryBytes) {
+                ProgramBinary binary;
+                binary.data.resize(length);
+                GLsizei written = 0;
+                dispatcher.glGetProgramBinary(ProgramName, length, &written, &binary.format,
+                                              binary.data.data());
+                if (written > 0) {
+                    binary.data.resize(written);
+                    storeProgramBinary(binaryKey(transformFeedbacks, mTransformFeedbackBufferMode),
+                                       std::move(binary));
+                }
+            }
+        }
     }
 
     for (const auto& s : attachedShaders) {
@@ -404,12 +497,29 @@ void ProgramData::restore(ObjectLocalName localName,
         return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - t)
             .count();
     };
+    bool fromBinary = false;
+    if (shoudLoadLinked && dispatcher.glProgramBinary) {
+        ProgramBinary binary;
+        if (findProgramBinary(binaryKey(mTransformFeedbacks, mTransformFeedbackBufferMode),
+                              &binary)) {
+            dispatcher.glProgramBinary(globalName, binary.format, binary.data.data(),
+                                       (GLsizei)binary.data.size());
+            GLint linked = GL_FALSE;
+            dispatcher.glGetProgramiv(globalName, GL_LINK_STATUS, &linked);
+            if (linked) {
+                fromBinary = true;
+                cost.programBinaries++;
+                mTransformFeedbacks.clear();
+                dispatcher.glUseProgram(globalName);
+            }
+        }
+    }
     if (shoudLoadLinked) {
         // Really, each program name corresponds to 2 programs:
         // the one that is already linked, and the one that is not yet linked.
         // We need to restore both.
-        GLint tmpShaders[NUM_SHADER_TYPE];
-        for (int i = 0; i < NUM_SHADER_TYPE; i++) {
+        GLint tmpShaders[NUM_SHADER_TYPE] = {};
+        for (int i = 0; i < NUM_SHADER_TYPE && !fromBinary; i++) {
             AttachedShader& s = attachedShaders[i];
             if (s.linkedSource.empty()) {
                 tmpShaders[i] = 0;
@@ -454,6 +564,9 @@ void ProgramData::restore(ObjectLocalName localName,
             dispatcher.glAttachShader(globalName, tmpShaders[i]);
         }
         for (const auto& attribLocs : linkedAttribLocs) {
+            if (fromBinary) {
+                break;
+            }
             // Prefix "gl_" is reserved, we should skip those.
             // https://www.khronos.org/registry/OpenGL-Refpages/es3.0/html/glBindAttribLocation.xhtml
             if  (strncmp(attribLocs.first.c_str(), "gl_", 3) == 0) {
@@ -462,7 +575,7 @@ void ProgramData::restore(ObjectLocalName localName,
             dispatcher.glBindAttribLocation(globalName, attribLocs.second,
                     attribLocs.first.c_str());
         }
-        if (mGlesMajorVersion >= 3) {
+        if (mGlesMajorVersion >= 3 && !fromBinary) {
             std::vector<const char*> varyings;
             varyings.resize(mTransformFeedbacks.size());
             for (size_t i = 0; i < mTransformFeedbacks.size(); i++) {
@@ -473,10 +586,12 @@ void ProgramData::restore(ObjectLocalName localName,
                     mTransformFeedbackBufferMode);
             mTransformFeedbacks.clear();
         }
-        const auto linkStart = Clock::now();
-        dispatcher.glLinkProgram(globalName);
-        dispatcher.glUseProgram(globalName);
-        cost.linkUs += usSince(linkStart);
+        if (!fromBinary) {
+            const auto linkStart = Clock::now();
+            dispatcher.glLinkProgram(globalName);
+            dispatcher.glUseProgram(globalName);
+            cost.linkUs += usSince(linkStart);
+        }
 #ifdef DEBUG
         for (const auto& attribLocs : linkedAttribLocs) {
             assert(dispatcher.glGetAttribLocation(globalName,

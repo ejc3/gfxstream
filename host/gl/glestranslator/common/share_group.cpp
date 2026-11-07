@@ -158,7 +158,7 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
         GLEScontext::dispatcher().glFinish();
     }
     GFXSTREAM_INFO("Restored share group %p in %lld ms (%s):%s; %llu programs, %llu shaders: "
-                   "translate %llu ms, compile %llu ms, link %llu ms",
+                   "translate %llu ms, compile %llu ms, link %llu ms, %llu from binaries",
                    this,
                    (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start).count(),
@@ -166,7 +166,8 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
                    (unsigned long long)cost.programs, (unsigned long long)cost.shaders,
                    (unsigned long long)(cost.translateUs / 1000),
                    (unsigned long long)(cost.compileUs / 1000),
-                   (unsigned long long)(cost.linkUs / 1000));
+                   (unsigned long long)(cost.linkUs / 1000),
+                   (unsigned long long)cost.programBinaries);
     m_needLoadRestore.store(false, std::memory_order_release);
     return true;
 }
