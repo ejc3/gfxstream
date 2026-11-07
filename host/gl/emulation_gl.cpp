@@ -18,8 +18,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
-#include <thread>
-#include <chrono>
 #include <vector>
 
 #include "OpenGLESDispatch/DispatchTables.h"
@@ -1562,9 +1560,6 @@ void EmulationGl::createSharedTrivialContext(EGLContext* contextOut, EGLSurface*
     *surfOut = s_egl.eglCreatePbufferSurface(mEglDisplay, mEglConfig, pbufAttribs);
 }
 
-// The pause after each restored group (restoreShareGroups).
-static constexpr int kShareGroupRestoreGapMs = 20;
-
 int EmulationGl::restoreShareGroups(const std::atomic<bool>& stop) {
     if (!s_egl.eglRestoreContextShareGroup || mEglDisplay == EGL_NO_DISPLAY) {
         return 0;
@@ -1600,8 +1595,6 @@ int EmulationGl::restoreShareGroups(const std::atomic<bool>& stop) {
         }
         if (loaded && s_egl.eglRestoreContextShareGroup(mEglDisplay, loaded->getEGLContext())) {
             restored++;
-            // a gap between groups, in which the guest's threads run
-            std::this_thread::sleep_for(std::chrono::milliseconds(kShareGroupRestoreGapMs));
         }
     }
     s_egl.eglMakeCurrent(mEglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
