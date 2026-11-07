@@ -125,6 +125,10 @@ public:
     int getHostUniformLocation(int guestLocation);
 
 private:
+    // What a linked program's host binary depends on: each stage's linked source, the attribute
+    // locations bound at its link, and its transform feedback varyings and mode.
+    std::string binaryKey(const std::vector<std::string>& transformFeedbacks,
+                          GLenum transformFeedbackBufferMode) const;
     // linkedAttribLocs stores the attribute locations the guest might
     // know about. It includes all boundAttribLocs before the previous
     // glLinkProgram and all attribute locations retrieved by glGetAttribLocation

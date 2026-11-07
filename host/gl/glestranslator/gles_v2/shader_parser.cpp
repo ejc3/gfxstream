@@ -92,8 +92,17 @@ void ShaderParser::restore(ObjectLocalName localName,
     } else {
         GLEScontext::dispatcher().glShaderSource(globalName, 1, parsedLines(), NULL);
     }
-    if (m_compileStatus)
+    if (m_compileStatus) {
+        RestoreCost& cost = restoreCostOnThisThread();
+        cost.shaders++;
+        m_hostCompilePending.store(true);
+    }
+}
+
+void ShaderParser::ensureHostCompiled(GLuint globalName) {
+    if (m_hostCompilePending.exchange(false)) {
         GLEScontext::dispatcher().glCompileShader(globalName);
+    }
 }
 
 static const char kAlwaysInvalidShader[] =

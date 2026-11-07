@@ -22,6 +22,7 @@
 #include "gles_v2_context.h"
 #include <string>
 #include <common/share_group.h>
+#include <atomic>
 #include <unordered_set>
 
 class ShaderParser : public ObjectData {
@@ -53,6 +54,13 @@ public:
     void setCompileStatus(bool val);
     bool getCompileStatus() const { return m_compileStatus; }
 
+    // A restore sets a compiled shader's source on the host and leaves the compile to the first
+    // host use that needs it (a link of a program it is attached to, a host query of it): a
+    // program restored from its binary needs no compiled shader objects. Compiles it then.
+    void ensureHostCompiled(GLuint globalName);
+    // The guest compiles it again itself.
+    void clearHostCompilePending() { m_hostCompilePending.store(false); }
+
     void setDeleteStatus(bool val) { m_deleteStatus = val; }
     bool getDeleteStatus() const { return m_deleteStatus; }
 
@@ -69,6 +77,7 @@ public:
     const char* getCompiledSrc() const { return m_compiledSrc.c_str(); }
 
 private:
+    std::atomic<bool> m_hostCompilePending{false};
     void convertESSLToGLSL();
 
     std::string m_originalSrc;
