@@ -786,7 +786,8 @@ TEST(FrameBufferReleaseTest, AContextOfAGroupBeingRestoredWaitsForTheRestore) {
 // and link again, which a browser brought to the front right after the retake waited for. The
 // program must still link again from its shaders afterwards: a link compiles a shader the
 // restore left pending, and new source set without a compile does not replace the source that
-// was compiled, since a link uses the last compiled source.
+// was compiled, since a link uses the last compiled source; and a host query of a shader
+// compiles it first.
 TEST(FrameBufferReleaseTest, ARetakeRestoresProgramsFromBinariesAndTheirShadersStillLink) {
     ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
     if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
@@ -867,6 +868,17 @@ TEST(FrameBufferReleaseTest, ARetakeRestoresProgramsFromBinariesAndTheirShadersS
     }
     gl->glLinkProgram(program);
     EXPECT_EQ(GL_TRUE, linkStatus()) << "a link after the retake compiled source set after the release";
+
+    // the host's compile status of a shader, asked first: it is compiled for the query
+    retake();
+    gl = LazyLoadedGLESv2Dispatch::get();
+    gl->glGetAttachedShaders(program, 2, &count, shaders);
+    ASSERT_EQ(2, count);
+    for (GLuint shader : shaders) {
+        GLint compiled = GL_FALSE;
+        gl->glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+        EXPECT_EQ(GL_TRUE, compiled) << "a shader's host compile status was asked before it was compiled";
+    }
     fb->bindContext(0, 0, 0);
     threadInfo.reset();
     renderer->stop(true);
