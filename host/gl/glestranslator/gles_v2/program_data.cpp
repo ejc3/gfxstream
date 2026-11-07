@@ -498,7 +498,7 @@ void ProgramData::restore(ObjectLocalName localName,
             .count();
     };
     bool fromBinary = false;
-    if (shoudLoadLinked && dispatcher.glProgramBinary) {
+    if (false && shoudLoadLinked && dispatcher.glProgramBinary) {
         ProgramBinary binary;
         if (findProgramBinary(binaryKey(mTransformFeedbacks, mTransformFeedbackBufferMode),
                               &binary)) {
