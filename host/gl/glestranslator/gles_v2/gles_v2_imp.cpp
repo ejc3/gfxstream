@@ -3412,7 +3412,7 @@ GL_APICALL void  GL_APIENTRY glLinkProgram(GLuint program){
             auto shaderData = ctx->shareGroup()->getObjectData(
                     NamedObjectType::SHADER_OR_PROGRAM, attached);
             if (shaderData && shaderData->getDataType() == SHADER_DATA) {
-                ((ShaderParser*)shaderData)->ensureHostCompiled(ctx->shareGroup()->getGlobalName(
+                if (false) ((ShaderParser*)shaderData)->ensureHostCompiled(ctx->shareGroup()->getGlobalName(
                         NamedObjectType::SHADER_OR_PROGRAM, attached));
             }
         }
