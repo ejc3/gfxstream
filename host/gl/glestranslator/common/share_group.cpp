@@ -132,6 +132,8 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
     ++tLoadRestores;
     // Where a restore's time goes: per namespace, its object count and milliseconds.
     const auto start = std::chrono::steady_clock::now();
+    RestoreCost& cost = restoreCostOnThisThread();
+    cost = RestoreCost();
     std::string spent;
     int i = 0;
     for (auto ns : m_nameSpace) {
@@ -155,10 +157,16 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
     if (finish) {
         GLEScontext::dispatcher().glFinish();
     }
-    GFXSTREAM_INFO("Restored share group %p in %lld ms (%s):%s", this,
+    GFXSTREAM_INFO("Restored share group %p in %lld ms (%s):%s; %llu programs, %llu shaders: "
+                   "translate %llu ms, compile %llu ms, link %llu ms",
+                   this,
                    (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start).count(),
-                   between ? "paced" : "at once", spent.c_str());
+                   between ? "paced" : "at once", spent.c_str(),
+                   (unsigned long long)cost.programs, (unsigned long long)cost.shaders,
+                   (unsigned long long)(cost.translateUs / 1000),
+                   (unsigned long long)(cost.compileUs / 1000),
+                   (unsigned long long)(cost.linkUs / 1000));
     m_needLoadRestore.store(false, std::memory_order_release);
     return true;
 }

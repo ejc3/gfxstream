@@ -66,3 +66,8 @@ bool ObjectData::needRestore() const {
 GenNameInfo ObjectData::getGenNameInfo() const {
     return GenNameInfo(ObjectDataType2NamedObjectType(m_dataType));
 }
+
+RestoreCost& restoreCostOnThisThread() {
+    thread_local RestoreCost cost;
+    return cost;
+}

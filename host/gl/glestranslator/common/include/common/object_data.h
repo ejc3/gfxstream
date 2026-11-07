@@ -19,6 +19,7 @@
 #include "render-utils/stream.h"
 #include "common/named_object.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -36,6 +37,18 @@ enum ObjectDataType {
 
 class ObjectData;
 typedef std::shared_ptr<ObjectData> ObjectDataPtr;
+
+// Where a snapshot restore's time goes on this thread, in microseconds: shader translation,
+// glCompileShader, and glLinkProgram up to the program's first query. ShareGroup reports and
+// resets it per restored group.
+struct RestoreCost {
+    uint64_t translateUs = 0;
+    uint64_t compileUs = 0;
+    uint64_t linkUs = 0;
+    uint64_t programs = 0;
+    uint64_t shaders = 0;
+};
+RestoreCost& restoreCostOnThisThread();
 
 extern NamedObjectType ObjectDataType2NamedObjectType(ObjectDataType objDataType);
 

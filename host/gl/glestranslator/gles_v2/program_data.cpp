@@ -15,6 +15,8 @@
 */
 
 #include "program_data.h"
+
+#include <chrono>
 #include "gfxstream/host/glUtils.h"
 
 #include "gfxstream/containers/Lookup.h"
@@ -395,6 +397,13 @@ void ProgramData::restore(ObjectLocalName localName,
 #if defined(TOLERATE_PROGRAM_LINK_ERROR) && TOLERATE_PROGRAM_LINK_ERROR == 1
     shoudLoadLinked = 1;
 #endif
+    RestoreCost& cost = restoreCostOnThisThread();
+    cost.programs++;
+    using Clock = std::chrono::steady_clock;
+    auto usSince = [](Clock::time_point t) {
+        return (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - t)
+            .count();
+    };
     if (shoudLoadLinked) {
         // Really, each program name corresponds to 2 programs:
         // the one that is already linked, and the one that is not yet linked.
@@ -425,6 +434,7 @@ void ProgramData::restore(ObjectLocalName localName,
             std::string parsedSrc;
             if (!isGles2Gles()) {
 #ifdef USE_ANGLE_SHADER_PARSER
+                const auto translateStart = Clock::now();
                 std::string infoLog;
                 ANGLEShaderParser::translate(
                             isCoreProfile(),
@@ -434,10 +444,13 @@ void ProgramData::restore(ObjectLocalName localName,
                             &parsedSrc,
                             &s.linkInfo);
                 src = parsedSrc.c_str();
+                cost.translateUs += usSince(translateStart);
 #endif
             }
             dispatcher.glShaderSource(tmpShaders[i], 1, &src, NULL);
+            const auto compileStart = Clock::now();
             dispatcher.glCompileShader(tmpShaders[i]);
+            cost.compileUs += usSince(compileStart);
             dispatcher.glAttachShader(globalName, tmpShaders[i]);
         }
         for (const auto& attribLocs : linkedAttribLocs) {
@@ -460,8 +473,10 @@ void ProgramData::restore(ObjectLocalName localName,
                     mTransformFeedbackBufferMode);
             mTransformFeedbacks.clear();
         }
+        const auto linkStart = Clock::now();
         dispatcher.glLinkProgram(globalName);
         dispatcher.glUseProgram(globalName);
+        cost.linkUs += usSince(linkStart);
 #ifdef DEBUG
         for (const auto& attribLocs : linkedAttribLocs) {
             assert(dispatcher.glGetAttribLocation(globalName,

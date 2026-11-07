@@ -16,6 +16,8 @@
 
 #include "shader_parser.h"
 
+#include <chrono>
+
 #include "common/gl_utils.h"
 
 #include <memory>
@@ -92,8 +94,15 @@ void ShaderParser::restore(ObjectLocalName localName,
     } else {
         GLEScontext::dispatcher().glShaderSource(globalName, 1, parsedLines(), NULL);
     }
-    if (m_compileStatus)
+    if (m_compileStatus) {
+        RestoreCost& cost = restoreCostOnThisThread();
+        cost.shaders++;
+        const auto start = std::chrono::steady_clock::now();
         GLEScontext::dispatcher().glCompileShader(globalName);
+        cost.compileUs += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - start)
+                              .count();
+    }
 }
 
 static const char kAlwaysInvalidShader[] =
