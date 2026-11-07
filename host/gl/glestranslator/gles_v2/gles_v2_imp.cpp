@@ -2957,7 +2957,6 @@ GL_APICALL void  GL_APIENTRY glGetShaderiv(GLuint shader, GLenum pname, GLint* p
             }
             break;
         default:
-            sp->ensureHostCompiled(globalShaderName);
             ctx->dispatcher().glGetShaderiv(globalShaderName,pname,params);
         }
     }
