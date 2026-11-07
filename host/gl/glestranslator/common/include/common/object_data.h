@@ -46,6 +46,7 @@ struct RestoreCost {
     uint64_t compileUs = 0;
     uint64_t linkUs = 0;
     uint64_t programs = 0;
+    uint64_t failedLinks = 0;
     uint64_t shaders = 0;
 };
 RestoreCost& restoreCostOnThisThread();

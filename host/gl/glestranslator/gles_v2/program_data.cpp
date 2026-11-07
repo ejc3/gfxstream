@@ -494,10 +494,15 @@ void ProgramData::restoreFinish() {
     if (mRestoreLinked) {
         GLint (&tmpShaders)[NUM_SHADER_TYPE] = mRestoreTmpShaders;
         const auto linkStart = Clock::now();
+        GLint linked = GL_FALSE;
+        dispatcher.glGetProgramiv(globalName, GL_LINK_STATUS, &linked);
         dispatcher.glUseProgram(globalName);
         cost.linkUs += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
                            Clock::now() - linkStart)
                            .count();
+        if (!linked) {
+            cost.failedLinks++;
+        }
 #ifdef DEBUG
         for (const auto& attribLocs : linkedAttribLocs) {
             assert(dispatcher.glGetAttribLocation(globalName,

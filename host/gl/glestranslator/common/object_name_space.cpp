@@ -19,6 +19,8 @@
 #include <assert.h>
 
 #include <vector>
+#include <string.h>
+#include <stdlib.h>
 
 #include "common/gles_context.h"
 #include "common/translator_ifaces.h"
@@ -104,6 +106,12 @@ void NameSpace::touchTextures(const std::function<void()>& between) {
     }
 }
 
+// FCVM_RESTORE_TWO_PHASE=0 finishes each object right after its restore, as before.
+static const bool sTwoPhaseRestore = [] {
+    const char* v = getenv("FCVM_RESTORE_TWO_PHASE");
+    return !v || strcmp(v, "0") != 0;
+}();
+
 void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName,
                                 const std::function<void()>& between) {
     // Texture data are special, they got the global name from SaveableTexture
@@ -130,7 +138,14 @@ void NameSpace::postLoadRestore(const ObjectData::getGlobalName_t& getGlobalName
             }
             genName(obj.second->getGenNameInfo(), obj.first, false);
             obj.second->restore(obj.first, getGlobalName);
-            issued.push_back(obj.second.get());
+            if (sTwoPhaseRestore) {
+                issued.push_back(obj.second.get());
+            } else {
+                obj.second->restoreFinish();
+                if (between) {
+                    between();
+                }
+            }
         }
         for (ObjectData* data : issued) {
             data->restoreFinish();

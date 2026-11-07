@@ -19,6 +19,8 @@
 
 #include <array>
 #include <chrono>
+#include <cstring>
+#include <cstdlib>
 #include <string>
 #include <utility>
 
@@ -136,7 +138,12 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
     cost = RestoreCost();
     // the driver compiles and links on threads of its own; the restore finishes each program
     // after it has issued all of them
-    if (GLEScontext::dispatcher().glMaxShaderCompilerThreadsKHR) {
+    // FCVM_RESTORE_COMPILER_THREADS=0 leaves the driver's default.
+    static const bool compilerThreads = [] {
+        const char* v = getenv("FCVM_RESTORE_COMPILER_THREADS");
+        return !v || strcmp(v, "0") != 0;
+    }();
+    if (compilerThreads && GLEScontext::dispatcher().glMaxShaderCompilerThreadsKHR) {
         GLEScontext::dispatcher().glMaxShaderCompilerThreadsKHR(0xFFFFFFFFu);
     }
     std::string spent;
@@ -163,7 +170,7 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
         GLEScontext::dispatcher().glFinish();
     }
     GFXSTREAM_INFO("Restored share group %p in %lld ms (%s):%s; %llu programs, %llu shaders: "
-                   "translate %llu ms, compile %llu ms, link %llu ms",
+                   "translate %llu ms, compile %llu ms, link %llu ms, %llu links failed",
                    this,
                    (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start).count(),
@@ -171,7 +178,8 @@ bool ShareGroup::postLoadRestore(bool finish, const std::function<void()>& betwe
                    (unsigned long long)cost.programs, (unsigned long long)cost.shaders,
                    (unsigned long long)(cost.translateUs / 1000),
                    (unsigned long long)(cost.compileUs / 1000),
-                   (unsigned long long)(cost.linkUs / 1000));
+                   (unsigned long long)(cost.linkUs / 1000),
+                   (unsigned long long)cost.failedLinks);
     m_needLoadRestore.store(false, std::memory_order_release);
     return true;
 }
