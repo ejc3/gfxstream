@@ -805,63 +805,66 @@ TEST(FrameBufferReleaseTest, ARetakeRestoresProgramsFromBinariesAndTheirShadersS
     const HandleType surface = fb->createEmulatedEglWindowSurface(0, 256, 256);
     ASSERT_NE(0u, context);
     ASSERT_TRUE(fb->bindContext(context, surface, surface));
-    auto gl = LazyLoadedGLESv2Dispatch::get();
     const GLint program = compileAndLinkShaderProgram(
         "#version 300 es\nin vec4 p;\nvoid main() { gl_Position = p; }\n",
         "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n");
     ASSERT_NE(0, program);
     GLint binaryFormats = 0;
-    gl->glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &binaryFormats);
+    LazyLoadedGLESv2Dispatch::get()->glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &binaryFormats);
     ASSERT_TRUE(fb->bindContext(0, 0, 0));
     threadInfo.reset();
 
-    std::string error;
-    ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
-    ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
-    ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
-    renderer->resumeAll();
-    fb = FrameBuffer::getFB();
-    const uint64_t binariesBefore = programBinaryRestores();
-    const HandleType frame = fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
-    ASSERT_TRUE(fb->post(frame));
-    for (int i = 0; i < 500 && !renderer->shareGroupRestoreBegan(); i++) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    ASSERT_EQ(1, renderer->waitForShareGroupRestore());
-    if (binaryFormats > 0) {
-        EXPECT_EQ(binariesBefore + 1, programBinaryRestores())
-            << "the restore compiled and linked the program instead of loading its binary";
-    } else {
-        EXPECT_EQ(binariesBefore, programBinaryRestores());
-    }
+    // A release and retake, the restore started by the guest's frame and waited for; then the
+    // program's context current again on a guest thread.
+    auto retake = [&]() {
+        fb->bindContext(0, 0, 0);
+        threadInfo.reset();
+        std::string error;
+        ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
+        ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
+        ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
+        renderer->resumeAll();
+        fb = FrameBuffer::getFB();
+        const uint64_t binariesBefore = programBinaryRestores();
+        ASSERT_TRUE(fb->post(fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM)));
+        ASSERT_EQ(1, renderer->waitForShareGroupRestore());
+        if (binaryFormats > 0) {
+            EXPECT_EQ(binariesBefore + 1, programBinaryRestores())
+                << "the restore compiled and linked the program instead of loading its binary";
+        } else {
+            EXPECT_EQ(binariesBefore, programBinaryRestores());
+        }
+        threadInfo = std::make_unique<RenderThreadInfo>();
+        threadInfo->initGl(fb->getEmulationGl());
+        ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    };
+    auto linkStatus = [&]() {
+        GLint linked = GL_FALSE;
+        LazyLoadedGLESv2Dispatch::get()->glGetProgramiv(program, GL_LINK_STATUS, &linked);
+        return linked;
+    };
 
-    threadInfo = std::make_unique<RenderThreadInfo>();
-    threadInfo->initGl(fb->getEmulationGl());
-    ASSERT_TRUE(fb->bindContext(context, surface, surface));
-    gl = LazyLoadedGLESv2Dispatch::get();
-    GLint linked = GL_FALSE;
-    gl->glGetProgramiv(program, GL_LINK_STATUS, &linked);
-    EXPECT_EQ(GL_TRUE, linked);
+    // a link right after the retake, before anything else touches the shaders: it compiles
+    // the shaders the restore left pending
+    retake();
+    EXPECT_EQ(GL_TRUE, linkStatus());
+    LazyLoadedGLESv2Dispatch::get()->glLinkProgram(program);
+    EXPECT_EQ(GL_TRUE, linkStatus()) << "a link after the retake did not compile the pending shaders";
+
+    // new source in both shaders, never compiled: a link still uses the source compiled
+    // before the release
+    retake();
+    auto gl = LazyLoadedGLESv2Dispatch::get();
     GLuint shaders[2] = {};
     GLsizei count = 0;
     gl->glGetAttachedShaders(program, 2, &count, shaders);
     ASSERT_EQ(2, count);
-    GLuint vertex = shaders[0], fragment = shaders[1];
-    GLint type = 0;
-    gl->glGetShaderiv(vertex, GL_SHADER_TYPE, &type);
-    if (type != GL_VERTEX_SHADER) {
-        std::swap(vertex, fragment);
-    }
-    // new source, never compiled: the link still uses the source compiled before the release
     const char* broken = "#version 300 es\nthis does not compile\n";
-    gl->glShaderSource(fragment, 1, &broken, nullptr);
+    for (GLuint shader : shaders) {
+        gl->glShaderSource(shader, 1, &broken, nullptr);
+    }
     gl->glLinkProgram(program);
-    linked = GL_FALSE;
-    gl->glGetProgramiv(program, GL_LINK_STATUS, &linked);
-    EXPECT_EQ(GL_TRUE, linked) << "a link after the retake failed: a shader object was not compiled";
-    GLint compiled = GL_FALSE;
-    gl->glGetShaderiv(vertex, GL_COMPILE_STATUS, &compiled);
-    EXPECT_EQ(GL_TRUE, compiled);
+    EXPECT_EQ(GL_TRUE, linkStatus()) << "a link after the retake compiled source set after the release";
     fb->bindContext(0, 0, 0);
     threadInfo.reset();
     renderer->stop(true);
