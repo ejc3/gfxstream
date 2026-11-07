@@ -101,16 +101,17 @@ void ShaderParser::restore(ObjectLocalName localName,
 }
 
 void ShaderParser::ensureHostCompiled(GLuint globalName) {
-    // held across the compile: a thread that finds it pending waits until it is done
-    gfxstream::base::AutoLock lock(m_hostCompileLock);
-    if (!m_hostCompilePending) {
-        return;
+    {
+        gfxstream::base::AutoLock lock(m_hostCompileLock);
+        if (!m_hostCompilePending) {
+            return;
+        }
+        m_hostCompilePending = false;
     }
     if (shaderCompileOnUseHookForTesting()) {
         shaderCompileOnUseHookForTesting()();
     }
     GLEScontext::dispatcher().glCompileShader(globalName);
-    m_hostCompilePending = false;
 }
 
 void ShaderParser::clearHostCompilePending() {
