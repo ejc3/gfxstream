@@ -13,12 +13,14 @@
 // limitations under the License.
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -212,6 +214,33 @@ private:
     bool mReleasedWithVulkan = false;
     // The loader of the last load, whose background texture loading a release stops.
     std::weak_ptr<ITextureLoader> mLastTextureLoader;
+    // After a retake has posted its first frame, a thread of its own restores the share
+    // groups the load left for their first use, so no guest context waits for them (a
+    // browser brought to the front after a retake waited 2.7 s). Anything that saves,
+    // releases or stops the renderer ends it first: stopShareGroupRestore() returns once
+    // the context it is restoring is done, and what it did not reach is restored at first
+    // use, as before.
+    void startShareGroupRestore();
+    void stopShareGroupRestore();
+  public:
+    // Waits until the share group restore a retake started has finished, and returns how
+    // many groups it restored (-1: none ran). For tests.
+    int waitForShareGroupRestore();
+    // How many groups the last restore restored; -1 until one has finished. For tests.
+    int shareGroupsRestored() const { return mShareGroupsRestored.load(std::memory_order_acquire); }
+    // Whether the last restore has begun restoring (past its wait for the guest's frame).
+    bool shareGroupRestoreBegan() const { return mShareGroupRestoreBegan.load(std::memory_order_acquire); }
+    // How long a restore waits for the guest's first frame before it restores anyway (10 s).
+    void setShareGroupRestoreFallbackForTesting(std::chrono::milliseconds ms) { mShareGroupRestoreFallback = ms; }
+  private:
+    // Starts, stops and waits are serialized: a mirror join and an embedder's save or stop
+    // can come at once, and only one of them may join the thread.
+    std::mutex mShareGroupRestoreMutex;
+    std::thread mShareGroupRestore;
+    std::atomic<bool> mShareGroupRestoreStop{false};
+    std::atomic<int> mShareGroupsRestored{-1};
+    std::atomic<bool> mShareGroupRestoreBegan{false};
+    std::chrono::milliseconds mShareGroupRestoreFallback{10000};
 };
 
 }  // namespace host

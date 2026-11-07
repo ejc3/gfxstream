@@ -16,6 +16,7 @@
 #ifndef _OBJECT_NAME_MANAGER_H
 #define _OBJECT_NAME_MANAGER_H
 
+#include <functional>
 #include "gfxstream/synchronization/Lock.h"
 #include "render-utils/stream.h"
 #include "common/named_object.h"
@@ -114,9 +115,18 @@ public:
     void preSave(GlobalNameSpace *globalNameSpace);
     void onSave(gfxstream::Stream* stream);
     void postSave(gfxstream::Stream* stream);
-    // postLoadRestore() restores resources on hardware GPU
-    void postLoadRestore();
+    // postLoadRestore() restores resources on hardware GPU. With |finish|, it also waits
+    // for the GPU to finish that work before it marks the group restored: for a restore on
+    // a context of another group, whose work the group's own contexts may otherwise read
+    // before it is done. Returns whether there was anything to restore.
+    bool postLoadRestore(bool finish = false);
     bool needRestore();
+    // How many loaded share groups this thread restored (postLoadRestore() calls that had
+    // something to restore). Tests read it to tell which thread a restore ran on.
+    static uint64_t loadRestoresOnThisThread();
+    // Runs inside every restore that has something to restore, with the restore lock held.
+    // For tests, which pause a restore there; set it only while no restore runs.
+    static void setRestoreHookForTesting(std::function<void()> hook);
 private:
     explicit ShareGroup(GlobalNameSpace *globalNameSpace,
                         uint64_t sharedGroupID,
@@ -153,7 +163,9 @@ private:
     // It is unique within its ObjectNameManager
     uint64_t m_sharedGroupID;
     enum {PreSaved, Saved, Empty} m_saveStage = Empty;
-    bool m_needLoadRestore = false;
+    // written under m_restoreLock; read without it by needRestore()
+    static std::function<void()> sRestoreHookForTesting;
+    std::atomic<bool> m_needLoadRestore{false};
 };
 
 typedef std::shared_ptr<ShareGroup> ShareGroupPtr;

@@ -17,6 +17,7 @@ EGLBoolean eglSaveAllImages(EGLDisplay display, EGLStreamKHR stream, const void*
 EGLBoolean eglPreSaveContext(EGLDisplay display, EGLContext contex, EGLStreamKHR stream);
 
 EGLBoolean eglPostLoadAllImages(EGLDisplay display, EGLStreamKHR stream);
+EGLBoolean eglRestoreContextShareGroup(EGLDisplay display, EGLContext context);
 
 EGLBoolean eglPostSaveContext(EGLDisplay display, EGLConfig config, EGLStreamKHR stream);
 

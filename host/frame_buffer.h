@@ -273,6 +273,9 @@ class FrameBuffer : public gfxstream::base::EventNotificationSupport<FrameBuffer
     void postWithCallback(HandleType p_colorbuffer, Post::CompletionCallback callback, bool needLockAndBind = true);
     bool hasGuestPostedAFrame();
     void resetGuestPostedAFrame();
+    // How many frames the guest has posted to this frame buffer; its own reposts (a snapshot
+    // load makes one) are not counted.
+    uint64_t guestPostCount() const;
 
     // Runs the post callback with |pixels| (good for when the readback
     // happens in a separate place)

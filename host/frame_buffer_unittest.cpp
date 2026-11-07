@@ -19,6 +19,8 @@
 
 #include <memory>
 #include <string>
+#include <chrono>
+#include <future>
 #include <thread>
 
 #include "gfxstream/common/testing/graphics_test_environment.h"
@@ -627,6 +629,153 @@ TEST(FrameBufferReleaseTest, ReleaseDetachesTheLastSnapshotLoader) {
     ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
     ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
     renderer->resumeAll();
+    renderer->stop(true);
+}
+
+// A retake restores the share groups it loaded on a thread of its own once the guest has
+// posted a frame, so the guest's first use of a loaded context finds its group restored:
+// making it current restores nothing on the guest's thread. Without it, the first
+// makeCurrent compiles and links every program of the group again while the guest waits (in
+// fcvm, a phone's browser brought to the front after a retake waited 2.7 s). The restore waits
+// for the guest's own frame: the load's repost of the last posted frame is not one, and a
+// restore started by it delayed the retake's first frame from 0.6 to 3.0 s.
+TEST(FrameBufferReleaseTest, RetakeRestoresShareGroupsBeforeTheGuestUsesThem) {
+    ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
+    if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+        GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+    }
+    gfxstream::base::setEnvironmentVariable("ANDROID_EMU_HEADLESS", "1");
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    auto renderer = std::make_shared<RendererImpl>();
+    ASSERT_TRUE(renderer->initialize(256, 256, features, false));
+    // only the guest's frame starts the restore within the test
+    renderer->setShareGroupRestoreFallbackForTesting(std::chrono::minutes(5));
+    FrameBuffer* fb = FrameBuffer::getFB();
+    auto threadInfo = std::make_unique<RenderThreadInfo>();
+    threadInfo->initGl(fb->getEmulationGl());
+    const HandleType context = fb->createEmulatedEglContext(0, 0, GLESApi_3_0);
+    const HandleType surface = fb->createEmulatedEglWindowSurface(0, 256, 256);
+    const HandleType colorBuffer = fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
+    ASSERT_NE(0u, context);
+    ASSERT_NE(0u, colorBuffer);
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    // a program: what a share group's restore compiles and links again
+    const GLint program = compileAndLinkShaderProgram(
+        "#version 300 es\nin vec4 p;\nvoid main() { gl_Position = p; }\n",
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n");
+    ASSERT_NE(0, program);
+    ASSERT_TRUE(fb->bindContext(0, 0, 0));
+    // a posted frame, which the load reposts (opened, as a guest's window holds it)
+    fb->openColorBuffer(colorBuffer);
+    ASSERT_TRUE(fb->post(colorBuffer));
+    threadInfo.reset();
+
+    std::string error;
+    ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
+    ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
+    ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
+    renderer->resumeAll();
+    fb = FrameBuffer::getFB();
+    threadInfo = std::make_unique<RenderThreadInfo>();
+    threadInfo->initGl(fb->getEmulationGl());
+    // the load reposted the last frame; that is not the guest's, and the restore waits
+    EXPECT_TRUE(fb->hasGuestPostedAFrame()) << "the load did not repost the last frame";
+    EXPECT_EQ(0u, fb->guestPostCount());
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_FALSE(renderer->shareGroupRestoreBegan()) << "the restore began before the guest posted a frame";
+    // the guest's first frame after the retake starts it, long before the fallback
+    const HandleType frame = fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
+    ASSERT_TRUE(fb->post(frame));
+    EXPECT_EQ(1u, fb->guestPostCount());
+    for (int i = 0; i < 500 && !renderer->shareGroupRestoreBegan(); i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(renderer->shareGroupRestoreBegan()) << "the guest's frame did not start the restore";
+    EXPECT_EQ(1, renderer->waitForShareGroupRestore());
+
+    const uint64_t before = ShareGroup::loadRestoresOnThisThread();
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    EXPECT_EQ(before, ShareGroup::loadRestoresOnThisThread())
+        << "the guest's first use of the loaded context restored its share group itself";
+    EXPECT_TRUE(LazyLoadedGLESv2Dispatch::get()->glIsProgram(program));
+    fb->bindContext(0, 0, 0);
+    threadInfo.reset();
+    renderer->stop(true);
+}
+
+// A context made current while the background restore restores its group waits for it, and
+// its thread restores nothing itself: the restore runs outside the graphics driver lock, so
+// the group's restore lock is what keeps a guest thread off the group's objects meanwhile.
+// The restore is held inside the group's restore (the test hook) while a new context sharing
+// that group is made current on another thread; that bind must not finish until the hook
+// lets go.
+TEST(FrameBufferReleaseTest, AContextOfAGroupBeingRestoredWaitsForTheRestore) {
+    ASSERT_TRUE(gfxstream::testing::SetupGraphicsTestEnvironment());
+    if (!gfxstream::testing::IsGraphicsTestEnvironmentProvidingGlesDriver()) {
+        GTEST_SKIP() << "Skipping GLES test in gles_none test environment.";
+    }
+    gfxstream::base::setEnvironmentVariable("ANDROID_EMU_HEADLESS", "1");
+    FeatureSet features = {};
+    features.EglOnEgl.setEnabled(!shouldUseHostGpu());
+    auto renderer = std::make_shared<RendererImpl>();
+    ASSERT_TRUE(renderer->initialize(256, 256, features, false));
+    renderer->setShareGroupRestoreFallbackForTesting(std::chrono::minutes(5));
+    FrameBuffer* fb = FrameBuffer::getFB();
+    auto threadInfo = std::make_unique<RenderThreadInfo>();
+    threadInfo->initGl(fb->getEmulationGl());
+    const HandleType context = fb->createEmulatedEglContext(0, 0, GLESApi_3_0);
+    const HandleType surface = fb->createEmulatedEglWindowSurface(0, 256, 256);
+    ASSERT_NE(0u, context);
+    ASSERT_TRUE(fb->bindContext(context, surface, surface));
+    ASSERT_NE(0, compileAndLinkShaderProgram(
+        "#version 300 es\nin vec4 p;\nvoid main() { gl_Position = p; }\n",
+        "#version 300 es\nprecision mediump float;\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n"));
+    ASSERT_TRUE(fb->bindContext(0, 0, 0));
+    threadInfo.reset();
+
+    std::string error;
+    ASSERT_TRUE(renderer->beginGpuRelease(&error)) << error;
+    ASSERT_TRUE(renderer->releaseGpu(&error)) << error;
+    ASSERT_TRUE(renderer->retakeGpu(&error)) << error;
+    renderer->resumeAll();
+    fb = FrameBuffer::getFB();
+
+    std::promise<void> entered, letGo;
+    std::shared_future<void> go = letGo.get_future().share();
+    std::atomic<bool> enteredOnce{false};
+    ShareGroup::setRestoreHookForTesting([&]() {
+        if (!enteredOnce.exchange(true)) {
+            entered.set_value();
+            go.wait();
+        }
+    });
+    // the guest's frame starts the restore, which stops in the hook
+    const HandleType frame = fb->createColorBuffer(256, 256, GfxstreamFormat::R8G8B8A8_UNORM);
+    ASSERT_TRUE(fb->post(frame));
+    ASSERT_EQ(std::future_status::ready, entered.get_future().wait_for(std::chrono::seconds(10)));
+
+    std::atomic<bool> bound{false};
+    std::atomic<uint64_t> restoresOnGuest{0};
+    std::thread guest([&]() {
+        RenderThreadInfo info;
+        info.initGl(fb->getEmulationGl());
+        const HandleType sharing = fb->createEmulatedEglContext(0, context, GLESApi_3_0);
+        const HandleType s = fb->createEmulatedEglWindowSurface(0, 16, 16);
+        const uint64_t before = ShareGroup::loadRestoresOnThisThread();
+        fb->bindContext(sharing, s, s);
+        restoresOnGuest = ShareGroup::loadRestoresOnThisThread() - before;
+        bound = true;
+        fb->bindContext(0, 0, 0);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_FALSE(bound.load()) << "a context of the group was made current while its restore ran";
+    letGo.set_value();
+    guest.join();
+    EXPECT_TRUE(bound.load());
+    EXPECT_EQ(0u, restoresOnGuest.load()) << "the guest's thread restored the group itself";
+    EXPECT_EQ(1, renderer->waitForShareGroupRestore());
+    ShareGroup::setRestoreHookForTesting(nullptr);
     renderer->stop(true);
 }
 

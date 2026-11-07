@@ -143,6 +143,7 @@ EGLAPI EGLBoolean EGLAPIENTRY eglLoadAllImages(EGLDisplay display,
                                                EGLStreamKHR stream,
                                                const void* textureLoader);
 EGLAPI EGLBoolean EGLAPIENTRY eglPostLoadAllImages(EGLDisplay display, EGLStreamKHR stream);
+EGLAPI EGLBoolean EGLAPIENTRY eglRestoreContextShareGroup(EGLDisplay display, EGLContext context);
 EGLAPI void EGLAPIENTRY eglUseOsEglApi(EGLBoolean enable, EGLBoolean nullEgl);
 EGLAPI void EGLAPIENTRY eglSetMaxGLESVersion(EGLint version);
 EGLAPI void EGLAPIENTRY eglFillUsages(void* usages);
@@ -1759,6 +1760,23 @@ EGLAPI EGLBoolean EGLAPIENTRY eglPostLoadAllImages(EGLDisplay display, EGLStream
     gfxstream::Stream* stm = static_cast<gfxstream::Stream*>(stream);
     dpy->postLoadAllImages(stm);
     return true;
+}
+
+// Restores the share group of |context| on the calling thread if a snapshot load left it for
+// its first use, and returns EGL_TRUE if it did. A context of the translator's of another share
+// group must be current here, since the restore issues GL calls. Unlike the restore at a
+// context's first eglMakeCurrent, this one runs outside the graphics driver lock, so the other
+// threads' EGL calls do not wait for it, and it waits for the GPU before it marks the group
+// restored, since the group's own contexts read what it made. The group's restore lock keeps a
+// guest thread that makes one of them current meanwhile waiting until it is done.
+EGLAPI EGLBoolean EGLAPIENTRY eglRestoreContextShareGroup(EGLDisplay display, EGLContext context) {
+    VALIDATE_DISPLAY(display);
+    ContextPtr ctx = dpy->getContext(context);
+    if (!ctx) {
+        return EGL_FALSE;
+    }
+    ShareGroupPtr group = ctx->getShareGroup();
+    return group && group->postLoadRestore(/*finish=*/true) ? EGL_TRUE : EGL_FALSE;
 }
 
 EGLAPI void EGLAPIENTRY eglUseOsEglApi(EGLBoolean enable, EGLBoolean nullEgl) {
