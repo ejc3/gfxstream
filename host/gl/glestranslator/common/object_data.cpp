@@ -81,3 +81,13 @@ std::atomic<uint64_t> sProgramBinaryRestores{0};
 uint64_t programBinaryRestores() { return sProgramBinaryRestores.load(); }
 
 void countProgramBinaryRestore() { sProgramBinaryRestores.fetch_add(1); }
+
+namespace {
+std::function<void()> sShaderCompileOnUseHook;
+}  // namespace
+
+void setShaderCompileOnUseHookForTesting(std::function<void()> hook) {
+    sShaderCompileOnUseHook = std::move(hook);
+}
+
+const std::function<void()>& shaderCompileOnUseHookForTesting() { return sShaderCompileOnUseHook; }

@@ -42,7 +42,6 @@
 #include "common/gles_context.h"
 #include "common/gles_pointer.h"
 #include "common/object_data.h"
-#include "host/gl/glestranslator/gles_v2/shader_parser.h"
 #include "host/gl/gles2_dec/gles2_opcodes.h"
 #include "host/gl/emulation_gl.h"
 #include "host/gl/yuv_converter.h"
@@ -926,7 +925,7 @@ TEST(FrameBufferReleaseTest, AShaderCompiledOnUseIsCompiledBeforeAnotherThreadSe
     std::promise<void> entered, letGo;
     std::shared_future<void> go = letGo.get_future().share();
     std::atomic<bool> enteredOnce{false};
-    ShaderParser::setHostCompileHookForTesting([&]() {
+    setShaderCompileOnUseHookForTesting([&]() {
         if (!enteredOnce.exchange(true)) {
             entered.set_value();
             go.wait();
@@ -961,7 +960,7 @@ TEST(FrameBufferReleaseTest, AShaderCompiledOnUseIsCompiledBeforeAnotherThreadSe
     b.join();
     EXPECT_EQ(GL_TRUE, first.load());
     EXPECT_EQ(GL_TRUE, second.load()) << "a second thread saw the shader uncompiled";
-    ShaderParser::setHostCompileHookForTesting(nullptr);
+    setShaderCompileOnUseHookForTesting(nullptr);
     renderer->stop(true);
 }
 

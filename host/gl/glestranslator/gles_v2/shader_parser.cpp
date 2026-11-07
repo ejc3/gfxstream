@@ -100,20 +100,14 @@ void ShaderParser::restore(ObjectLocalName localName,
     }
 }
 
-static std::function<void()> sHostCompileHookForTesting;
-
-void ShaderParser::setHostCompileHookForTesting(std::function<void()> hook) {
-    sHostCompileHookForTesting = std::move(hook);
-}
-
 void ShaderParser::ensureHostCompiled(GLuint globalName) {
     // held across the compile: a thread that finds it pending waits until it is done
     gfxstream::base::AutoLock lock(m_hostCompileLock);
     if (!m_hostCompilePending) {
         return;
     }
-    if (sHostCompileHookForTesting) {
-        sHostCompileHookForTesting();
+    if (shaderCompileOnUseHookForTesting()) {
+        shaderCompileOnUseHookForTesting()();
     }
     GLEScontext::dispatcher().glCompileShader(globalName);
     m_hostCompilePending = false;

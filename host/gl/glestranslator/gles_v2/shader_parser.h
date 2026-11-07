@@ -64,8 +64,6 @@ public:
     // Whether the host's compile of this shader is of its current source: a link of a program
     // it is attached to runs what was compiled, which differs once new source is set.
     bool currentSourceCompiled() const { return m_compileStatus && m_compiledSrc == m_parsedSrc; }
-    // Runs in ensureHostCompiled() between taking a pending compile and compiling. For tests.
-    static void setHostCompileHookForTesting(std::function<void()> hook);
 
     void setDeleteStatus(bool val) { m_deleteStatus = val; }
     bool getDeleteStatus() const { return m_deleteStatus; }

@@ -52,6 +52,10 @@ RestoreCost& restoreCostOnThisThread();
 // Programs any thread restored from a kept host binary since the process started. For tests.
 uint64_t programBinaryRestores();
 void countProgramBinaryRestore();
+// Runs when a shader a restore left to compile is compiled on use, between taking the
+// compile and compiling it. For tests; set it only while no restore or GL use runs.
+void setShaderCompileOnUseHookForTesting(std::function<void()> hook);
+const std::function<void()>& shaderCompileOnUseHookForTesting();
 
 extern NamedObjectType ObjectDataType2NamedObjectType(ObjectDataType objDataType);
 
