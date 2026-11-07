@@ -3964,7 +3964,6 @@ GL_APICALL void  GL_APIENTRY glShaderSource(GLuint shader, GLsizei count, const 
                      GL_INVALID_OPERATION);
         ShaderParser* sp = (ShaderParser*)objData;
         // a link uses the last compiled source: one a restore left pending is compiled first
-        sp->ensureHostCompiled(globalShaderName);
         sp->setSrc(count, string, length);
         if (isGles2Gles()) {
             if (sDebugPrintShaders) { // save repeated checks
