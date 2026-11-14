@@ -752,6 +752,16 @@ bool ColorBufferGl::readPixelsYUVCached(int x, int y, int width, int height, voi
     return true;
 }
 
+void ColorBufferGl::ensureBlitTex() {
+    if (!m_blitTexDeferred) {
+        return;
+    }
+    m_blitTexDeferred = false;
+    s_gles2.glGenTextures(1, &m_blitTex);
+    s_gles2.glBindTexture(GL_TEXTURE_2D, m_blitTex);
+    s_gles2.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_blitEGLImage);
+}
+
 void ColorBufferGl::reformat(GfxstreamFormat format) {
     auto formatOpenglParamsOpt = GetFormatOpenglParameters(format);
     if (!formatOpenglParamsOpt) {
@@ -761,6 +771,7 @@ void ColorBufferGl::reformat(GfxstreamFormat format) {
     }
     const FormatOpenglParams& formatOpenglParams = *formatOpenglParamsOpt;
 
+    ensureBlitTex();
     s_gles2.glBindTexture(GL_TEXTURE_2D, m_tex);
     s_gles2.glTexImage2D(GL_TEXTURE_2D, 0,
                          formatOpenglParams.internalFormat, m_width, m_height,
@@ -1040,6 +1051,7 @@ bool ColorBufferGl::blitFromCurrentReadBuffer() {
         s_gles2.glViewport(0, 0, m_width, m_height);
 
         // render m_blitTex
+        ensureBlitTex();
         m_textureDraw->draw(m_blitTex, 0., 0, 0, std::nullopt);
 
         // Restore previous viewport.
@@ -1263,9 +1275,16 @@ void ColorBufferGl::restore() {
     const long long texUs = us(t);
     t = Clock::now();
 
-    s_gles2.glGenTextures(1, &m_blitTex);
-    s_gles2.glBindTexture(GL_TEXTURE_2D, m_blitTex);
-    s_gles2.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_blitEGLImage);
+    // The blit texture is scratch: a slow blit overwrites all of it before it is drawn, and a
+    // fast blit (eglBlitFromCurrentReadBufferANDROID) never uses it. Binding it here would
+    // upload its saved content, so it is left to its first use.
+    if (m_fastBlitSupported) {
+        m_blitTexDeferred = true;
+    } else {
+        s_gles2.glGenTextures(1, &m_blitTex);
+        s_gles2.glBindTexture(GL_TEXTURE_2D, m_blitTex);
+        s_gles2.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_blitEGLImage);
+    }
     const long long blitUs = us(t);
     t = Clock::now();
 
