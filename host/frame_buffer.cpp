@@ -3508,6 +3508,16 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
     AutoLock lock(m_lock);
 
     GFXSTREAM_DEBUG("snapshot load: load framebuffer");
+    // Each part of the load, in ms, logged when it ends (a GPU retake loads its kept state).
+    auto loadStepStart = std::chrono::steady_clock::now();
+    auto loadStep = [&loadStepStart](const char* name) {
+        const auto now = std::chrono::steady_clock::now();
+        GFXSTREAM_INFO("FrameBuffer load: step=%s ms=%lld", name,
+                       (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                           now - loadStepStart)
+                           .count());
+        loadStepStart = now;
+    };
     const uint32_t versionSaved = stream->getBe32();
     if (versionSaved != kFramebufferSnapshotVersionNumber) {
         // The global snapshot version should be updated when changing the version for the
@@ -3616,11 +3626,13 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
                 m_colorbuffers.clear();
             }
         }
+        loadStep("cleanup");
 #if GFXSTREAM_ENABLE_HOST_GLES
         if (m_emulationGl) {
             m_emulationGl->loadAllImages(stream, textureLoader);
         }
 #endif
+        loadStep("images");
     }
     // See comment about subwindow position in onSave().
     m_framebufferWidth = stream->getBe32();
@@ -3662,6 +3674,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         }
     }
 #endif
+    loadStep("displays-contexts");
 
     auto now = gfxstream::base::getUnixTimeUs();
     {
@@ -3696,6 +3709,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
     }
     m_lastPostedColorBuffer = static_cast<HandleType>(stream->getBe32());
     GFXSTREAM_DEBUG("Got lasted posted color buffer from snapshot");
+    loadStep("color-buffers");
 
     {
         AutoLock colorBufferMapLock(m_colorBufferMapLock);
@@ -3728,6 +3742,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
     }
 #endif
 
+    loadStep("surfaces-proc-owned");
     // load process owned resources
     {
         uint64_t resourceCount = stream->getBe64();
@@ -3749,6 +3764,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         GFXSTREAM_DEBUG("snapshot load: loaded %zu process resources", resourceCount);
     }
 
+    loadStep("process-resources");
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (m_emulationGl) {
         m_emulationGl->postLoad(stream);
@@ -3756,6 +3772,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
 
     registerTriggerWait();
 #endif
+    loadStep("post-load");
 
     {
         std::unique_ptr<RecursiveScopedContextBind> bind;
@@ -3776,6 +3793,7 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
             }
         }
     }
+    loadStep("touch-color-buffers");
 
     // Restore Vulkan state
     if (m_features.VulkanSnapshots.enabled() && vk::VkDecoderGlobalState::get()) {
@@ -3793,7 +3811,9 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
         }
     }
 
+    loadStep("vulkan-state");
     repost(false);
+    loadStep("repost");
 
 #if GFXSTREAM_ENABLE_HOST_GLES
     if (m_emulationGl) {
