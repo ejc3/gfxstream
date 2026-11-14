@@ -27,6 +27,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <utility>
 #include <variant>
@@ -1062,8 +1063,16 @@ bool RendererImpl::retakeGpu(std::string* error) {
         gl::EmulationGl::releaseHostDriver();
 #endif
     };
+    using RetakeClock = std::chrono::steady_clock;
+    const auto retakeStart = RetakeClock::now();
+    auto sinceMs = [](RetakeClock::time_point from) {
+        return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                   RetakeClock::now() - from)
+            .count();
+    };
     std::unique_ptr<RenderWindow> renderWindow(
         new RenderWindow(mWidth, mHeight, mFeatures, kUseSubwindowThread, mUseSubWindow));
+    const long long windowMs = sinceMs(retakeStart);
     if (!renderWindow->isValid()) {
         renderWindow.reset();
         backToReleased();
@@ -1103,6 +1112,8 @@ bool RendererImpl::retakeGpu(std::string* error) {
         std::lock_guard<std::mutex> lock(mChannelsMutex);
         mStopped = false;
     }
+    const long long configureMs = sinceMs(retakeStart) - windowMs;
+    const auto loadStart = RetakeClock::now();
     if (mReleasedState) {
         mReleasedState->rewind();
         ITextureLoaderPtr loader = mReleasedTextures;
@@ -1118,7 +1129,10 @@ bool RendererImpl::retakeGpu(std::string* error) {
         startShareGroupRestore();
     }
     mGpuReleased = false;
-    GFXSTREAM_INFO("Took the host GPU up again.");
+    mLastRetakeTimings = "window_ms=" + std::to_string(windowMs) +
+                         " configure_ms=" + std::to_string(configureMs) +
+                         " load_ms=" + std::to_string(sinceMs(loadStart));
+    GFXSTREAM_INFO("Took the host GPU up again: %s", mLastRetakeTimings.c_str());
     return true;
 }
 
@@ -1192,6 +1206,8 @@ int RendererImpl::waitForShareGroupRestore() {
 }
 
 bool RendererImpl::isGpuReleased() const { return mGpuReleased; }
+
+std::string RendererImpl::lastRetakeTimings() const { return mLastRetakeTimings; }
 
 void RendererImpl::setShouldSkipDraw(bool skip) {
     set_gfxstream_should_skip_draw(skip);

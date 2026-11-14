@@ -145,6 +145,7 @@ public:
     bool releaseGpu(std::string* error) override;
     bool retakeGpu(std::string* error) override;
     bool isGpuReleased() const override;
+    std::string lastRetakeTimings() const override;
 
 private:
     DISALLOW_COPY_ASSIGN_AND_MOVE(RendererImpl);
@@ -205,6 +206,7 @@ private:
     std::optional<int> mDisplayActiveConfig;
     std::vector<FrameBufferChangeEventListener*> mListeners;
     bool mGpuReleased = false;
+    std::string mLastRetakeTimings;
     // The frame buffer's state between beginGpuRelease() and retakeGpu(), and the
     // textures it saved, which the loaded frame buffer may read lazily after.
     std::unique_ptr<MemStream> mReleasedState;

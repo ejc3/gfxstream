@@ -13,6 +13,7 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
+#include <chrono>
 #include "color_buffer_gl.h"
 
 #include <GLES2/gl2ext.h>
@@ -1243,20 +1244,38 @@ std::unique_ptr<ColorBufferGl> ColorBufferGl::onLoad(gfxstream::Stream* stream,
 }
 
 void ColorBufferGl::restore() {
+    using Clock = std::chrono::steady_clock;
+    auto us = [](Clock::time_point from) {
+        return (long long)std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - from)
+            .count();
+    };
+    auto t = Clock::now();
     RecursiveScopedContextBind context(m_helper);
     if (!context.isOk()) {
         GFXSTREAM_ERROR("Failed to bind context in ColorBufferGl::restore()");
         return;
     }
+    const long long bindUs = us(t);
+    t = Clock::now();
     s_gles2.glGenTextures(1, &m_tex);
     s_gles2.glBindTexture(GL_TEXTURE_2D, m_tex);
     s_gles2.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_eglImage);
+    const long long texUs = us(t);
+    t = Clock::now();
 
     s_gles2.glGenTextures(1, &m_blitTex);
     s_gles2.glBindTexture(GL_TEXTURE_2D, m_blitTex);
     s_gles2.glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, m_blitEGLImage);
+    const long long blitUs = us(t);
+    t = Clock::now();
 
     m_resizer = new TextureResize(m_width, m_height);
+    const long long resizeUs = us(t);
+    if (bindUs + texUs + blitUs + resizeUs > 3000) {
+        GFXSTREAM_INFO("ColorBufferGl restore %ux%u: bind_us=%lld tex_us=%lld blit_us=%lld "
+                       "resize_us=%lld",
+                       m_width, m_height, bindUs, texUs, blitUs, resizeUs);
+    }
     if (IsYuvFormat(m_format)) {
         m_yuv_converter.reset(new YUVConverter(m_width, m_height, m_format));
     }
