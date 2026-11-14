@@ -367,6 +367,8 @@ class Renderer {
     virtual bool releaseGpu(std::string* error) = 0;
     virtual bool retakeGpu(std::string* error) = 0;
     virtual bool isGpuReleased() const = 0;
+    // The last successful retakeGpu()'s parts in ms ("window_ms=.. configure_ms=.. load_ms=..").
+    virtual std::string lastRetakeTimings() const = 0;
 
 protected:
     ~Renderer() = default;

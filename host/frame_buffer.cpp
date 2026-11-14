@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+#include <chrono>
 #include "frame_buffer.h"
 
 #include <stdio.h>
@@ -1237,6 +1238,18 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
 
     GFXSTREAM_TRACE_EVENT(GFXSTREAM_TRACE_DEFAULT_CATEGORY, "FrameBuffer::Impl::Init()");
 
+    // Each step of the frame buffer's creation, in ms, logged when it ends: a GPU retake
+    // creates a frame buffer, and these are its parts.
+    auto stepStart = std::chrono::steady_clock::now();
+    const auto createStart = stepStart;
+    auto step = [&stepStart](const char* name) {
+        const auto now = std::chrono::steady_clock::now();
+        GFXSTREAM_INFO("FrameBuffer create: step=%s ms=%lld", name,
+                       (long long)std::chrono::duration_cast<std::chrono::milliseconds>(now - stepStart)
+                           .count());
+        stepStart = now;
+    };
+
     const char* ANDROID_EMU_RENDERDOC_ENVVAR = "ANDROID_EMU_RENDERDOC";
     const char* ANDROID_EMU_RENDERDOC_CAPTURE_PATH_TEMPLATE_ENVVAR =
         "ANDROID_EMU_RENDERDOC_CAPTURE_PATH_TEMPLATE";
@@ -1317,7 +1330,9 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
     if (impl->m_features.Vulkan.enabled()) {
         vkDispatch = vk::vkDispatch(false /* not for testing */);
 
+        step("before-vulkan");
         impl->m_emulationVk = vk::VkEmulation::create(vkDispatch, impl.get(), impl->m_features);
+        step("vulkan-emulation");
         if (!impl->m_emulationVk) {
             GFXSTREAM_ERROR(
                 "Failed to initialize global Vulkan emulation requested. Try updating your GPU "
@@ -1366,15 +1381,18 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
     const bool needGlDispatchers = needEmulationGl;
 #endif
     if (needGlDispatchers) {
+        step("before-gl");
         if (!EmulationGl::initDispatchers(impl->m_features.EglOnEgl.enabled())) {
             GFXSTREAM_ERROR("Failed to initialize GL dispatchers.");
             return nullptr;
         }
+        step("gl-dispatchers");
 
         // Do not initialize GL emulation if the guest is using ANGLE.
         if (needEmulationGl) {
             impl->m_emulationGl =
                 EmulationGl::create(width, height, impl->m_features, useSubWindow, impl.get());
+            step("gl-emulation");
             if (!impl->m_emulationGl) {
                 GFXSTREAM_ERROR("Failed to initialize GL emulation.");
                 return nullptr;
@@ -1558,9 +1576,11 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
     }
 
     // VkDecoderGlobalState must be initialized after m_emulationVk initialization is complete
+    step("before-vk-decoder");
     if (impl->m_vulkanEnabled) {
         vk::VkDecoderGlobalState::initialize(impl->m_emulationVk.get());
     }
+    step("vk-decoder");
 
     // Start up the single sync thread. If we are using Vulkan native
     // swapchain, then don't initialize SyncThread worker threads with EGL
@@ -1580,6 +1600,12 @@ std::unique_ptr<FrameBuffer::Impl> FrameBuffer::Impl::Create(FrameBuffer* frameb
         }
     }
 
+    step("sync-vsync-threads");
+    GFXSTREAM_INFO("FrameBuffer create: total_ms=%lld vulkan=%d",
+                   (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - createStart)
+                       .count(),
+                   impl->m_vulkanEnabled ? 1 : 0);
     // Nothing else to do - we're ready to rock!
     return impl;
 }
