@@ -3787,11 +3787,26 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
 #endif
 
         AutoLock colorBufferMapLock(m_colorBufferMapLock);
+        int touched = 0, slow = 0;
+        long long pixels = 0;
         for (auto& it : m_colorbuffers) {
             if (it.second.cb) {
+                const auto t = std::chrono::steady_clock::now();
                 it.second.cb->touch();
+                const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - t)
+                                    .count();
+                touched++;
+                pixels += (long long)it.second.cb->getWidth() * it.second.cb->getHeight();
+                if (us > 5000 && slow++ < 12) {
+                    GFXSTREAM_INFO("FrameBuffer load: touch handle=%u %ux%u format=%u us=%lld",
+                                   it.first, it.second.cb->getWidth(), it.second.cb->getHeight(),
+                                   (unsigned)GfxstreamFormatToUint32(it.second.cb->getFormat()),
+                                   (long long)us);
+                }
             }
         }
+        GFXSTREAM_INFO("FrameBuffer load: touched %d color buffers, %lld pixels", touched, pixels);
     }
     loadStep("touch-color-buffers");
 
