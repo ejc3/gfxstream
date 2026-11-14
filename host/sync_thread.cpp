@@ -155,12 +155,15 @@ void SyncThread::triggerWaitWithCompletionCallback(EmulatedEglFenceSync* fenceSy
 void SyncThread::initSyncEGLContext() {
     // b/383543476: force sequential init to work around a deadlock that is
     // believed to be a driver issue.
-    std::mutex initMutex;
-    mWorkerThreadPool.broadcast([&, this] {
+    //
+    // Not waited for: each worker sets up its context before any command queued to it after
+    // this, so the frame buffer's creation (a GPU retake's critical path) goes on while the
+    // workers create their contexts one at a time.
+    mWorkerThreadPool.broadcast([this] {
         return Command{
-            .mTask = std::packaged_task<int(WorkerId)>([&, this](WorkerId workerId) {
+            .mTask = std::packaged_task<int(WorkerId)>([this](WorkerId workerId) {
                 DPRINT("for worker id: %d", workerId);
-                std::lock_guard<std::mutex> initLock(initMutex);
+                std::lock_guard<std::mutex> initLock(mInitMutex);
                 // We shouldn't initialize EGL context, when SyncThread is initialized
                 // without GL enabled.
                 SYNC_THREAD_CHECK(mHasGl);
@@ -207,7 +210,6 @@ void SyncThread::initSyncEGLContext() {
             .mDescription = "init sync EGL context",
         };
     });
-    mWorkerThreadPool.waitAllItems();
 }
 
 void SyncThread::doSyncWait(EmulatedEglFenceSync* fenceSync, std::function<void()> onComplete) {

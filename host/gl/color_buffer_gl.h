@@ -232,6 +232,10 @@ class ColorBufferGl {
 
     GLuint m_tex = 0;
     GLuint m_blitTex = 0;
+    // A restore leaves the blit texture to its first use (ensureBlitTex): with the fast blit
+    // its content is never read, and binding the restored image uploads it.
+    bool m_blitTexDeferred = false;
+    void ensureBlitTex();
     EGLImageKHR m_eglImage = nullptr;
     EGLImageKHR m_blitEGLImage = nullptr;
     GLuint m_fbo = 0;

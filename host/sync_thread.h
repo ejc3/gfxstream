@@ -17,6 +17,7 @@
 #pragma once
 
 #if GFXSTREAM_ENABLE_HOST_GLES
+#include <mutex>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -141,6 +142,8 @@ class SyncThread : public gfxstream::base::Thread {
 
 #if GFXSTREAM_ENABLE_HOST_GLES
     EGLDisplay mDisplay = EGL_NO_DISPLAY;
+    // The workers create their EGL contexts one at a time (initSyncEGLContext).
+    std::mutex mInitMutex;
     EGLSurface mSurface[kNumWorkerThreads];
     EGLContext mContext[kNumWorkerThreads];
 #endif
