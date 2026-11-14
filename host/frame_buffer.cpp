@@ -3799,9 +3799,8 @@ bool FrameBuffer::Impl::onLoad(Stream* stream,
                 touched++;
                 pixels += (long long)it.second.cb->getWidth() * it.second.cb->getHeight();
                 if (us > 5000 && slow++ < 12) {
-                    GFXSTREAM_INFO("FrameBuffer load: touch handle=%u %ux%u format=%u us=%lld",
-                                   it.first, it.second.cb->getWidth(), it.second.cb->getHeight(),
-                                   (unsigned)GfxstreamFormatToUint32(it.second.cb->getFormat()),
+                    GFXSTREAM_INFO("FrameBuffer load: touch handle=%u %ux%u us=%lld", it.first,
+                                   it.second.cb->getWidth(), it.second.cb->getHeight(),
                                    (long long)us);
                 }
             }
